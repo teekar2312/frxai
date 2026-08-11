@@ -1,0 +1,158 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model TradingPosition {
+  id            String   @id @default(cuid())
+  pair          String
+  direction     String   // BUY or SELL
+  lotSize       Float
+  entryPrice    Float
+  currentPrice  Float?
+  stopLoss      Float?
+  takeProfit    Float?
+  trailingStop  Float?
+  trailingType  String   @default("manual") // manual or automatic
+  pipValue      Float?
+  riskAmount    Float?
+  rewardAmount  Float?
+  pnl           Float    @default(0)
+  pnlPips       Float    @default(0)
+  status        String   @default("open") // open, closed, cancelled
+  strategy      String?
+  marketCondition String?
+  aiConfidence  Float?
+  leverage      Int      @default(500)
+  commission    Float    @default(1)
+  openedAt      DateTime @default(now())
+  closedAt      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model PriceAlert {
+  id          String   @id @default(cuid())
+  pair        String
+  condition   String   // above, below, crosses_above, crosses_below
+  targetPrice Float
+  currentPrice Float?
+  isActive    Boolean  @default(true)
+  isTriggered Boolean  @default(false)
+  triggeredAt DateTime?
+  note        String?
+  emailNotify Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ActivityLog {
+  id        String   @id @default(cuid())
+  level     String   @default("info") // info, warn, error, debug
+  category  String   @default("general") // trading, analysis, alert, system, api
+  message   String
+  details   String?
+  pair      String?
+  metadata  String?  // JSON string
+  createdAt DateTime @default(now())
+}
+
+model AiAnalysis {
+  id              String   @id @default(cuid())
+  pair            String
+  marketCondition String   // trending, range_bound, high_volatility, low_volatility
+  confidence      Float
+  recommendation  String   // buy, sell, hold, avoid
+  reasoning       String
+  strategyUsed    String?
+  indicatorsUsed  String?  // JSON
+  newsImpact      String?
+  riskLevel       String   @default("medium")
+  entryPrice      Float?
+  stopLoss        Float?
+  takeProfit      Float?
+  lotSize         Float?
+  expiresAt       DateTime?
+  createdAt       DateTime @default(now())
+}
+
+model BacktestResult {
+  id              String   @id @default(cuid())
+  name            String
+  pair            String
+  strategy        String
+  timeframe       String
+  startDate       DateTime
+  endDate         DateTime
+  initialBalance  Float
+  finalBalance    Float
+  totalTrades     Int
+  winningTrades   Int
+  losingTrades    Int
+  winRate         Float
+  totalPnl        Float
+  maxDrawdown     Float
+  sharpeRatio     Float?
+  profitFactor    Float?
+  avgWin          Float?
+  avgLoss         Float?
+  maxConsecutiveWins  Int?
+  maxConsecutiveLosses Int?
+  parameters      String?  // JSON
+  createdAt       DateTime @default(now())
+}
+
+model DailyPerformance {
+  id            String   @id @default(cuid())
+  date          DateTime
+  startingBalance Float
+  endingBalance   Float
+  dailyPnl       Float
+  dailyPnlPct    Float
+  tradesTaken    Int      @default(0)
+  winRate        Float?
+  riskUsed       Float?
+  createdAt      DateTime @default(now())
+}
+
+model NewsItem {
+  id            String   @id @default(cuid())
+  source        String
+  title         String
+  description   String?
+  url           String?
+  imageUrl      String?
+  publishedAt   DateTime?
+  category      String?
+  pair          String?  // related pair if identified
+  impact        String?  // high, medium, low
+  sentiment     String?  // positive, negative, neutral
+  analyzedAt    DateTime @default(now())
+}
+
+model TradingConfig {
+  id                    String   @id @default(cuid())
+  riskPerTrade          Float    @default(0.75)
+  stopLossMin           Float    @default(5)
+  stopLossMax           Float    @default(15)
+  riskRewardRatio       Float    @default(1.5)
+  maxOpenPositions      Int      @default(3)
+  dailyRiskLimit        Float    @default(2.5)
+  dailyTargetMin        Float    @default(1)
+  dailyTargetMax        Float    @default(3)
+  leverage              Int      @default(500)
+  spreadPip             Float    @default(0.5)
+  commissionPerLot      Float    @default(1)
+  marginCallLevel       Int      @default(50)
+  stopOutLevel          Int      @default(20)
+  autoTrading           Boolean  @default(false)
+  autoTrailingStop      Boolean  @default(false)
+  trailingStopPips      Float    @default(10)
+  avoidNewsTrading      Boolean  @default(true)
+  accountBalance        Float    @default(10000)
+  updatedAt             DateTime @updatedAt
+}

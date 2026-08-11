@@ -1,0 +1,502 @@
+  2001→              <Select value={backtestConfig.timeframe} onValueChange={(v) => setBacktestConfig(c => ({ ...c, timeframe: v }))}>
+  2002→                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs">
+  2003→                  <SelectValue />
+  2004→                </SelectTrigger>
+  2005→                <SelectContent className="bg-zinc-800 border-zinc-700">
+  2006→                  {TIMEFRAMES.map(tf => <SelectItem key={tf} value={tf} className="text-zinc-200">{tf}</SelectItem>)}
+  2007→                </SelectContent>
+  2008→              </Select>
+  2009→            </div>
+  2010→            <div className="space-y-1.5">
+  2011→              <Label className="text-zinc-400 text-xs">Initial Balance</Label>
+  2012→              <Input type="number" value={backtestConfig.initialBalance}
+  2013→                onChange={(e) => setBacktestConfig(c => ({ ...c, initialBalance: parseFloat(e.target.value) || 10000 }))}
+  2014→                className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
+  2015→            </div>
+  2016→            <div className="space-y-1.5">
+  2017→              <Label className="text-zinc-400 text-xs">Start Date</Label>
+  2018→              <Input type="date" value={backtestConfig.startDate}
+  2019→                onChange={(e) => setBacktestConfig(c => ({ ...c, startDate: e.target.value }))}
+  2020→                className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
+  2021→            </div>
+  2022→            <div className="space-y-1.5">
+  2023→              <Label className="text-zinc-400 text-xs">End Date</Label>
+  2024→              <Input type="date" value={backtestConfig.endDate}
+  2025→                onChange={(e) => setBacktestConfig(c => ({ ...c, endDate: e.target.value }))}
+  2026→                className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
+  2027→            </div>
+  2028→            <div className="space-y-1.5">
+  2029→              <Label className="text-zinc-400 text-xs">SL (pips)</Label>
+  2030→              <Input type="number" value={backtestConfig.stopLossPips}
+  2031→                onChange={(e) => setBacktestConfig(c => ({ ...c, stopLossPips: parseInt(e.target.value) || 10 }))}
+  2032→                className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
+  2033→            </div>
+  2034→            <div className="space-y-1.5">
+  2035→              <Label className="text-zinc-400 text-xs">TP (pips)</Label>
+  2036→              <Input type="number" value={backtestConfig.takeProfitPips}
+  2037→                onChange={(e) => setBacktestConfig(c => ({ ...c, takeProfitPips: parseInt(e.target.value) || 15 }))}
+  2038→                className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
+  2039→            </div>
+  2040→          </div>
+  2041→          <Button onClick={handleRunBacktest} disabled={backtestLoading}
+  2042→            className="bg-emerald-600 hover:bg-emerald-700 text-white">
+  2043→            {backtestLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+  2044→            Run Backtest
+  2045→          </Button>
+  2046→        </CardContent>
+  2047→      </Card>
+  2048→
+  2049→      {/* Results */}
+  2050→      {backtestResult && (
+  2051→        <>
+  2052→          <Card className="bg-zinc-900 border-zinc-800 p-4">
+  2053→            <CardHeader className="p-0 pb-3">
+  2054→              <CardTitle className="text-sm text-white flex items-center gap-2">
+  2055→                <BarChart3 className="w-4 h-4" /> Backtest Results — {PAIR_DISPLAY[backtestResult.pair]} / {STRATEGY_LABELS[backtestResult.strategy]}
+  2056→              </CardTitle>
+  2057→            </CardHeader>
+  2058→            <CardContent className="p-0">
+  2059→              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-4">
+  2060→                {[
+  2061→                  { label: 'Total Trades', value: String(backtestResult.totalTrades), color: 'text-white' },
+  2062→                  { label: 'Win Rate', value: `${backtestResult.winRate.toFixed(1)}%`, color: backtestResult.winRate > 50 ? 'text-emerald-400' : 'text-rose-400' },
+  2063→                  { label: 'Total P&L', value: `$${backtestResult.totalPnl.toFixed(2)}`, color: backtestResult.totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+  2064→                  { label: 'Max Drawdown', value: `${backtestResult.maxDrawdown.toFixed(2)}%`, color: 'text-rose-400' },
+  2065→                  { label: 'Sharpe Ratio', value: backtestResult.sharpeRatio?.toFixed(2) || 'N/A', color: 'text-white' },
+  2066→                  { label: 'Profit Factor', value: backtestResult.profitFactor?.toFixed(2) || 'N/A', color: (backtestResult.profitFactor || 0) > 1 ? 'text-emerald-400' : 'text-rose-400' },
+  2067→                  { label: 'Avg Win', value: backtestResult.avgWin ? `$${backtestResult.avgWin.toFixed(2)}` : 'N/A', color: 'text-emerald-400' },
+  2068→                  { label: 'Avg Loss', value: backtestResult.avgLoss ? `$${backtestResult.avgLoss.toFixed(2)}` : 'N/A', color: 'text-rose-400' },
+  2069→                ].map((item) => (
+  2070→                  <div key={item.label} className="bg-zinc-800/50 rounded-lg p-2.5 text-center">
+  2071→                    <p className="text-[10px] text-zinc-500 mb-0.5">{item.label}</p>
+  2072→                    <p className={`text-xs font-mono font-bold ${item.color}`}>{item.value}</p>
+  2073→                  </div>
+  2074→                ))}
+  2075→              </div>
+  2076→              {backtestResult.maxConsecutiveWins != null && backtestResult.maxConsecutiveLosses != null && (
+  2077→                <div className="flex gap-4 text-xs text-zinc-400">
+  2078→                  <span>Max Consecutive Wins: <span className="text-emerald-400 font-mono font-medium">{backtestResult.maxConsecutiveWins}</span></span>
+  2079→                  <span>Max Consecutive Losses: <span className="text-rose-400 font-mono font-medium">{backtestResult.maxConsecutiveLosses}</span></span>
+  2080→                </div>
+  2081→              )}
+  2082→            </CardContent>
+  2083→          </Card>
+  2084→
+  2085→          {/* Equity curve */}
+  2086→          {backtestEquity.length > 0 && (
+  2087→            <Card className="bg-zinc-900 border-zinc-800 p-4">
+  2088→              <CardHeader className="p-0 pb-3">
+  2089→                <CardTitle className="text-sm text-white">Equity Curve</CardTitle>
+  2090→              </CardHeader>
+  2091→              <CardContent className="p-0">
+  2092→                <div className="h-64">
+  2093→                  <ResponsiveContainer width="100%" height="100%">
+  2094→                    <AreaChart data={backtestEquity}>
+  2095→                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+  2096→                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#71717a' }} interval="preserveStartEnd" />
+  2097→                      <YAxis tick={{ fontSize: 9, fill: '#71717a' }} domain={['auto', 'auto']} />
+  2098→                      <RTooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', fontSize: 11 }} />
+  2099→                      <ReferenceLine y={backtestConfig.initialBalance} stroke="#71717a" strokeDasharray="3 3" />
+  2100→                      <Area type="monotone" dataKey="equity" stroke="#10b981" fill="#10b98120" strokeWidth={1.5} />
+  2101→                    </AreaChart>
+  2102→                  </ResponsiveContainer>
+  2103→                </div>
+  2104→              </CardContent>
+  2105→            </Card>
+  2106→          )}
+  2107→        </>
+  2108→      )}
+  2109→
+  2110→      {/* Backtest history */}
+  2111→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  2112→        <CardHeader className="p-0 pb-3">
+  2113→          <CardTitle className="text-sm text-white">Past Backtest Results</CardTitle>
+  2114→        </CardHeader>
+  2115→        <CardContent className="p-0">
+  2116→          {backtestHistory.length === 0 ? (
+  2117→            <p className="text-xs text-zinc-500 text-center py-4">No past backtest results</p>
+  2118→          ) : (
+  2119→            <div className="overflow-x-auto max-h-64 overflow-y-auto">
+  2120→              <Table>
+  2121→                <TableHeader>
+  2122→                  <TableRow className="border-zinc-800 hover:bg-transparent">
+  2123→                    <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+  2124→                    <TableHead className="text-[10px] text-zinc-500">Strategy</TableHead>
+  2125→                    <TableHead className="text-[10px] text-zinc-500">Trades</TableHead>
+  2126→                    <TableHead className="text-[10px] text-zinc-500">Win Rate</TableHead>
+  2127→                    <TableHead className="text-[10px] text-zinc-500">P&L</TableHead>
+  2128→                    <TableHead className="text-[10px] text-zinc-500">Drawdown</TableHead>
+  2129→                    <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
+  2130→                  </TableRow>
+  2131→                </TableHeader>
+  2132→                <TableBody>
+  2133→                  {backtestHistory.map((bt) => (
+  2134→                    <TableRow key={bt.id} className="border-zinc-800/50">
+  2135→                      <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[bt.pair]}</TableCell>
+  2136→                      <TableCell className="text-xs text-zinc-300">{STRATEGY_LABELS[bt.strategy]}</TableCell>
+  2137→                      <TableCell className="text-xs text-zinc-400 font-mono">{bt.totalTrades}</TableCell>
+  2138→                      <TableCell className={`text-xs font-mono ${bt.winRate > 50 ? 'text-emerald-400' : 'text-rose-400'}`}>{bt.winRate.toFixed(1)}%</TableCell>
+  2139→                      <TableCell className={`text-xs font-mono ${bt.totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>${bt.totalPnl.toFixed(2)}</TableCell>
+  2140→                      <TableCell className="text-xs text-rose-400 font-mono">{bt.maxDrawdown.toFixed(2)}%</TableCell>
+  2141→                      <TableCell className="text-right">
+  2142→                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+  2143→                          onClick={() => handleDeleteBacktest(bt.id)}>
+  2144→                          <Trash2 className="w-3 h-3" />
+  2145→                        </Button>
+  2146→                      </TableCell>
+  2147→                    </TableRow>
+  2148→                  ))}
+  2149→                </TableBody>
+  2150→              </Table>
+  2151→            </div>
+  2152→          )}
+  2153→        </CardContent>
+  2154→      </Card>
+  2155→    </div>
+  2156→  );
+  2157→
+  2158→  // ============================================================
+  2159→  // PANEL 8: ACTIVITY LOG
+  2160→  // ============================================================
+  2161→  const ActivityLogPanel = () => {
+  2162→    const levelColors: Record<string, string> = {
+  2163→      error: 'text-rose-400 bg-rose-500/10',
+  2164→      warn: 'text-amber-400 bg-amber-500/10',
+  2165→      info: 'text-blue-400 bg-blue-500/10',
+  2166→      debug: 'text-zinc-400 bg-zinc-700/30',
+  2167→    };
+  2168→
+  2169→    return (
+  2170→      <div className="space-y-4">
+  2171→        {/* Filters and controls */}
+  2172→        <div className="flex flex-wrap items-center gap-3">
+  2173→          <Select value={logFilter.level} onValueChange={(v) => { setLogFilter(f => ({ ...f, level: v })); setLogPage(1); }}>
+  2174→            <SelectTrigger className="w-32 bg-zinc-800 border-zinc-700 text-zinc-300 h-8 text-xs">
+  2175→              <SelectValue placeholder="All Levels" />
+  2176→            </SelectTrigger>
+  2177→            <SelectContent className="bg-zinc-800 border-zinc-700">
+  2178→              <SelectItem value="all" className="text-zinc-200">All Levels</SelectItem>
+  2179→              <SelectItem value="error" className="text-rose-400">Error</SelectItem>
+  2180→              <SelectItem value="warn" className="text-amber-400">Warning</SelectItem>
+  2181→              <SelectItem value="info" className="text-blue-400">Info</SelectItem>
+  2182→              <SelectItem value="debug" className="text-zinc-400">Debug</SelectItem>
+  2183→            </SelectContent>
+  2184→          </Select>
+  2185→          <Select value={logFilter.category} onValueChange={(v) => { setLogFilter(f => ({ ...f, category: v })); setLogPage(1); }}>
+  2186→            <SelectTrigger className="w-36 bg-zinc-800 border-zinc-700 text-zinc-300 h-8 text-xs">
+  2187→              <SelectValue placeholder="All Categories" />
+  2188→            </SelectTrigger>
+  2189→            <SelectContent className="bg-zinc-800 border-zinc-700">
+  2190→              <SelectItem value="all" className="text-zinc-200">All Categories</SelectItem>
+  2191→              <SelectItem value="trading" className="text-zinc-200">Trading</SelectItem>
+  2192→              <SelectItem value="analysis" className="text-zinc-200">Analysis</SelectItem>
+  2193→              <SelectItem value="alert" className="text-zinc-200">Alert</SelectItem>
+  2194→              <SelectItem value="system" className="text-zinc-200">System</SelectItem>
+  2195→              <SelectItem value="api" className="text-zinc-200">API</SelectItem>
+  2196→            </SelectContent>
+  2197→          </Select>
+  2198→          <Button variant="outline" size="sm" onClick={fetchLogs} className="border-zinc-700 text-zinc-300 h-8">
+  2199→            <RefreshCw className="w-3 h-3" /> Refresh
+  2200→          </Button>
+  2201→          <Button variant="outline" size="sm" onClick={handleClearLogs} className="border-rose-500/30 text-rose-400 hover:bg-rose-500/10 h-8">
+  2202→            <Trash2 className="w-3 h-3" /> Clear Logs
+  2203→          </Button>
+  2204→        </div>
+  2205→
+  2206→        {/* Log table */}
+  2207→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  2208→          <CardContent className="p-0">
+  2209→            <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+  2210→              <Table>
+  2211→                <TableHeader>
+  2212→                  <TableRow className="border-zinc-800 hover:bg-transparent">
+  2213→                    <TableHead className="text-[10px] text-zinc-500 w-20">Level</TableHead>
+  2214→                    <TableHead className="text-[10px] text-zinc-500 w-24">Category</TableHead>
+  2215→                    <TableHead className="text-[10px] text-zinc-500">Message</TableHead>
+  2216→                    <TableHead className="text-[10px] text-zinc-500 w-40">Timestamp</TableHead>
+  2217→                  </TableRow>
+  2218→                </TableHeader>
+  2219→                <TableBody>
+  2220→                  {logs.length === 0 ? (
+  2221→                    <TableRow><TableCell colSpan={4} className="text-xs text-zinc-500 text-center py-8">No logs found</TableCell></TableRow>
+  2222→                  ) : (
+  2223→                    logs.map((log) => (
+  2224→                      <TableRow key={log.id} className="border-zinc-800/50">
+  2225→                        <TableCell>
+  2226→                          <Badge className={`text-[10px] ${levelColors[log.level] || levelColors.debug}`}>{log.level}</Badge>
+  2227→                        </TableCell>
+  2228→                        <TableCell className="text-xs text-zinc-400">{log.category}</TableCell>
+  2229→                        <TableCell className="text-xs text-zinc-300 max-w-md truncate">{log.message}</TableCell>
+  2230→                        <TableCell className="text-[10px] text-zinc-500 font-mono">
+  2231→                          {format(new Date(log.createdAt), 'MM/dd HH:mm:ss')}
+  2232→                        </TableCell>
+  2233→                      </TableRow>
+  2234→                    ))
+  2235→                  )}
+  2236→                </TableBody>
+  2237→              </Table>
+  2238→            </div>
+  2239→
+  2240→            {/* Pagination */}
+  2241→            <div className="flex items-center justify-between mt-3 pt-3 border-t border-zinc-800">
+  2242→              <span className="text-[10px] text-zinc-500">Page {logPage} of {logTotalPages}</span>
+  2243→              <div className="flex gap-1">
+  2244→                <Button variant="outline" size="sm" disabled={logPage <= 1} onClick={() => setLogPage(p => p - 1)}
+  2245→                  className="h-7 px-2 text-xs border-zinc-700 text-zinc-300">Prev</Button>
+  2246→                <Button variant="outline" size="sm" disabled={logPage >= logTotalPages} onClick={() => setLogPage(p => p + 1)}
+  2247→                  className="h-7 px-2 text-xs border-zinc-700 text-zinc-300">Next</Button>
+  2248→              </div>
+  2249→            </div>
+  2250→          </CardContent>
+  2251→        </Card>
+  2252→      </div>
+  2253→    );
+  2254→  };
+  2255→
+  2256→  // ============================================================
+  2257→  // PANEL 9: SETTINGS
+  2258→  // ============================================================
+  2259→  const SettingsPanel = () => {
+  2260→    if (configLoading) {
+  2261→      return (
+  2262→        <div className="space-y-4">
+  2263→          <Skeleton className="h-8 w-48 bg-zinc-800" />
+  2264→          <Skeleton className="h-64 w-full bg-zinc-800" />
+  2265→        </div>
+  2266→      );
+  2267→    }
+  2268→
+  2269→    if (!config) {
+  2270→      return (
+  2271→        <Card className="bg-zinc-900 border-zinc-800 p-8">
+  2272→          <div className="text-center">
+  2273→            <Settings className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
+  2274→            <p className="text-sm text-zinc-400">Unable to load configuration</p>
+  2275→          </div>
+  2276→        </Card>
+  2277→      );
+  2278→    }
+  2279→
+  2280→    const updateConfig = (key: keyof TradingConfig, value: number | boolean | string) => {
+  2281→      setConfig(prev => prev ? { ...prev, [key]: value } : prev);
+  2282→    };
+  2283→
+  2284→    return (
+  2285→      <div className="space-y-4">
+  2286→        {/* Trading config form */}
+  2287→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  2288→          <CardHeader className="p-0 pb-3">
+  2289→            <div className="flex items-center justify-between">
+  2290→              <CardTitle className="text-sm text-white">Trading Configuration</CardTitle>
+  2291→              <div className="flex gap-2">
+  2292→                <Button variant="outline" size="sm" onClick={handleResetConfig} className="border-zinc-700 text-zinc-300 h-8 text-xs">
+  2293→                  Reset Defaults
+  2294→                </Button>
+  2295→                <Button size="sm" onClick={handleSaveConfig} disabled={configSaving}
+  2296→                  className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 text-xs">
+  2297→                  {configSaving ? <RefreshCw className="w-3 h-3 animate-spin" /> : null}
+  2298→                  Save Changes
+  2299→                </Button>
+  2300→              </div>
+  2301→            </div>
+  2302→          </CardHeader>
+  2303→          <CardContent className="p-0">
+  2304→            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  2305→              {/* Risk settings */}
+  2306→              <div className="space-y-3">
+  2307→                <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Risk Management</h4>
+  2308→                <div className="space-y-2">
+  2309→                  <div className="flex items-center justify-between">
+  2310→                    <Label className="text-zinc-300 text-xs">Risk per Trade (%)</Label>
+  2311→                    <Input type="number" step="0.1" value={config.riskPerTrade}
+  2312→                      onChange={(e) => updateConfig('riskPerTrade', parseFloat(e.target.value) || 1)}
+  2313→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2314→                  </div>
+  2315→                  <div className="flex items-center justify-between">
+  2316→                    <Label className="text-zinc-300 text-xs">SL Min (pips)</Label>
+  2317→                    <Input type="number" value={config.slMinPips}
+  2318→                      onChange={(e) => updateConfig('slMinPips', parseInt(e.target.value) || 5)}
+  2319→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2320→                  </div>
+  2321→                  <div className="flex items-center justify-between">
+  2322→                    <Label className="text-zinc-300 text-xs">SL Max (pips)</Label>
+  2323→                    <Input type="number" value={config.slMaxPips}
+  2324→                      onChange={(e) => updateConfig('slMaxPips', parseInt(e.target.value) || 15)}
+  2325→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2326→                  </div>
+  2327→                  <div className="flex items-center justify-between">
+  2328→                    <Label className="text-zinc-300 text-xs">R:R Ratio</Label>
+  2329→                    <Input type="number" step="0.1" value={config.riskRewardRatio}
+  2330→                      onChange={(e) => updateConfig('riskRewardRatio', parseFloat(e.target.value) || 1.5)}
+  2331→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2332→                  </div>
+  2333→                  <div className="flex items-center justify-between">
+  2334→                    <Label className="text-zinc-300 text-xs">Max Positions</Label>
+  2335→                    <Input type="number" value={config.maxPositions}
+  2336→                      onChange={(e) => updateConfig('maxPositions', parseInt(e.target.value) || 3)}
+  2337→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2338→                  </div>
+  2339→                  <div className="flex items-center justify-between">
+  2340→                    <Label className="text-zinc-300 text-xs">Daily Risk Limit (%)</Label>
+  2341→                    <Input type="number" step="0.1" value={config.dailyRiskLimit}
+  2342→                      onChange={(e) => updateConfig('dailyRiskLimit', parseFloat(e.target.value) || 3)}
+  2343→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2344→                  </div>
+  2345→                  <div className="flex items-center justify-between">
+  2346→                    <Label className="text-zinc-300 text-xs">Daily Target (%)</Label>
+  2347→                    <Input type="number" step="0.1" value={config.dailyTarget}
+  2348→                      onChange={(e) => updateConfig('dailyTarget', parseFloat(e.target.value) || 2)}
+  2349→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2350→                  </div>
+  2351→                </div>
+  2352→              </div>
+  2353→
+  2354→              {/* Broker settings */}
+  2355→              <div className="space-y-3">
+  2356→                <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Broker Settings</h4>
+  2357→                <div className="space-y-2">
+  2358→                  <div className="flex items-center justify-between">
+  2359→                    <Label className="text-zinc-300 text-xs">Leverage</Label>
+  2360→                    <Input type="number" value={config.leverage}
+  2361→                      onChange={(e) => updateConfig('leverage', parseInt(e.target.value) || 500)}
+  2362→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2363→                  </div>
+  2364→                  <div className="flex items-center justify-between">
+  2365→                    <Label className="text-zinc-300 text-xs">Spread (pip)</Label>
+  2366→                    <Input type="number" step="0.1" value={config.spreadPip}
+  2367→                      onChange={(e) => updateConfig('spreadPip', parseFloat(e.target.value) || 0.5)}
+  2368→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2369→                  </div>
+  2370→                  <div className="flex items-center justify-between">
+  2371→                    <Label className="text-zinc-300 text-xs">Commission ($/lot)</Label>
+  2372→                    <Input type="number" step="0.1" value={config.commissionPerLot}
+  2373→                      onChange={(e) => updateConfig('commissionPerLot', parseFloat(e.target.value) || 1)}
+  2374→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2375→                  </div>
+  2376→                  <div className="flex items-center justify-between">
+  2377→                    <Label className="text-zinc-300 text-xs">Margin Call (%)</Label>
+  2378→                    <Input type="number" value={config.marginCallLevel}
+  2379→                      onChange={(e) => updateConfig('marginCallLevel', parseInt(e.target.value) || 50)}
+  2380→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2381→                  </div>
+  2382→                  <div className="flex items-center justify-between">
+  2383→                    <Label className="text-zinc-300 text-xs">Stop Out (%)</Label>
+  2384→                    <Input type="number" value={config.stopOutLevel}
+  2385→                      onChange={(e) => updateConfig('stopOutLevel', parseInt(e.target.value) || 20)}
+  2386→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2387→                  </div>
+  2388→                </div>
+  2389→              </div>
+  2390→
+  2391→              {/* Auto trading settings */}
+  2392→              <div className="space-y-3">
+  2393→                <h4 className="text-xs font-medium text-zinc-400 uppercase tracking-wider">Automation</h4>
+  2394→                <div className="space-y-3">
+  2395→                  <div className="flex items-center justify-between">
+  2396→                    <Label className="text-zinc-300 text-xs">Auto Trading</Label>
+  2397→                    <Switch checked={config.autoTrading} onCheckedChange={(v) => updateConfig('autoTrading', v)} />
+  2398→                  </div>
+  2399→                  <div className="flex items-center justify-between">
+  2400→                    <Label className="text-zinc-300 text-xs">Auto Trailing Stop</Label>
+  2401→                    <Switch checked={config.autoTrailingStop} onCheckedChange={(v) => updateConfig('autoTrailingStop', v)} />
+  2402→                  </div>
+  2403→                  <div className="flex items-center justify-between">
+  2404→                    <Label className="text-zinc-300 text-xs">Trailing Stop (pips)</Label>
+  2405→                    <Input type="number" value={config.trailingStopPips}
+  2406→                      onChange={(e) => updateConfig('trailingStopPips', parseInt(e.target.value) || 10)}
+  2407→                      className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+  2408→                  </div>
+  2409→                  <div className="flex items-center justify-between">
+  2410→                    <Label className="text-zinc-300 text-xs">Avoid News Trading</Label>
+  2411→                    <Switch checked={config.avoidNewsTrading} onCheckedChange={(v) => updateConfig('avoidNewsTrading', v)} />
+  2412→                  </div>
+  2413→                </div>
+  2414→              </div>
+  2415→            </div>
+  2416→          </CardContent>
+  2417→        </Card>
+  2418→      </div>
+  2419→    );
+  2420→  };
+  2421→
+  2422→  // ============================================================
+  2423→  // Panel router
+  2424→  // ============================================================
+  2425→  const renderPanel = () => {
+  2426→    switch (activeTab) {
+  2427→      case 'dashboard': return <DashboardPanel />;
+  2428→      case 'ai-analysis': return <AiAnalysisPanel />;
+  2429→      case 'trading-signals': return <TradingSignalsPanel />;
+  2430→      case 'live-trading': return <LiveTradingPanel />;
+  2431→      case 'risk-management': return <RiskManagementPanel />;
+  2432→      case 'price-alerts': return <PriceAlertsPanel />;
+  2433→      case 'backtesting': return <BacktestingPanel />;
+  2434→      case 'activity-log': return <ActivityLogPanel />;
+  2435→      case 'settings': return <SettingsPanel />;
+  2436→      default: return <DashboardPanel />;
+  2437→    }
+  2438→  };
+  2439→
+  2440→  // ============================================================
+  2441→  // Main layout render
+  2442→  // ============================================================
+  2443→  return (
+  2444→    <TooltipProvider>
+  2445→      <div className="min-h-screen flex flex-col bg-zinc-950 text-zinc-100">
+  2446→        {/* Status bar */}
+  2447→        <StatusBar />
+  2448→
+  2449→        <div className="flex flex-1 overflow-hidden">
+  2450→          {/* Desktop sidebar */}
+  2451→          <aside className="hidden lg:flex w-56 flex-col bg-zinc-900 border-r border-zinc-800 shrink-0">
+  2452→            <SidebarContent />
+  2453→          </aside>
+  2454→
+  2455→          {/* Mobile sidebar sheet */}
+  2456→          <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+  2457→            <SheetContent side="left" className="w-64 bg-zinc-900 border-zinc-800 p-0">
+  2458→              <SheetHeader className="p-0">
+  2459→                <SheetTitle className="sr-only">Navigation</SheetTitle>
+  2460→              </SheetHeader>
+  2461→              <SidebarContent onNavigate={() => setSidebarOpen(false)} />
+  2462→            </SheetContent>
+  2463→          </Sheet>
+  2464→
+  2465→          {/* Main content */}
+  2466→          <main className="flex-1 flex flex-col overflow-hidden">
+  2467→            {/* Mobile header with hamburger */}
+  2468→            <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
+  2469→              <Button variant="ghost" size="icon" className="text-zinc-400 hover:text-white hover:bg-zinc-800"
+  2470→                onClick={() => setSidebarOpen(true)}>
+  2471→                <Menu className="w-5 h-5" />
+  2472→              </Button>
+  2473→              <div className="flex items-center gap-2">
+  2474→                <div className="w-6 h-6 rounded bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
+  2475→                  <TrendingUp className="w-3.5 h-3.5 text-white" />
+  2476→                </div>
+  2477→                <span className="text-sm font-semibold text-white">FX Pro Trading</span>
+  2478→              </div>
+  2479→            </div>
+  2480→
+  2481→            {/* Content area */}
+  2482→            <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+  2483→              <div className="max-w-7xl mx-auto">
+  2484→                {renderPanel()}
+  2485→              </div>
+  2486→            </div>
+  2487→
+  2488→            {/* Footer */}
+  2489→            <footer className="border-t border-zinc-800 bg-zinc-900/50 px-4 py-2 flex items-center justify-between text-[10px] text-zinc-500 shrink-0">
+  2490→              <div className="flex items-center gap-2">
+  2491→                <span className="font-medium">FINEX Indonesia</span>
+  2492→                <Separator orientation="vertical" className="h-3 bg-zinc-700" />
+  2493→                <span>© 2024 All Rights Reserved</span>
+  2494→              </div>
+  2495→              <div className="flex items-center gap-2">
+  2496→                <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+  2497→                <span>{connected ? 'Connected' : 'Disconnected'}</span>
+  2498→              </div>
+  2499→            </footer>
+  2500→          </main>
+
+[showing lines 2001-2500 of 2506; use offset=2501 with limit to continue reading]

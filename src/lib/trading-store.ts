@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ForexPair, QuoteData, NewsArticle, AiAnalysisResult, TradingSignal, MarketCondition, ActivityLogEntry } from './trading-types';
+import type { ForexPair, QuoteData, NewsArticle, AiAnalysisResult, TradingSignal, MarketCondition } from './trading-types';
 
 interface TradingStore {
   // Active tab
@@ -39,8 +39,8 @@ interface TradingStore {
   setAccountBalance: (balance: number) => void;
 
   // Activity logs
-  logs: ActivityLogEntry[];
-  addLog: (log: ActivityLogEntry) => void;
+  logs: { id: string; level: string; category: string; message: string; timestamp: string }[];
+  addLog: (log: { id: string; level: string; category: string; message: string; timestamp: string }) => void;
   clearLogs: () => void;
 
   // Loading states

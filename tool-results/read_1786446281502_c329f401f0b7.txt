@@ -1,0 +1,2002 @@
+     1→'use client';
+     2→
+     3→// ============================================================
+     4→// FX Pro Trading - AI-Powered Forex Dashboard
+     5→// Complete single-page trading terminal application
+     6→// ============================================================
+     7→
+     8→import React, { useState, useEffect, useCallback, useMemo } from 'react';
+     9→import { format } from 'date-fns';
+    10→import { toast } from 'sonner';
+    11→import {
+    12→  LayoutDashboard, Brain, Zap, Activity, Shield, Bell,
+    13→  History, FileText, Settings, Menu, TrendingUp, TrendingDown,
+    14→  DollarSign, Clock, Wifi, WifiOff, ChevronRight, RefreshCw,
+    15→  Play, Square, Trash2, Plus, X, ArrowUpCircle, ArrowDownCircle,
+    16→  AlertTriangle, CheckCircle2, Info, BarChart3, LineChart,
+    17→  Target, Crosshair, Eye, EyeOff, Send, Globe, CircleDot,
+    18→} from 'lucide-react';
+    19→import {
+    20→  LineChart as RLineChart, Line, XAxis, YAxis, CartesianGrid,
+    21→  Tooltip as RTooltip, ResponsiveContainer, AreaChart, Area,
+    22→  BarChart, Bar, ReferenceLine,
+    23→} from 'recharts';
+    24→
+    25→// shadcn/ui components
+    26→import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from '@/components/ui/card';
+    27→import { Button } from '@/components/ui/button';
+    28→import { Badge } from '@/components/ui/badge';
+    29→import { Input } from '@/components/ui/input';
+    30→import { Label } from '@/components/ui/label';
+    31→import { Switch } from '@/components/ui/switch';
+    32→import { Checkbox } from '@/components/ui/checkbox';
+    33→import { Separator } from '@/components/ui/separator';
+    34→import { Progress } from '@/components/ui/progress';
+    35→import { Slider } from '@/components/ui/slider';
+    36→import { Skeleton } from '@/components/ui/skeleton';
+    37→import {
+    38→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    39→} from '@/components/ui/table';
+    40→import {
+    41→  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+    42→} from '@/components/ui/select';
+    43→import {
+    44→  Dialog, DialogContent, DialogDescription, DialogFooter,
+    45→  DialogHeader, DialogTitle, DialogTrigger,
+    46→} from '@/components/ui/dialog';
+    47→import {
+    48→  Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
+    49→} from '@/components/ui/sheet';
+    50→import { ScrollArea } from '@/components/ui/scroll-area';
+    51→import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+    52→import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+    53→
+    54→// Types & store
+    55→import {
+    56→  type ForexPair, type QuoteData, type NewsArticle, type AiAnalysisResult,
+    57→  type TradingSignal, type MarketCondition, type TradingDirection,
+    58→  type StrategyName, type BacktestResult, type RiskCalculation,
+    59→  FOREX_PAIRS, PAIR_DISPLAY, PAIR_PIP_VALUES, STRATEGY_LABELS,
+    60→  MARKET_CONDITION_LABELS, TIMEFRAMES, FINEX_CONFIG, TRADING_SESSIONS,
+    61→  OVERLAP_SESSIONS,
+    62→} from '@/lib/trading-types';
+    63→import { useTradingStore } from '@/lib/trading-store';
+    64→
+    65→// ============================================================
+    66→// Local type definitions for API responses
+    67→// ============================================================
+    68→
+    69→interface ActivityLogEntry {
+    70→  id: string;
+    71→  level: string;
+    72→  category: string;
+    73→  message: string;
+    74→  pair: string | null;
+    75→  details: string | null;
+    76→  metadata: string | null;
+    77→  createdAt: string;
+    78→}
+    79→
+    80→interface Position {
+    81→  id: string;
+    82→  pair: ForexPair;
+    83→  direction: TradingDirection;
+    84→  lotSize: number;
+    85→  entryPrice: number;
+    86→  stopLoss: number | null;
+    87→  takeProfit: number | null;
+    88→  currentPrice: number;
+    89→  pnl: number;
+    90→  pips: number;
+    91→  strategy: StrategyName | null;
+    92→  trailingStop: boolean;
+    93→  trailingPips: number;
+    94→  isOpen: boolean;
+    95→  openedAt: string;
+    96→  closedAt: string | null;
+    97→}
+    98→
+    99→interface PriceAlert {
+   100→  id: string;
+   101→  pair: ForexPair;
+   102→  condition: 'above' | 'below' | 'crosses_above' | 'crosses_below';
+   103→  targetPrice: number;
+   104→  isActive: boolean;
+   105→  isTriggered: boolean;
+   106→  triggeredAt: string | null;
+   107→  emailNotify: boolean;
+   108→  createdAt: string;
+   109→}
+   110→
+   111→interface TradingConfig {
+   112→  id: string;
+   113→  riskPerTrade: number;
+   114→  slMinPips: number;
+   115→  slMaxPips: number;
+   116→  riskRewardRatio: number;
+   117→  maxPositions: number;
+   118→  dailyRiskLimit: number;
+   119→  dailyTarget: number;
+   120→  leverage: number;
+   121→  spreadPip: number;
+   122→  commissionPerLot: number;
+   123→  marginCallLevel: number;
+   124→  stopOutLevel: number;
+   125→  autoTrading: boolean;
+   126→  autoTrailingStop: boolean;
+   127→  trailingStopPips: number;
+   128→  avoidNewsTrading: boolean;
+   129→}
+   130→
+   131→interface EquityPoint {
+   132→  time: string;
+   133→  equity: number;
+   134→  balance: number;
+   135→}
+   136→
+   137→// ============================================================
+   138→// Navigation items for sidebar
+   139→// ============================================================
+   140→
+   141→const NAV_ITEMS = [
+   142→  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, emoji: '📊' },
+   143→  { id: 'ai-analysis', label: 'AI Analysis', icon: Brain, emoji: '🤖' },
+   144→  { id: 'trading-signals', label: 'Trading Signals', icon: Zap, emoji: '📈' },
+   145→  { id: 'live-trading', label: 'Live Trading', icon: Activity, emoji: '💹' },
+   146→  { id: 'risk-management', label: 'Risk Management', icon: Shield, emoji: '🛡️' },
+   147→  { id: 'price-alerts', label: 'Price Alerts', icon: Bell, emoji: '🔔' },
+   148→  { id: 'backtesting', label: 'Backtesting', icon: History, emoji: '⏪' },
+   149→  { id: 'activity-log', label: 'Activity Log', icon: FileText, emoji: '📋' },
+   150→  { id: 'settings', label: 'Settings', icon: Settings, emoji: '⚙️' },
+   151→] as const;
+   152→
+   153→// Strategy descriptions for reference
+   154→const STRATEGY_DESCS: Record<StrategyName, string> = {
+   155→  MA_RIBBON: 'Uses multiple moving averages (5/10/20/50 EMA) to identify trend direction and momentum. Best in trending markets.',
+   156→  MOMENTUM_SCALPING: 'Combines RSI, Stochastic, and MACD for quick scalping entries. Best during high-volume sessions.',
+   157→  PIVOT_POINT: 'Uses daily pivot points with support/resistance levels. Works well in range-bound markets.',
+   158→  EMA_CROSSOVER: 'Fast EMA (9) / Slow EMA (21) crossover with RSI confirmation. Good for swing trading.',
+   159→  RMI_TREND_SYNC: 'Relative Momentum Index synced with Supertrend and EMA. Filters noise in volatile markets.',
+   160→  LINEAR_REGRESSION: 'Linear regression channel with Bollinger Bands for mean reversion. Best in ranging markets.',
+   161→  EMA_RSI_FILTER: 'EMA trend detection filtered by RSI overbought/oversold zones. Reduces false signals.',
+   162→};
+   163→
+   164→// ============================================================
+   165→// Main Page Component
+   166→// ============================================================
+   167→
+   168→export default function TradingDashboard() {
+   169→  // Store state
+   170→  const {
+   171→    activeTab, setActiveTab,
+   172→    selectedPair, setSelectedPair,
+   173→    quotes, setQuote,
+   174→    news, setNews,
+   175→    aiAnalysis, setAiAnalysis,
+   176→    signals, setSignals,
+   177→    marketConditions, setMarketCondition,
+   178→    isAutoTrading, toggleAutoTrading,
+   179→    accountBalance, setAccountBalance,
+   180→    openPositionsCount, setOpenPositionsCount,
+   181→    dailyPnl, setDailyPnl,
+   182→    todayRiskUsed, setTodayRiskUsed,
+   183→    isLoading, setLoading,
+   184→  } = useTradingStore();
+   185→
+   186→  // Local state
+   187→  const [currentTime, setCurrentTime] = useState('');
+   188→  const [connected, setConnected] = useState(true);
+   189→  const [sidebarOpen, setSidebarOpen] = useState(false);
+   190→  const [jakartaTime, setJakartaTime] = useState('');
+   191→
+   192→  // --- Dashboard state ---
+   193→  const [positions, setPositions] = useState<Position[]>([]);
+   194→  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
+   195→
+   196→  // --- AI Analysis state ---
+   197→  const [analysisHistory, setAnalysisHistory] = useState<AiAnalysisResult[]>([]);
+   198→  const [analysisLoading, setAnalysisLoading] = useState(false);
+   199→
+   200→  // --- Signals state ---
+   201→  const [signalFilter, setSignalFilter] = useState<{ pair: string; strategy: string; direction: string }>({ pair: 'all', strategy: 'all', direction: 'all' });
+   202→  const [signalsLoading, setSignalsLoading] = useState(false);
+   203→
+   204→  // --- Live Trading state ---
+   205→  const [newTradeDialog, setNewTradeDialog] = useState(false);
+   206→  const [newTrade, setNewTrade] = useState({ pair: 'EURUSD' as ForexPair, direction: 'BUY' as TradingDirection, lotSize: 0.01, stopLoss: 0, takeProfit: 0, strategy: 'EMA_CROSSOVER' as StrategyName });
+   207→  const [trailingStopEnabled, setTrailingStopEnabled] = useState(false);
+   208→
+   209→  // --- Risk Management state ---
+   210→  const [riskCalc, setRiskCalc] = useState<RiskCalculation | null>(null);
+   211→  const [riskForm, setRiskForm] = useState({ balance: 10000, riskPct: 1, slPips: 10 });
+   212→
+   213→  // --- Alerts state ---
+   214→  const [alerts, setAlerts] = useState<PriceAlert[]>([]);
+   215→  const [triggeredAlerts, setTriggeredAlerts] = useState<PriceAlert[]>([]);
+   216→  const [newAlert, setNewAlert] = useState({ pair: 'EURUSD' as ForexPair, condition: 'above' as PriceAlert['condition'], targetPrice: 1.1000, emailNotify: false });
+   217→  const [createAlertDialog, setCreateAlertDialog] = useState(false);
+   218→
+   219→  // --- Backtest state ---
+   220→  const [backtestConfig, setBacktestConfig] = useState({
+   221→    pair: 'EURUSD' as ForexPair,
+   222→    strategy: 'EMA_CROSSOVER' as StrategyName,
+   223→    timeframe: 'H1',
+   224→    startDate: '2024-01-01',
+   225→    endDate: '2024-12-31',
+   226→    initialBalance: 10000,
+   227→    riskPerTrade: 1,
+   228→    stopLossPips: 10,
+   229→    takeProfitPips: 15,
+   230→    maxPositions: 3,
+   231→  });
+   232→  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
+   233→  const [backtestLoading, setBacktestLoading] = useState(false);
+   234→  const [backtestHistory, setBacktestHistory] = useState<BacktestResult[]>([]);
+   235→  const [backtestEquity, setBacktestEquity] = useState<{ time: string; equity: number }[]>([]);
+   236→
+   237→  // --- Activity Log state ---
+   238→  const [logs, setLogs] = useState<ActivityLogEntry[]>([]);
+   239→  const [logPage, setLogPage] = useState(1);
+   240→  const [logTotalPages, setLogTotalPages] = useState(1);
+   241→  const [logFilter, setLogFilter] = useState<{ level: string; category: string }>({ level: 'all', category: 'all' });
+   242→
+   243→  // --- Settings state ---
+   244→  const [config, setConfig] = useState<TradingConfig | null>(null);
+   245→  const [configLoading, setConfigLoading] = useState(false);
+   246→  const [configSaving, setConfigSaving] = useState(false);
+   247→
+   248→  // ============================================================
+   249→  // Jakarta timezone clock
+   250→  // ============================================================
+   251→  useEffect(() => {
+   252→    const update = () => {
+   253→      const now = new Date();
+   254→      // Jakarta is UTC+7
+   255→      const jakarta = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }));
+   256→      setJakartaTime(format(jakarta, 'HH:mm:ss'));
+   257→      setCurrentTime(format(now, 'HH:mm:ss'));
+   258→    };
+   259→    update();
+   260→    const interval = setInterval(update, 1000);
+   261→    return () => clearInterval(interval);
+   262→  }, []);
+   263→
+   264→  // ============================================================
+   265→  // Fetch prices every 5 seconds
+   266→  // ============================================================
+   267→  const fetchPrices = useCallback(async () => {
+   268→    try {
+   269→      const res = await fetch('/api/finnhub');
+   270→      if (!res.ok) throw new Error('Failed to fetch prices');
+   271→      const data = await res.json();
+   272→      if (data.quotes) {
+   273→        FOREX_PAIRS.forEach((pair) => {
+   274→          if (data.quotes[pair]) {
+   275→            setQuote(pair, data.quotes[pair] as QuoteData);
+   276→          }
+   277→        });
+   278→      }
+   279→      setConnected(true);
+   280→    } catch {
+   281→      setConnected(false);
+   282→    }
+   283→  }, [setQuote]);
+   284→
+   285→  useEffect(() => {
+   286→    fetchPrices();
+   287→    const interval = setInterval(fetchPrices, 5000);
+   288→    return () => clearInterval(interval);
+   289→  }, [fetchPrices]);
+   290→
+   291→  // ============================================================
+   292→  // Fetch news
+   293→  // ============================================================
+   294→  const fetchNews = useCallback(async () => {
+   295→    try {
+   296→      const res = await fetch('/api/news');
+   297→      if (res.ok) {
+   298→        const data = await res.json();
+   299→        if (data.articles) setNews(data.articles as NewsArticle[]);
+   300→      }
+   301→    } catch {
+   302→      // silent
+   303→    }
+   304→  }, [setNews]);
+   305→
+   306→  useEffect(() => {
+   307→    fetchNews();
+   308→    const interval = setInterval(fetchNews, 60000);
+   309→    return () => clearInterval(interval);
+   310→  }, [fetchNews]);
+   311→
+   312→  // ============================================================
+   313→  // Fetch positions
+   314→  // ============================================================
+   315→  const fetchPositions = useCallback(async () => {
+   316→    try {
+   317→      const res = await fetch('/api/positions?status=open');
+   318→      if (res.ok) {
+   319→        const data = await res.json();
+   320→        const pos = (data.positions || []) as Position[];
+   321→        setPositions(pos);
+   322→        setOpenPositionsCount(pos.length);
+   323→        // Calculate daily PnL
+   324→        const totalPnl = pos.reduce((sum, p) => sum + (p.pnl || 0), 0);
+   325→        setDailyPnl(totalPnl);
+   326→      }
+   327→    } catch {
+   328→      // silent
+   329→    }
+   330→  }, [setOpenPositionsCount, setDailyPnl]);
+   331→
+   332→  useEffect(() => {
+   333→    fetchPositions();
+   334→    const interval = setInterval(fetchPositions, 5000);
+   335→    return () => clearInterval(interval);
+   336→  }, [fetchPositions]);
+   337→
+   338→  // ============================================================
+   339→  // Fetch alerts
+   340→  // ============================================================
+   341→  const fetchAlerts = useCallback(async () => {
+   342→    try {
+   343→      const res = await fetch('/api/alerts');
+   344→      if (res.ok) {
+   345→        const data = await res.json();
+   346→        const all = (data.alerts || []) as PriceAlert[];
+   347→        setAlerts(all.filter(a => !a.isTriggered));
+   348→        setTriggeredAlerts(all.filter(a => a.isTriggered));
+   349→      }
+   350→    } catch {
+   351→      // silent
+   352→    }
+   353→  }, []);
+   354→
+   355→  useEffect(() => {
+   356→    if (activeTab === 'price-alerts') {
+   357→      fetchAlerts();
+   358→      const interval = setInterval(fetchAlerts, 10000);
+   359→      return () => clearInterval(interval);
+   360→    }
+   361→  }, [activeTab, fetchAlerts]);
+   362→
+   363→  // ============================================================
+   364→  // Fetch logs
+   365→  // ============================================================
+   366→  const fetchLogs = useCallback(async () => {
+   367→    try {
+   368→      const params = new URLSearchParams({ page: String(logPage), limit: '30' });
+   369→      if (logFilter.level !== 'all') params.set('level', logFilter.level);
+   370→      if (logFilter.category !== 'all') params.set('category', logFilter.category);
+   371→      const res = await fetch(`/api/logs?${params}`);
+   372→      if (res.ok) {
+   373→        const data = await res.json();
+   374→        setLogs(data.logs || []);
+   375→        setLogTotalPages(data.pagination?.totalPages || 1);
+   376→      }
+   377→    } catch {
+   378→      // silent
+   379→    }
+   380→  }, [logPage, logFilter]);
+   381→
+   382→  useEffect(() => {
+   383→    if (activeTab === 'activity-log') {
+   384→      fetchLogs();
+   385→      const interval = setInterval(fetchLogs, 15000);
+   386→      return () => clearInterval(interval);
+   387→    }
+   388→  }, [activeTab, fetchLogs]);
+   389→
+   390→  // ============================================================
+   391→  // Fetch config on mount and when settings tab is active
+   392→  // ============================================================
+   393→  const fetchConfig = useCallback(async () => {
+   394→    try {
+   395→      setConfigLoading(true);
+   396→      const res = await fetch('/api/config');
+   397→      if (res.ok) {
+   398→        const data = await res.json();
+   399→        if (data.config) setConfig(data.config as TradingConfig);
+   400→      }
+   401→    } catch {
+   402→      // silent
+   403→    } finally {
+   404→      setConfigLoading(false);
+   405→    }
+   406→  }, []);
+   407→
+   408→  useEffect(() => {
+   409→    if (activeTab === 'settings' && !config) {
+   410→      fetchConfig();
+   411→    }
+   412→  }, [activeTab, config, fetchConfig]);
+   413→
+   414→  // ============================================================
+   415→  // Fetch backtest history
+   416→  // ============================================================
+   417→  const fetchBacktestHistory = useCallback(async () => {
+   418→    try {
+   419→      const res = await fetch('/api/backtest?history=true');
+   420→      if (res.ok) {
+   421→        const data = await res.json();
+   422→        setBacktestHistory(data.results || []);
+   423→      }
+   424→    } catch {
+   425→      // silent
+   426→    }
+   427→  }, []);
+   428→
+   429→  useEffect(() => {
+   430→    if (activeTab === 'backtesting') {
+   431→      fetchBacktestHistory();
+   432→    }
+   433→  }, [activeTab, fetchBacktestHistory]);
+   434→
+   435→  // ============================================================
+   436→  // Fetch analysis history
+   437→  // ============================================================
+   438→  const fetchAnalysisHistory = useCallback(async () => {
+   439→    try {
+   440→      const res = await fetch('/api/analysis?history=true');
+   441→      if (res.ok) {
+   442→        const data = await res.json();
+   443→        setAnalysisHistory(data.analyses || []);
+   444→      }
+   445→    } catch {
+   446→      // silent
+   447→    }
+   448→  }, []);
+   449→
+   450→  useEffect(() => {
+   451→    if (activeTab === 'ai-analysis') {
+   452→      fetchAnalysisHistory();
+   453→    }
+   454→  }, [activeTab, fetchAnalysisHistory]);
+   455→
+   456→  // ============================================================
+   457→  // Trading session status
+   458→  // ============================================================
+   459→  const sessionStatus = useMemo(() => {
+   460→    const jakartaHour = parseInt(jakartaTime.split(':')[0] || '0', 10);
+   461→    const jakartaMin = parseInt(jakartaTime.split(':')[1] || '0', 10);
+   462→    const currentHour = jakartaHour + jakartaMin / 60;
+   463→
+   464→    return TRADING_SESSIONS.map((s) => {
+   465→      let isActive = false;
+   466→      if (s.startHour <= s.endHour) {
+   467→        isActive = currentHour >= s.startHour && currentHour < s.endHour;
+   468→      } else {
+   469→        isActive = currentHour >= s.startHour || currentHour < s.endHour;
+   470→      }
+   471→      return { ...s, isActive };
+   472→    });
+   473→  }, [jakartaTime]);
+   474→
+   475→  const overlapStatus = useMemo(() => {
+   476→    const jakartaHour = parseInt(jakartaTime.split(':')[0] || '0', 10);
+   477→    const jakartaMin = parseInt(jakartaTime.split(':')[1] || '0', 10);
+   478→    const currentHour = jakartaHour + jakartaMin / 60;
+   479→    return OVERLAP_SESSIONS.map((o) => ({
+   480→      ...o,
+   481→      isActive: currentHour >= o.startHour && currentHour < o.endHour,
+   482→    }));
+   483→  }, [jakartaTime]);
+   484→
+   485→  // ============================================================
+   486→  // Action handlers
+   487→  // ============================================================
+   488→
+   489→  // Run AI Analysis
+   490→  const handleRunAnalysis = async () => {
+   491→    setAnalysisLoading(true);
+   492→    try {
+   493→      const quote = quotes[selectedPair];
+   494→      const res = await fetch('/api/analysis', {
+   495→        method: 'POST',
+   496→        headers: { 'Content-Type': 'application/json' },
+   497→        body: JSON.stringify({ pair: selectedPair, currentPrice: quote?.mid || 0, quote }),
+   498→      });
+   499→      if (res.ok) {
+   500→        const data = await res.json();
+   501→        if (data.analysis) {
+   502→          setAiAnalysis(selectedPair, data.analysis as AiAnalysisResult);
+   503→          toast.success(`AI Analysis complete for ${PAIR_DISPLAY[selectedPair]}`);
+   504→        }
+   505→      } else {
+   506→        toast.error('Failed to run AI analysis');
+   507→      }
+   508→    } catch {
+   509→      toast.error('Network error running analysis');
+   510→    } finally {
+   511→      setAnalysisLoading(false);
+   512→    }
+   513→  };
+   514→
+   515→  // Generate signals for all pairs
+   516→  const handleGenerateSignals = async () => {
+   517→    setSignalsLoading(true);
+   518→    try {
+   519→      const allSignals: TradingSignal[] = [];
+   520→      for (const pair of FOREX_PAIRS) {
+   521→        const res = await fetch('/api/analysis', {
+   522→          method: 'POST',
+   523→          headers: { 'Content-Type': 'application/json' },
+   524→          body: JSON.stringify({ pair, currentPrice: quotes[pair]?.mid || 0, quote: quotes[pair], generateSignals: true }),
+   525→        });
+   526→        if (res.ok) {
+   527→          const data = await res.json();
+   528→          if (data.analysis) {
+   529→            setAiAnalysis(pair, data.analysis as AiAnalysisResult);
+   530→          }
+   531→          if (data.signals) {
+   532→            allSignals.push(...(data.signals as TradingSignal[]));
+   533→          }
+   534→        }
+   535→      }
+   536→      setSignals(allSignals);
+   537→      toast.success(`Generated ${allSignals.length} signals across all pairs`);
+   538→    } catch {
+   539→      toast.error('Failed to generate signals');
+   540→    } finally {
+   541→      setSignalsLoading(false);
+   542→    }
+   543→  };
+   544→
+   545→  // Open new trade
+   546→  const handleOpenTrade = async () => {
+   547→    try {
+   548→      const res = await fetch('/api/positions', {
+   549→        method: 'POST',
+   550→        headers: { 'Content-Type': 'application/json' },
+   551→        body: JSON.stringify({
+   552→          pair: newTrade.pair,
+   553→          direction: newTrade.direction,
+   554→          lotSize: newTrade.lotSize,
+   555→          stopLoss: newTrade.stopLoss || null,
+   556→          takeProfit: newTrade.takeProfit || null,
+   557→          strategy: newTrade.strategy,
+   558→          trailingStop: trailingStopEnabled,
+   559→        }),
+   560→      });
+   561→      if (res.ok) {
+   562→        toast.success(`${newTrade.direction} ${PAIR_DISPLAY[newTrade.pair]} @ ${newTrade.lotSize} lots`);
+   563→        setNewTradeDialog(false);
+   564→        fetchPositions();
+   565→      } else {
+   566→        const data = await res.json();
+   567→        toast.error(data.error || 'Failed to open trade');
+   568→      }
+   569→    } catch {
+   570→      toast.error('Network error opening trade');
+   571→    }
+   572→  };
+   573→
+   574→  // Close position
+   575→  const handleClosePosition = async (id: string) => {
+   576→    try {
+   577→      const res = await fetch('/api/positions', {
+   578→        method: 'PATCH',
+   579→        headers: { 'Content-Type': 'application/json' },
+   580→        body: JSON.stringify({ id, action: 'close' }),
+   581→      });
+   582→      if (res.ok) {
+   583→        toast.success('Position closed');
+   584→        fetchPositions();
+   585→      }
+   586→    } catch {
+   587→      toast.error('Failed to close position');
+   588→    }
+   589→  };
+   590→
+   591→  // Modify SL/TP
+   592→  const handleModifyPosition = async (id: string, sl: number | null, tp: number | null) => {
+   593→    try {
+   594→      const res = await fetch('/api/positions', {
+   595→        method: 'PATCH',
+   596→        headers: { 'Content-Type': 'application/json' },
+   597→        body: JSON.stringify({ id, action: 'modify', stopLoss: sl, takeProfit: tp }),
+   598→      });
+   599→      if (res.ok) {
+   600→        toast.success('Position modified');
+   601→        fetchPositions();
+   602→      }
+   603→    } catch {
+   604→      toast.error('Failed to modify position');
+   605→    }
+   606→  };
+   607→
+   608→  // Calculate risk
+   609→  const handleCalculateRisk = async () => {
+   610→    try {
+   611→      const res = await fetch('/api/risk', {
+   612→        method: 'POST',
+   613→        headers: { 'Content-Type': 'application/json' },
+   614→        body: JSON.stringify(riskForm),
+   615→      });
+   616→      if (res.ok) {
+   617→        const data = await res.json();
+   618→        setRiskCalc(data as RiskCalculation);
+   619→      }
+   620→    } catch {
+   621→      toast.error('Risk calculation failed');
+   622→    }
+   623→  };
+   624→
+   625→  // Create alert
+   626→  const handleCreateAlert = async () => {
+   627→    try {
+   628→      const res = await fetch('/api/alerts', {
+   629→        method: 'POST',
+   630→        headers: { 'Content-Type': 'application/json' },
+   631→        body: JSON.stringify(newAlert),
+   632→      });
+   633→      if (res.ok) {
+   634→        toast.success('Alert created');
+   635→        setCreateAlertDialog(false);
+   636→        fetchAlerts();
+   637→      }
+   638→    } catch {
+   639→      toast.error('Failed to create alert');
+   640→    }
+   641→  };
+   642→
+   643→  // Delete alert
+   644→  const handleDeleteAlert = async (id: string) => {
+   645→    try {
+   646→      await fetch(`/api/alerts?id=${id}`, { method: 'DELETE' });
+   647→      toast.success('Alert deleted');
+   648→      fetchAlerts();
+   649→    } catch {
+   650→      toast.error('Failed to delete alert');
+   651→    }
+   652→  };
+   653→
+   654→  // Toggle alert
+   655→  const handleToggleAlert = async (id: string, isActive: boolean) => {
+   656→    try {
+   657→      await fetch('/api/alerts', {
+   658→        method: 'PATCH',
+   659→        headers: { 'Content-Type': 'application/json' },
+   660→        body: JSON.stringify({ id, isActive }),
+   661→      });
+   662→      fetchAlerts();
+   663→    } catch {
+   664→      toast.error('Failed to toggle alert');
+   665→    }
+   666→  };
+   667→
+   668→  // Run backtest
+   669→  const handleRunBacktest = async () => {
+   670→    setBacktestLoading(true);
+   671→    setBacktestResult(null);
+   672→    try {
+   673→      const res = await fetch('/api/backtest', {
+   674→        method: 'POST',
+   675→        headers: { 'Content-Type': 'application/json' },
+   676→        body: JSON.stringify(backtestConfig),
+   677→      });
+   678→      if (res.ok) {
+   679→        const data = await res.json();
+   680→        if (data.result) {
+   681→          setBacktestResult(data.result as BacktestResult);
+   682→          setBacktestEquity(data.equityCurve || []);
+   683→          toast.success(`Backtest complete: ${data.result.totalTrades} trades, ${data.result.winRate}% win rate`);
+   684→          fetchBacktestHistory();
+   685→        }
+   686→      } else {
+   687→        const data = await res.json();
+   688→        toast.error(data.error || 'Backtest failed');
+   689→      }
+   690→    } catch {
+   691→      toast.error('Network error running backtest');
+   692→    } finally {
+   693→      setBacktestLoading(false);
+   694→    }
+   695→  };
+   696→
+   697→  // Delete backtest
+   698→  const handleDeleteBacktest = async (id: string) => {
+   699→    try {
+   700→      await fetch(`/api/backtest?id=${id}`, { method: 'DELETE' });
+   701→      toast.success('Backtest deleted');
+   702→      fetchBacktestHistory();
+   703→    } catch {
+   704→      toast.error('Failed to delete backtest');
+   705→    }
+   706→  };
+   707→
+   708→  // Clear logs
+   709→  const handleClearLogs = async () => {
+   710→    try {
+   711→      await fetch('/api/logs?all=true', { method: 'DELETE' });
+   712→      toast.success('Logs cleared');
+   713→      fetchLogs();
+   714→    } catch {
+   715→      toast.error('Failed to clear logs');
+   716→    }
+   717→  };
+   718→
+   719→  // Save config
+   720→  const handleSaveConfig = async () => {
+   721→    if (!config) return;
+   722→    setConfigSaving(true);
+   723→    try {
+   724→      const res = await fetch('/api/config', {
+   725→        method: 'PUT',
+   726→        headers: { 'Content-Type': 'application/json' },
+   727→        body: JSON.stringify(config),
+   728→      });
+   729→      if (res.ok) {
+   730→        toast.success('Configuration saved');
+   731→      } else {
+   732→        toast.error('Failed to save configuration');
+   733→      }
+   734→    } catch {
+   735→      toast.error('Network error saving config');
+   736→    } finally {
+   737→      setConfigSaving(false);
+   738→    }
+   739→  };
+   740→
+   741→  // Reset config
+   742→  const handleResetConfig = async () => {
+   743→    setConfigLoading(true);
+   744→    try {
+   745→      await fetch('/api/config', {
+   746→        method: 'PUT',
+   747→        headers: { 'Content-Type': 'application/json' },
+   748→        body: JSON.stringify({ reset: true }),
+   749→      });
+   750→      toast.success('Configuration reset to defaults');
+   751→      fetchConfig();
+   752→    } catch {
+   753→      toast.error('Failed to reset configuration');
+   754→    } finally {
+   755→      setConfigLoading(false);
+   756→    }
+   757→  };
+   758→
+   759→  // ============================================================
+   760→  // Format helpers
+   761→  // ============================================================
+   762→  const fmtPrice = (pair: ForexPair, price: number) => {
+   763→    const decimals = pair === 'XAUUSD' || pair === 'USDJPY' ? 3 : 5;
+   764→    return price.toFixed(decimals);
+   765→  };
+   766→
+   767→  const fmtChange = (change: number) => {
+   768→    const sign = change >= 0 ? '+' : '';
+   769→    return `${sign}${change.toFixed(2)}%`;
+   770→  };
+   771→
+   772→  // ============================================================
+   773→  // Sidebar content component (shared between desktop & mobile)
+   774→// ============================================================
+   775→  const SidebarContent = ({ onNavigate }: { onNavigate?: () => void }) => (
+   776→    <div className="flex flex-col h-full">
+   777→      {/* Logo */}
+   778→      <div className="p-4 border-b border-zinc-700/50">
+   779→        <div className="flex items-center gap-2">
+   780→          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
+   781→            <TrendingUp className="w-5 h-5 text-white" />
+   782→          </div>
+   783→          <div>
+   784→            <h1 className="font-bold text-sm text-white">FX Pro Trading</h1>
+   785→            <p className="text-[10px] text-zinc-400">AI-Powered Dashboard</p>
+   786→          </div>
+   787→        </div>
+   788→      </div>
+   789→
+   790→      {/* Account summary in sidebar */}
+   791→      <div className="p-3 border-b border-zinc-700/50">
+   792→        <div className="bg-zinc-800/80 rounded-lg p-3 space-y-2">
+   793→          <div className="flex justify-between text-xs">
+   794→            <span className="text-zinc-400">Balance</span>
+   795→            <span className="text-white font-mono font-medium">${accountBalance.toLocaleString()}</span>
+   796→          </div>
+   797→          <div className="flex justify-between text-xs">
+   798→            <span className="text-zinc-400">Daily P&L</span>
+   799→            <span className={`font-mono font-medium ${dailyPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+   800→              {dailyPnl >= 0 ? '+' : ''}{dailyPnl.toFixed(2)}
+   801→            </span>
+   802→          </div>
+   803→          <div className="flex justify-between text-xs">
+   804→            <span className="text-zinc-400">Open Positions</span>
+   805→            <span className="text-white font-mono font-medium">{openPositionsCount}</span>
+   806→          </div>
+   807→        </div>
+   808→      </div>
+   809→
+   810→      {/* Navigation */}
+   811→      <ScrollArea className="flex-1 py-2">
+   812→        <nav className="space-y-0.5 px-2">
+   813→          {NAV_ITEMS.map((item) => {
+   814→            const Icon = item.icon;
+   815→            const isActive = activeTab === item.id;
+   816→            return (
+   817→              <button
+   818→                key={item.id}
+   819→                onClick={() => {
+   820→                  setActiveTab(item.id);
+   821→                  onNavigate?.();
+   822→                }}
+   823→                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+   824→                  isActive
+   825→                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+   826→                    : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 border border-transparent'
+   827→                }`}
+   828→              >
+   829→                <Icon className="w-4 h-4 shrink-0" />
+   830→                <span className="truncate">{item.label}</span>
+   831→                {isActive && <ChevronRight className="w-3 h-3 ml-auto shrink-0" />}
+   832→              </button>
+   833→            );
+   834→          })}
+   835→        </nav>
+   836→      </ScrollArea>
+   837→
+   838→      {/* Footer in sidebar */}
+   839→      <div className="p-3 border-t border-zinc-700/50">
+   840→        <div className="text-[10px] text-zinc-500 text-center">
+   841→          © 2024 FINEX Indonesia
+   842→        </div>
+   843→      </div>
+   844→    </div>
+   845→  );
+   846→
+   847→  // ============================================================
+   848→  // Status bar (top)
+   849→  // ============================================================
+   850→  const StatusBar = () => (
+   851→    <div className="h-8 bg-zinc-950 border-b border-zinc-800 flex items-center justify-between px-3 text-[11px] text-zinc-400 shrink-0">
+   852→      <div className="flex items-center gap-4">
+   853→        {/* Connection status */}
+   854→        <div className="flex items-center gap-1.5">
+   855→          {connected ? (
+   856→            <Wifi className="w-3 h-3 text-emerald-400" />
+   857→          ) : (
+   858→            <WifiOff className="w-3 h-3 text-rose-400" />
+   859→          )}
+   860→          <span className={connected ? 'text-emerald-400' : 'text-rose-400'}>
+   861→            {connected ? 'Connected' : 'Disconnected'}
+   862→          </span>
+   863→        </div>
+   864→        {/* Auto trading status */}
+   865→        <div className="flex items-center gap-1.5">
+   866→          <CircleDot className={`w-3 h-3 ${isAutoTrading ? 'text-emerald-400' : 'text-zinc-500'}`} />
+   867→          <span className={isAutoTrading ? 'text-emerald-400' : 'text-zinc-500'}>
+   868→            Auto: {isAutoTrading ? 'ON' : 'OFF'}
+   869→          </span>
+   870→        </div>
+   871→      </div>
+   872→      <div className="flex items-center gap-4">
+   873→        <div className="flex items-center gap-1.5">
+   874→          <Globe className="w-3 h-3" />
+   875→          <span>WIB {jakartaTime}</span>
+   876→        </div>
+   877→        <span className="text-zinc-500">FX Pro Trading v1.0</span>
+   878→      </div>
+   879→    </div>
+   880→  );
+   881→
+   882→  // ============================================================
+   883→  // PANEL 1: DASHBOARD
+   884→  // ============================================================
+   885→  const DashboardPanel = () => {
+   886→    const currentAnalysis = aiAnalysis[selectedPair];
+   887→    return (
+   888→      <div className="space-y-4">
+   889→        {/* Price cards */}
+   890→        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+   891→          {FOREX_PAIRS.map((pair) => {
+   892→            const q = quotes[pair];
+   893→            const isUp = q && q.change >= 0;
+   894→            const mc = marketConditions[pair];
+   895→            if (!q) {
+   896→              return (
+   897→                <Card key={pair} className="bg-zinc-900 border-zinc-800 p-4 gap-2">
+   898→                  <Skeleton className="h-4 w-20" />
+   899→                  <Skeleton className="h-6 w-32" />
+   900→                  <Skeleton className="h-3 w-24" />
+   901→                </Card>
+   902→              );
+   903→            }
+   904→            return (
+   905→              <Card
+   906→                key={pair}
+   907→                className={`bg-zinc-900 border-zinc-800 p-4 cursor-pointer transition-all hover:border-zinc-600 ${selectedPair === pair ? 'border-emerald-500/50 ring-1 ring-emerald-500/20' : ''}`}
+   908→                onClick={() => setSelectedPair(pair)}
+   909→              >
+   910→                <div className="flex items-center justify-between mb-2">
+   911→                  <span className="text-sm font-semibold text-white">{PAIR_DISPLAY[pair]}</span>
+   912→                  <Badge variant={isUp ? 'default' : 'destructive'} className={`text-[10px] ${isUp ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border-rose-500/30'}`}>
+   913→                    {isUp ? <TrendingUp className="w-3 h-3 mr-0.5" /> : <TrendingDown className="w-3 h-3 mr-0.5" />}
+   914→                    {fmtChange(q.change)}
+   915→                  </Badge>
+   916→                </div>
+   917→                <div className="grid grid-cols-2 gap-2 text-xs">
+   918→                  <div>
+   919→                    <span className="text-zinc-500">Bid</span>
+   920→                    <p className={`font-mono font-medium ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+   921→                      {fmtPrice(pair, q.bid)}
+   922→                    </p>
+   923→                  </div>
+   924→                  <div>
+   925→                    <span className="text-zinc-500">Ask</span>
+   926→                    <p className={`font-mono font-medium ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
+   927→                      {fmtPrice(pair, q.ask)}
+   928→                    </p>
+   929→                  </div>
+   930→                  <div>
+   931→                    <span className="text-zinc-500">Spread</span>
+   932→                    <p className="font-mono text-zinc-300">{q.spread.toFixed(1)} pip</p>
+   933→                  </div>
+   934→                  <div>
+   935→                    <span className="text-zinc-500">Market</span>
+   936→                    <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-400">
+   937→                      {mc === 'trending' ? '📈 Trending' : mc === 'range_bound' ? '↔️ Range' : mc === 'high_volatility' ? '⚡ Hi-Vol' : '😴 Low-Vol'}
+   938→                    </Badge>
+   939→                  </div>
+   940→                </div>
+   941→              </Card>
+   942→            );
+   943→          })}
+   944→        </div>
+   945→
+   946→        {/* Sessions & Quick AI Analysis row */}
+   947→        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+   948→          {/* Trading sessions */}
+   949→          <Card className="bg-zinc-900 border-zinc-800 p-4 lg:col-span-2">
+   950→            <CardHeader className="p-0 pb-3">
+   951→              <CardTitle className="text-sm text-white flex items-center gap-2">
+   952→                <Clock className="w-4 h-4" /> Trading Sessions
+   953→              </CardTitle>
+   954→            </CardHeader>
+   955→            <CardContent className="p-0">
+   956→              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+   957→                {sessionStatus.map((s) => (
+   958→                  <div key={s.name} className={`rounded-lg p-2.5 text-center border ${s.isActive ? 'bg-emerald-500/10 border-emerald-500/30' : 'bg-zinc-800/50 border-zinc-700/50'}`}>
+   959→                    <div className={`text-xs font-medium ${s.isActive ? 'text-emerald-400' : 'text-zinc-500'}`}>{s.name}</div>
+   960→                    <div className="text-[10px] text-zinc-400 mt-0.5">{String(s.startHour).padStart(2, '0')}:00-{String(s.endHour).padStart(2, '0')}:00 WIB</div>
+   961→                    <div className={`mt-1 inline-block w-2 h-2 rounded-full ${s.isActive ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`} />
+   962→                  </div>
+   963→                ))}
+   964→              </div>
+   965→              {/* Overlap sessions */}
+   966→              <div className="flex gap-2 flex-wrap">
+   967→                {overlapStatus.map((o) => (
+   968→                  <Badge key={o.name} variant={o.isActive ? 'default' : 'outline'} className={`text-[10px] ${o.isActive ? 'bg-amber-500/20 text-amber-400 border-amber-500/30' : 'border-zinc-700 text-zinc-500'}`}>
+   969→                    {o.isActive && '🔥 '}{o.name} {o.isActive ? 'ACTIVE' : ''}
+   970→                  </Badge>
+   971→                ))}
+   972→              </div>
+   973→            </CardContent>
+   974→          </Card>
+   975→
+   976→          {/* Quick AI Analysis */}
+   977→          <Card className="bg-zinc-900 border-zinc-800 p-4">
+   978→            <CardHeader className="p-0 pb-3">
+   979→              <CardTitle className="text-sm text-white flex items-center gap-2">
+   980→                <Brain className="w-4 h-4" /> Quick AI Analysis
+   981→              </CardTitle>
+   982→            </CardHeader>
+   983→            <CardContent className="p-0">
+   984→              {currentAnalysis ? (
+   985→                <div className="space-y-2">
+   986→                  <div className="flex items-center gap-2">
+   987→                    <Badge className={`text-[10px] ${currentAnalysis.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : currentAnalysis.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' : 'bg-zinc-700 text-zinc-300'}`}>
+   988→                      {currentAnalysis.recommendation}
+   989→                    </Badge>
+   990→                    <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-400">
+   991→                      {STRATEGY_LABELS[currentAnalysis.bestStrategy]}
+   992→                    </Badge>
+   993→                  </div>
+   994→                  <div className="text-xs text-zinc-400">
+   995→                    <div className="flex justify-between mb-1">
+   996→                      <span>Confidence</span>
+   997→                      <span className="text-white font-mono">{currentAnalysis.confidence.toFixed(0)}%</span>
+   998→                    </div>
+   999→                    <Progress value={currentAnalysis.confidence} className="h-1.5 bg-zinc-800 [&>div]:bg-emerald-500" />
+  1000→                  </div>
+  1001→                  <p className="text-[11px] text-zinc-500 line-clamp-3">{currentAnalysis.reasoning}</p>
+  1002→                </div>
+  1003→              ) : (
+  1004→                <div className="text-center py-4">
+  1005→                  <Brain className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
+  1006→                  <p className="text-xs text-zinc-500">No analysis yet. Go to AI Analysis tab to run.</p>
+  1007→                </div>
+  1008→              )}
+  1009→            </CardContent>
+  1010→          </Card>
+  1011→        </div>
+  1012→
+  1013→        {/* News & Positions row */}
+  1014→        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+  1015→          {/* News feed */}
+  1016→          <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1017→            <CardHeader className="p-0 pb-3">
+  1018→              <CardTitle className="text-sm text-white flex items-center gap-2">
+  1019→                <BarChart3 className="w-4 h-4" /> Recent News
+  1020→              </CardTitle>
+  1021→            </CardHeader>
+  1022→            <CardContent className="p-0">
+  1023→              <ScrollArea className="max-h-72">
+  1024→                <div className="space-y-2">
+  1025→                  {news.length === 0 ? (
+  1026→                    <p className="text-xs text-zinc-500 text-center py-4">No news available</p>
+  1027→                  ) : (
+  1028→                    news.slice(0, 10).map((article) => (
+  1029→                      <div key={article.id} className="flex items-start gap-2 p-2 rounded-lg hover:bg-zinc-800/50 transition-colors">
+  1030→                        <Badge variant="outline" className={`text-[9px] shrink-0 mt-0.5 border-zinc-700 ${article.impact === 'high' ? 'text-rose-400' : article.impact === 'medium' ? 'text-amber-400' : 'text-zinc-500'}`}>
+  1031→                          {article.impact}
+  1032→                        </Badge>
+  1033→                        <div className="min-w-0">
+  1034→                          <p className="text-xs text-zinc-200 line-clamp-2 font-medium">{article.title}</p>
+  1035→                          <p className="text-[10px] text-zinc-500 mt-0.5">{article.source} · {format(new Date(article.publishedAt), 'HH:mm')}</p>
+  1036→                        </div>
+  1037→                      </div>
+  1038→                    ))
+  1039→                  )}
+  1040→                </div>
+  1041→              </ScrollArea>
+  1042→            </CardContent>
+  1043→          </Card>
+  1044→
+  1045→          {/* Open positions summary */}
+  1046→          <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1047→            <CardHeader className="p-0 pb-3">
+  1048→              <CardTitle className="text-sm text-white flex items-center gap-2">
+  1049→                <Activity className="w-4 h-4" /> Open Positions
+  1050→                <Badge variant="secondary" className="text-[10px] bg-zinc-800 text-zinc-300 ml-auto">{positions.length}</Badge>
+  1051→              </CardTitle>
+  1052→            </CardHeader>
+  1053→            <CardContent className="p-0">
+  1054→              <ScrollArea className="max-h-72">
+  1055→                {positions.length === 0 ? (
+  1056→                  <p className="text-xs text-zinc-500 text-center py-4">No open positions</p>
+  1057→                ) : (
+  1058→                  <Table>
+  1059→                    <TableHeader>
+  1060→                      <TableRow className="border-zinc-800 hover:bg-transparent">
+  1061→                        <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+  1062→                        <TableHead className="text-[10px] text-zinc-500">Dir</TableHead>
+  1063→                        <TableHead className="text-[10px] text-zinc-500">Lots</TableHead>
+  1064→                        <TableHead className="text-[10px] text-zinc-500 text-right">P&L</TableHead>
+  1065→                      </TableRow>
+  1066→                    </TableHeader>
+  1067→                    <TableBody>
+  1068→                      {positions.slice(0, 5).map((pos) => (
+  1069→                        <TableRow key={pos.id} className="border-zinc-800/50">
+  1070→                          <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[pos.pair]}</TableCell>
+  1071→                          <TableCell>
+  1072→                            <Badge className={`text-[10px] ${pos.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+  1073→                              {pos.direction}
+  1074→                            </Badge>
+  1075→                          </TableCell>
+  1076→                          <TableCell className="text-xs text-zinc-300 font-mono">{pos.lotSize}</TableCell>
+  1077→                          <TableCell className={`text-xs font-mono text-right ${(pos.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+  1078→                            {(pos.pnl || 0) >= 0 ? '+' : ''}{(pos.pnl || 0).toFixed(2)}
+  1079→                          </TableCell>
+  1080→                        </TableRow>
+  1081→                      ))}
+  1082→                    </TableBody>
+  1083→                  </Table>
+  1084→                )}
+  1085→              </ScrollArea>
+  1086→            </CardContent>
+  1087→          </Card>
+  1088→        </div>
+  1089→
+  1090→        {/* Daily performance summary */}
+  1091→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1092→          <CardHeader className="p-0 pb-3">
+  1093→            <CardTitle className="text-sm text-white flex items-center gap-2">
+  1094→              <BarChart3 className="w-4 h-4" /> Daily Performance
+  1095→            </CardTitle>
+  1096→          </CardHeader>
+  1097→          <CardContent className="p-0">
+  1098→            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+  1099→              <div>
+  1100→                <p className="text-[10px] text-zinc-500 mb-1">Total P&L</p>
+  1101→                <p className={`text-lg font-mono font-bold ${dailyPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+  1102→                  {dailyPnl >= 0 ? '+' : ''}{dailyPnl.toFixed(2)}
+  1103→                </p>
+  1104→              </div>
+  1105→              <div>
+  1106→                <p className="text-[10px] text-zinc-500 mb-1">Balance</p>
+  1107→                <p className="text-lg font-mono font-bold text-white">${accountBalance.toLocaleString()}</p>
+  1108→              </div>
+  1109→              <div>
+  1110→                <p className="text-[10px] text-zinc-500 mb-1">Open Trades</p>
+  1111→                <p className="text-lg font-mono font-bold text-white">{openPositionsCount}</p>
+  1112→              </div>
+  1113→              <div>
+  1114→                <p className="text-[10px] text-zinc-500 mb-1">Daily Risk Used</p>
+  1115→                <div className="flex items-center gap-2">
+  1116→                  <p className="text-lg font-mono font-bold text-amber-400">{todayRiskUsed.toFixed(1)}%</p>
+  1117→                  <Progress value={Math.min(todayRiskUsed / 3 * 100, 100)} className="flex-1 h-1.5 bg-zinc-800 [&>div]:bg-amber-500" />
+  1118→                </div>
+  1119→              </div>
+  1120→            </div>
+  1121→          </CardContent>
+  1122→        </Card>
+  1123→      </div>
+  1124→    );
+  1125→  };
+  1126→
+  1127→  // ============================================================
+  1128→  // PANEL 2: AI ANALYSIS
+  1129→  // ============================================================
+  1130→  const AiAnalysisPanel = () => {
+  1131→    const currentAnalysis = aiAnalysis[selectedPair];
+  1132→    return (
+  1133→      <div className="space-y-4">
+  1134→        {/* Pair selector & run button */}
+  1135→        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+  1136→          <Select value={selectedPair} onValueChange={(v) => setSelectedPair(v as ForexPair)}>
+  1137→            <SelectTrigger className="w-full sm:w-48 bg-zinc-800 border-zinc-700 text-white">
+  1138→              <SelectValue />
+  1139→            </SelectTrigger>
+  1140→            <SelectContent className="bg-zinc-800 border-zinc-700">
+  1141→              {FOREX_PAIRS.map((p) => (
+  1142→                <SelectItem key={p} value={p} className="text-zinc-200 focus:bg-zinc-700 focus:text-white">{PAIR_DISPLAY[p]}</SelectItem>
+  1143→              ))}
+  1144→            </SelectContent>
+  1145→          </Select>
+  1146→          <Button
+  1147→            onClick={handleRunAnalysis}
+  1148→            disabled={analysisLoading}
+  1149→            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1150→          >
+  1151→            {analysisLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
+  1152→            Run AI Analysis
+  1153→          </Button>
+  1154→        </div>
+  1155→
+  1156→        {/* Analysis result */}
+  1157→        {currentAnalysis ? (
+  1158→          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+  1159→            {/* Main analysis card */}
+  1160→            <Card className="bg-zinc-900 border-zinc-800 p-4 lg:col-span-2">
+  1161→              <CardHeader className="p-0 pb-3">
+  1162→                <div className="flex items-center justify-between">
+  1163→                  <CardTitle className="text-sm text-white">Analysis: {PAIR_DISPLAY[currentAnalysis.pair]}</CardTitle>
+  1164→                  <Badge className={`text-xs ${
+  1165→                    currentAnalysis.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' :
+  1166→                    currentAnalysis.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' :
+  1167→                    currentAnalysis.recommendation === 'HOLD' ? 'bg-amber-500/20 text-amber-400' :
+  1168→                    'bg-zinc-700 text-zinc-400'
+  1169→                  }`}>
+  1170→                    {currentAnalysis.recommendation === 'BUY' && <ArrowUpCircle className="w-3 h-3 mr-1" />}
+  1171→                    {currentAnalysis.recommendation === 'SELL' && <ArrowDownCircle className="w-3 h-3 mr-1" />}
+  1172→                    {currentAnalysis.recommendation}
+  1173→                  </Badge>
+  1174→                </div>
+  1175→              </CardHeader>
+  1176→              <CardContent className="p-0 space-y-4">
+  1177→                {/* Confidence gauge */}
+  1178→                <div className="flex items-center gap-4">
+  1179→                  <div className="relative w-24 h-24">
+  1180→                    <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
+  1181→                      <circle cx="50" cy="50" r="40" fill="none" stroke="#27272a" strokeWidth="8" />
+  1182→                      <circle
+  1183→                        cx="50" cy="50" r="40" fill="none"
+  1184→                        stroke={currentAnalysis.confidence > 70 ? '#10b981' : currentAnalysis.confidence > 40 ? '#f59e0b' : '#ef4444'}
+  1185→                        strokeWidth="8"
+  1186→                        strokeDasharray={`${currentAnalysis.confidence * 2.51} 251`}
+  1187→                        strokeLinecap="round"
+  1188→                      />
+  1189→                    </svg>
+  1190→                    <div className="absolute inset-0 flex items-center justify-center">
+  1191→                      <span className="text-lg font-bold text-white font-mono">{currentAnalysis.confidence.toFixed(0)}%</span>
+  1192→                    </div>
+  1193→                  </div>
+  1194→                  <div className="space-y-2 flex-1">
+  1195→                    <div className="flex justify-between text-xs">
+  1196→                      <span className="text-zinc-400">Market Condition</span>
+  1197→                      <Badge variant="outline" className="border-zinc-700 text-zinc-300 text-[10px]">{MARKET_CONDITION_LABELS[currentAnalysis.marketCondition]}</Badge>
+  1198→                    </div>
+  1199→                    <div className="flex justify-between text-xs">
+  1200→                      <span className="text-zinc-400">Risk Level</span>
+  1201→                      <Badge className={`text-[10px] ${currentAnalysis.riskLevel === 'low' ? 'bg-emerald-500/20 text-emerald-400' : currentAnalysis.riskLevel === 'medium' ? 'bg-amber-500/20 text-amber-400' : 'bg-rose-500/20 text-rose-400'}`}>
+  1202→                        {currentAnalysis.riskLevel}
+  1203→                      </Badge>
+  1204→                    </div>
+  1205→                    <div className="flex justify-between text-xs">
+  1206→                      <span className="text-zinc-400">Best Strategy</span>
+  1207→                      <span className="text-zinc-200">{STRATEGY_LABELS[currentAnalysis.bestStrategy]}</span>
+  1208→                    </div>
+  1209→                  </div>
+  1210→                </div>
+  1211→
+  1212→                <Separator className="bg-zinc-800" />
+  1213→
+  1214→                {/* Suggested levels */}
+  1215→                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+  1216→                  {currentAnalysis.entryPrice && (
+  1217→                    <div className="bg-zinc-800/50 rounded-lg p-2.5 text-center">
+  1218→                      <p className="text-[10px] text-zinc-500">Entry</p>
+  1219→                      <p className="text-sm font-mono text-white font-medium">{fmtPrice(currentAnalysis.pair, currentAnalysis.entryPrice)}</p>
+  1220→                    </div>
+  1221→                  )}
+  1222→                  {currentAnalysis.stopLoss && (
+  1223→                    <div className="bg-zinc-800/50 rounded-lg p-2.5 text-center">
+  1224→                      <p className="text-[10px] text-zinc-500">Stop Loss</p>
+  1225→                      <p className="text-sm font-mono text-rose-400 font-medium">{fmtPrice(currentAnalysis.pair, currentAnalysis.stopLoss)}</p>
+  1226→                    </div>
+  1227→                  )}
+  1228→                  {currentAnalysis.takeProfit && (
+  1229→                    <div className="bg-zinc-800/50 rounded-lg p-2.5 text-center">
+  1230→                      <p className="text-[10px] text-zinc-500">Take Profit</p>
+  1231→                      <p className="text-sm font-mono text-emerald-400 font-medium">{fmtPrice(currentAnalysis.pair, currentAnalysis.takeProfit)}</p>
+  1232→                    </div>
+  1233→                  )}
+  1234→                  {currentAnalysis.lotSize && (
+  1235→                    <div className="bg-zinc-800/50 rounded-lg p-2.5 text-center">
+  1236→                      <p className="text-[10px] text-zinc-500">Lot Size</p>
+  1237→                      <p className="text-sm font-mono text-white font-medium">{currentAnalysis.lotSize}</p>
+  1238→                    </div>
+  1239→                  )}
+  1240→                </div>
+  1241→
+  1242→                {/* Reasoning */}
+  1243→                <div>
+  1244→                  <p className="text-xs text-zinc-400 mb-1 font-medium">AI Reasoning</p>
+  1245→                  <p className="text-xs text-zinc-300 leading-relaxed bg-zinc-800/30 rounded-lg p-3">{currentAnalysis.reasoning}</p>
+  1246→                </div>
+  1247→
+  1248→                {/* News impact */}
+  1249→                {currentAnalysis.newsImpact && (
+  1250→                  <div>
+  1251→                    <p className="text-xs text-zinc-400 mb-1 font-medium">News Impact</p>
+  1252→                    <p className="text-xs text-zinc-300 leading-relaxed bg-zinc-800/30 rounded-lg p-3">{currentAnalysis.newsImpact}</p>
+  1253→                  </div>
+  1254→                )}
+  1255→
+  1256→                {/* Indicators */}
+  1257→                {currentAnalysis.indicators && currentAnalysis.indicators.length > 0 && (
+  1258→                  <div>
+  1259→                    <p className="text-xs text-zinc-400 mb-2 font-medium">Recommended Indicators</p>
+  1260→                    <div className="flex flex-wrap gap-1.5">
+  1261→                      {currentAnalysis.indicators.map((ind) => (
+  1262→                        <Badge key={ind.name} variant="outline" className={`text-[10px] border-zinc-700 ${ind.signal === 'bullish' ? 'text-emerald-400' : ind.signal === 'bearish' ? 'text-rose-400' : 'text-zinc-400'}`}>
+  1263→                          {ind.name}: {ind.signal} ({ind.value.toFixed(2)})
+  1264→                        </Badge>
+  1265→                      ))}
+  1266→                    </div>
+  1267→                  </div>
+  1268→                )}
+  1269→              </CardContent>
+  1270→            </Card>
+  1271→
+  1272→            {/* Analysis history */}
+  1273→            <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1274→              <CardHeader className="p-0 pb-3">
+  1275→                <CardTitle className="text-sm text-white">Analysis History</CardTitle>
+  1276→              </CardHeader>
+  1277→              <CardContent className="p-0">
+  1278→                <ScrollArea className="max-h-96">
+  1279→                  {analysisHistory.length === 0 ? (
+  1280→                    <p className="text-xs text-zinc-500 text-center py-4">No analysis history</p>
+  1281→                  ) : (
+  1282→                    <div className="space-y-2">
+  1283→                      {analysisHistory.slice(0, 20).map((a, i) => (
+  1284→                        <div key={i} className="bg-zinc-800/50 rounded-lg p-2.5 space-y-1">
+  1285→                          <div className="flex items-center justify-between">
+  1286→                            <span className="text-xs font-medium text-zinc-200">{PAIR_DISPLAY[a.pair]}</span>
+  1287→                            <Badge className={`text-[10px] ${a.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : a.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' : 'bg-zinc-700 text-zinc-400'}`}>
+  1288→                              {a.recommendation}
+  1289→                            </Badge>
+  1290→                          </div>
+  1291→                          <div className="flex items-center justify-between text-[10px] text-zinc-500">
+  1292→                            <span>{STRATEGY_LABELS[a.bestStrategy]}</span>
+  1293→                            <span>{a.confidence.toFixed(0)}%</span>
+  1294→                          </div>
+  1295→                        </div>
+  1296→                      ))}
+  1297→                    </div>
+  1298→                  )}
+  1299→                </ScrollArea>
+  1300→              </CardContent>
+  1301→            </Card>
+  1302→          </div>
+  1303→        ) : (
+  1304→          <Card className="bg-zinc-900 border-zinc-800 p-8">
+  1305→            <div className="text-center">
+  1306→              <Brain className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
+  1307→              <h3 className="text-sm text-zinc-400 mb-1">No Analysis Available</h3>
+  1308→              <p className="text-xs text-zinc-500">Select a pair and run AI analysis to get trading recommendations.</p>
+  1309→            </div>
+  1310→          </Card>
+  1311→        )}
+  1312→      </div>
+  1313→    );
+  1314→  };
+  1315→
+  1316→  // ============================================================
+  1317→  // PANEL 3: TRADING SIGNALS
+  1318→  // ============================================================
+  1319→  const TradingSignalsPanel = () => {
+  1320→    const filteredSignals = useMemo(() => {
+  1321→      return signals.filter((s) => {
+  1322→        if (signalFilter.pair !== 'all' && s.pair !== signalFilter.pair) return false;
+  1323→        if (signalFilter.strategy !== 'all' && s.strategy !== signalFilter.strategy) return false;
+  1324→        if (signalFilter.direction !== 'all' && s.direction !== signalFilter.direction) return false;
+  1325→        return true;
+  1326→      });
+  1327→    }, [signals, signalFilter]);
+  1328→
+  1329→    return (
+  1330→      <div className="space-y-4">
+  1331→        {/* Header with generate button and filters */}
+  1332→        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+  1333→          <Button
+  1334→            onClick={handleGenerateSignals}
+  1335→            disabled={signalsLoading}
+  1336→            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+  1337→          >
+  1338→            {signalsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+  1339→            Generate Signals
+  1340→          </Button>
+  1341→          <div className="flex gap-2 flex-wrap">
+  1342→            <Select value={signalFilter.pair} onValueChange={(v) => setSignalFilter(f => ({ ...f, pair: v }))}>
+  1343→              <SelectTrigger className="w-32 bg-zinc-800 border-zinc-700 text-zinc-300 h-8 text-xs">
+  1344→                <SelectValue placeholder="All Pairs" />
+  1345→              </SelectTrigger>
+  1346→              <SelectContent className="bg-zinc-800 border-zinc-700">
+  1347→                <SelectItem value="all" className="text-zinc-200">All Pairs</SelectItem>
+  1348→                {FOREX_PAIRS.map(p => <SelectItem key={p} value={p} className="text-zinc-200">{PAIR_DISPLAY[p]}</SelectItem>)}
+  1349→              </SelectContent>
+  1350→            </Select>
+  1351→            <Select value={signalFilter.direction} onValueChange={(v) => setSignalFilter(f => ({ ...f, direction: v }))}>
+  1352→              <SelectTrigger className="w-28 bg-zinc-800 border-zinc-700 text-zinc-300 h-8 text-xs">
+  1353→                <SelectValue placeholder="Direction" />
+  1354→              </SelectTrigger>
+  1355→              <SelectContent className="bg-zinc-800 border-zinc-700">
+  1356→                <SelectItem value="all" className="text-zinc-200">All</SelectItem>
+  1357→                <SelectItem value="BUY" className="text-emerald-400">BUY</SelectItem>
+  1358→                <SelectItem value="SELL" className="text-rose-400">SELL</SelectItem>
+  1359→              </SelectContent>
+  1360→            </Select>
+  1361→          </div>
+  1362→        </div>
+  1363→
+  1364→        {/* Signal cards */}
+  1365→        {filteredSignals.length === 0 ? (
+  1366→          <Card className="bg-zinc-900 border-zinc-800 p-8">
+  1367→            <div className="text-center">
+  1368→              <Zap className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
+  1369→              <h3 className="text-sm text-zinc-400 mb-1">No Active Signals</h3>
+  1370→              <p className="text-xs text-zinc-500">Click &quot;Generate Signals&quot; to analyze all pairs and generate trading signals.</p>
+  1371→            </div>
+  1372→          </Card>
+  1373→        ) : (
+  1374→          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+  1375→            {filteredSignals.map((signal, i) => (
+  1376→              <Card key={i} className="bg-zinc-900 border-zinc-800 p-4">
+  1377→                <div className="flex items-center justify-between mb-3">
+  1378→                  <div className="flex items-center gap-2">
+  1379→                    <span className="text-sm font-semibold text-white">{PAIR_DISPLAY[signal.pair]}</span>
+  1380→                    <Badge className={`text-[10px] ${signal.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+  1381→                      {signal.direction === 'BUY' ? <ArrowUpCircle className="w-3 h-3 mr-0.5" /> : <ArrowDownCircle className="w-3 h-3 mr-0.5" />}
+  1382→                      {signal.direction}
+  1383→                    </Badge>
+  1384→                  </div>
+  1385→                  <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-400">
+  1386→                    {signal.confidence.toFixed(0)}%
+  1387→                  </Badge>
+  1388→                </div>
+  1389→                <div className="space-y-1.5 text-xs">
+  1390→                  <div className="flex justify-between">
+  1391→                    <span className="text-zinc-500">Strategy</span>
+  1392→                    <span className="text-zinc-300">{STRATEGY_LABELS[signal.strategy]}</span>
+  1393→                  </div>
+  1394→                  <div className="flex justify-between">
+  1395→                    <span className="text-zinc-500">Entry</span>
+  1396→                    <span className="text-white font-mono">{fmtPrice(signal.pair, signal.entryPrice)}</span>
+  1397→                  </div>
+  1398→                  <div className="flex justify-between">
+  1399→                    <span className="text-zinc-500">SL</span>
+  1400→                    <span className="text-rose-400 font-mono">{fmtPrice(signal.pair, signal.stopLoss)}</span>
+  1401→                  </div>
+  1402→                  <div className="flex justify-between">
+  1403→                    <span className="text-zinc-500">TP</span>
+  1404→                    <span className="text-emerald-400 font-mono">{fmtPrice(signal.pair, signal.takeProfit)}</span>
+  1405→                  </div>
+  1406→                  <div className="flex justify-between">
+  1407→                    <span className="text-zinc-500">Lot Size</span>
+  1408→                    <span className="text-zinc-300 font-mono">{signal.lotSize}</span>
+  1409→                  </div>
+  1410→                </div>
+  1411→              </Card>
+  1412→            ))}
+  1413→          </div>
+  1414→        )}
+  1415→
+  1416→        {/* Strategy reference */}
+  1417→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1418→          <CardHeader className="p-0 pb-3">
+  1419→            <CardTitle className="text-sm text-white">Strategy Reference</CardTitle>
+  1420→          </CardHeader>
+  1421→          <CardContent className="p-0">
+  1422→            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+  1423→              {(Object.entries(STRATEGY_DESCS) as [StrategyName, string][]).map(([key, desc]) => (
+  1424→                <div key={key} className="bg-zinc-800/50 rounded-lg p-3">
+  1425→                  <p className="text-xs font-medium text-zinc-200 mb-1">{STRATEGY_LABELS[key]}</p>
+  1426→                  <p className="text-[11px] text-zinc-400 leading-relaxed">{desc}</p>
+  1427→                </div>
+  1428→              ))}
+  1429→            </div>
+  1430→          </CardContent>
+  1431→        </Card>
+  1432→      </div>
+  1433→    );
+  1434→  };
+  1435→
+  1436→  // ============================================================
+  1437→  // PANEL 4: LIVE TRADING
+  1438→  // ============================================================
+  1439→  const LiveTradingPanel = () => {
+  1440→    const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
+  1441→    const marginUsed = positions.reduce((sum, p) => sum + (p.lotSize * 200), 0); // rough margin estimate
+  1442→    const equity = accountBalance + totalPnl;
+  1443→    const freeMargin = equity - marginUsed;
+  1444→
+  1445→    return (
+  1446→      <div className="space-y-4">
+  1447→        {/* Account summary */}
+  1448→        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+  1449→          {[
+  1450→            { label: 'Balance', value: `$${accountBalance.toLocaleString()}`, color: 'text-white' },
+  1451→            { label: 'Equity', value: `$${equity.toFixed(2)}`, color: 'text-white' },
+  1452→            { label: 'Margin Used', value: `$${marginUsed.toFixed(2)}`, color: 'text-amber-400' },
+  1453→            { label: 'Free Margin', value: `$${freeMargin.toFixed(2)}`, color: 'text-emerald-400' },
+  1454→            { label: 'Daily P&L', value: `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}`, color: totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+  1455→            { label: 'Open Trades', value: String(positions.length), color: 'text-white' },
+  1456→          ].map((item) => (
+  1457→            <Card key={item.label} className="bg-zinc-900 border-zinc-800 p-3">
+  1458→              <p className="text-[10px] text-zinc-500 mb-1">{item.label}</p>
+  1459→              <p className={`text-sm font-mono font-bold ${item.color}`}>{item.value}</p>
+  1460→            </Card>
+  1461→          ))}
+  1462→        </div>
+  1463→
+  1464→        {/* Controls */}
+  1465→        <div className="flex flex-wrap gap-3 items-center">
+  1466→          <Dialog open={newTradeDialog} onOpenChange={setNewTradeDialog}>
+  1467→            <DialogTrigger asChild>
+  1468→              <Button className="bg-emerald-600 hover:bg-emerald-700 text-white">
+  1469→                <Plus className="w-4 h-4" /> New Trade
+  1470→              </Button>
+  1471→            </DialogTrigger>
+  1472→            <DialogContent className="bg-zinc-900 border-zinc-700 sm:max-w-md">
+  1473→              <DialogHeader>
+  1474→                <DialogTitle className="text-white">New Trade</DialogTitle>
+  1475→                <DialogDescription className="text-zinc-400">Open a new trading position</DialogDescription>
+  1476→              </DialogHeader>
+  1477→              <div className="space-y-4 py-2">
+  1478→                <div className="grid grid-cols-2 gap-4">
+  1479→                  <div className="space-y-2">
+  1480→                    <Label className="text-zinc-300">Pair</Label>
+  1481→                    <Select value={newTrade.pair} onValueChange={(v) => setNewTrade(t => ({ ...t, pair: v as ForexPair }))}>
+  1482→                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+  1483→                        <SelectValue />
+  1484→                      </SelectTrigger>
+  1485→                      <SelectContent className="bg-zinc-800 border-zinc-700">
+  1486→                        {FOREX_PAIRS.map(p => <SelectItem key={p} value={p} className="text-zinc-200">{PAIR_DISPLAY[p]}</SelectItem>)}
+  1487→                      </SelectContent>
+  1488→                    </Select>
+  1489→                  </div>
+  1490→                  <div className="space-y-2">
+  1491→                    <Label className="text-zinc-300">Direction</Label>
+  1492→                    <Select value={newTrade.direction} onValueChange={(v) => setNewTrade(t => ({ ...t, direction: v as TradingDirection }))}>
+  1493→                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+  1494→                        <SelectValue />
+  1495→                      </SelectTrigger>
+  1496→                      <SelectContent className="bg-zinc-800 border-zinc-700">
+  1497→                        <SelectItem value="BUY" className="text-emerald-400">BUY</SelectItem>
+  1498→                        <SelectItem value="SELL" className="text-rose-400">SELL</SelectItem>
+  1499→                      </SelectContent>
+  1500→                    </Select>
+  1501→                  </div>
+  1502→                </div>
+  1503→                <div className="grid grid-cols-2 gap-4">
+  1504→                  <div className="space-y-2">
+  1505→                    <Label className="text-zinc-300">Lot Size</Label>
+  1506→                    <Input type="number" step="0.01" min="0.01" value={newTrade.lotSize}
+  1507→                      onChange={(e) => setNewTrade(t => ({ ...t, lotSize: parseFloat(e.target.value) || 0.01 }))}
+  1508→                      className="bg-zinc-800 border-zinc-700 text-white" />
+  1509→                  </div>
+  1510→                  <div className="space-y-2">
+  1511→                    <Label className="text-zinc-300">Strategy</Label>
+  1512→                    <Select value={newTrade.strategy} onValueChange={(v) => setNewTrade(t => ({ ...t, strategy: v as StrategyName }))}>
+  1513→                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+  1514→                        <SelectValue />
+  1515→                      </SelectTrigger>
+  1516→                      <SelectContent className="bg-zinc-800 border-zinc-700">
+  1517→                        {(Object.entries(STRATEGY_LABELS) as [StrategyName, string][]).map(([k, v]) => (
+  1518→                          <SelectItem key={k} value={k} className="text-zinc-200">{v}</SelectItem>
+  1519→                        ))}
+  1520→                      </SelectContent>
+  1521→                    </Select>
+  1522→                  </div>
+  1523→                </div>
+  1524→                <div className="grid grid-cols-2 gap-4">
+  1525→                  <div className="space-y-2">
+  1526→                    <Label className="text-zinc-300">Stop Loss (price)</Label>
+  1527→                    <Input type="number" step="0.00001" value={newTrade.stopLoss || ''}
+  1528→                      onChange={(e) => setNewTrade(t => ({ ...t, stopLoss: parseFloat(e.target.value) || 0 }))}
+  1529→                      placeholder="Optional" className="bg-zinc-800 border-zinc-700 text-white" />
+  1530→                  </div>
+  1531→                  <div className="space-y-2">
+  1532→                    <Label className="text-zinc-300">Take Profit (price)</Label>
+  1533→                    <Input type="number" step="0.00001" value={newTrade.takeProfit || ''}
+  1534→                      onChange={(e) => setNewTrade(t => ({ ...t, takeProfit: parseFloat(e.target.value) || 0 }))}
+  1535→                      placeholder="Optional" className="bg-zinc-800 border-zinc-700 text-white" />
+  1536→                  </div>
+  1537→                </div>
+  1538→                <div className="flex items-center gap-3">
+  1539→                  <Switch checked={trailingStopEnabled} onCheckedChange={setTrailingStopEnabled} />
+  1540→                  <Label className="text-zinc-300 text-sm">Enable Trailing Stop</Label>
+  1541→                </div>
+  1542→              </div>
+  1543→              <DialogFooter>
+  1544→                <Button variant="outline" onClick={() => setNewTradeDialog(false)} className="border-zinc-700 text-zinc-300">Cancel</Button>
+  1545→                <Button onClick={handleOpenTrade} className={newTrade.direction === 'BUY' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}>
+  1546→                  Open {newTrade.direction}
+  1547→                </Button>
+  1548→              </DialogFooter>
+  1549→            </DialogContent>
+  1550→          </Dialog>
+  1551→
+  1552→          <div className="flex items-center gap-2">
+  1553→            <Label className="text-zinc-400 text-xs">Auto Trading</Label>
+  1554→            <Switch checked={isAutoTrading} onCheckedChange={toggleAutoTrading} />
+  1555→          </div>
+  1556→        </div>
+  1557→
+  1558→        {/* Open positions table */}
+  1559→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1560→          <CardHeader className="p-0 pb-3">
+  1561→            <CardTitle className="text-sm text-white">Open Positions</CardTitle>
+  1562→          </CardHeader>
+  1563→          <CardContent className="p-0">
+  1564→            {positions.length === 0 ? (
+  1565→              <p className="text-xs text-zinc-500 text-center py-8">No open positions</p>
+  1566→            ) : (
+  1567→              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+  1568→                <Table>
+  1569→                  <TableHeader>
+  1570→                    <TableRow className="border-zinc-800 hover:bg-transparent">
+  1571→                      <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+  1572→                      <TableHead className="text-[10px] text-zinc-500">Direction</TableHead>
+  1573→                      <TableHead className="text-[10px] text-zinc-500">Lots</TableHead>
+  1574→                      <TableHead className="text-[10px] text-zinc-500">Entry</TableHead>
+  1575→                      <TableHead className="text-[10px] text-zinc-500">SL</TableHead>
+  1576→                      <TableHead className="text-[10px] text-zinc-500">TP</TableHead>
+  1577→                      <TableHead className="text-[10px] text-zinc-500">Trailing</TableHead>
+  1578→                      <TableHead className="text-[10px] text-zinc-500 text-right">P&L</TableHead>
+  1579→                      <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
+  1580→                    </TableRow>
+  1581→                  </TableHeader>
+  1582→                  <TableBody>
+  1583→                    {positions.map((pos) => (
+  1584→                      <TableRow key={pos.id} className="border-zinc-800/50">
+  1585→                        <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[pos.pair]}</TableCell>
+  1586→                        <TableCell>
+  1587→                          <Badge className={`text-[10px] ${pos.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+  1588→                            {pos.direction}
+  1589→                          </Badge>
+  1590→                        </TableCell>
+  1591→                        <TableCell className="text-xs text-zinc-300 font-mono">{pos.lotSize}</TableCell>
+  1592→                        <TableCell className="text-xs text-zinc-300 font-mono">{fmtPrice(pos.pair, pos.entryPrice)}</TableCell>
+  1593→                        <TableCell className="text-xs text-rose-400 font-mono">{pos.stopLoss ? fmtPrice(pos.pair, pos.stopLoss) : '-'}</TableCell>
+  1594→                        <TableCell className="text-xs text-emerald-400 font-mono">{pos.takeProfit ? fmtPrice(pos.pair, pos.takeProfit) : '-'}</TableCell>
+  1595→                        <TableCell>
+  1596→                          {pos.trailingStop ? <Badge className="text-[10px] bg-amber-500/20 text-amber-400">ON</Badge> : <span className="text-xs text-zinc-500">-</span>}
+  1597→                        </TableCell>
+  1598→                        <TableCell className={`text-xs font-mono text-right ${(pos.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+  1599→                          {(pos.pnl || 0) >= 0 ? '+' : ''}{(pos.pnl || 0).toFixed(2)}
+  1600→                        </TableCell>
+  1601→                        <TableCell className="text-right">
+  1602→                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+  1603→                            onClick={() => handleClosePosition(pos.id)}>
+  1604→                            <Square className="w-3 h-3" />
+  1605→                          </Button>
+  1606→                        </TableCell>
+  1607→                      </TableRow>
+  1608→                    ))}
+  1609→                  </TableBody>
+  1610→                </Table>
+  1611→              </div>
+  1612→            )}
+  1613→          </CardContent>
+  1614→        </Card>
+  1615→
+  1616→        {/* Equity chart placeholder */}
+  1617→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1618→          <CardHeader className="p-0 pb-3">
+  1619→            <CardTitle className="text-sm text-white">Equity Chart</CardTitle>
+  1620→          </CardHeader>
+  1621→          <CardContent className="p-0">
+  1622→            <div className="h-48 bg-zinc-800/30 rounded-lg flex items-center justify-center">
+  1623→              {equityHistory.length > 0 ? (
+  1624→                <ResponsiveContainer width="100%" height="100%">
+  1625→                  <AreaChart data={equityHistory}>
+  1626→                    <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+  1627→                    <XAxis dataKey="time" tick={{ fontSize: 10, fill: '#71717a' }} />
+  1628→                    <YAxis tick={{ fontSize: 10, fill: '#71717a' }} />
+  1629→                    <RTooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', fontSize: 11 }} />
+  1630→                    <Area type="monotone" dataKey="equity" stroke="#10b981" fill="#10b98120" strokeWidth={2} />
+  1631→                  </AreaChart>
+  1632→                </ResponsiveContainer>
+  1633→              ) : (
+  1634→                <div className="text-center">
+  1635→                  <LineChart className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
+  1636→                  <p className="text-xs text-zinc-500">Equity data will appear here as trades are executed</p>
+  1637→                </div>
+  1638→              )}
+  1639→            </div>
+  1640→          </CardContent>
+  1641→        </Card>
+  1642→      </div>
+  1643→    );
+  1644→  };
+  1645→
+  1646→  // ============================================================
+  1647→  // PANEL 5: RISK MANAGEMENT
+  1648→  // ============================================================
+  1649→  const RiskManagementPanel = () => (
+  1650→    <div className="space-y-4">
+  1651→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+  1652→        {/* Risk calculator */}
+  1653→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1654→          <CardHeader className="p-0 pb-3">
+  1655→            <CardTitle className="text-sm text-white flex items-center gap-2">
+  1656→              <Crosshair className="w-4 h-4" /> Risk Calculator
+  1657→            </CardTitle>
+  1658→          </CardHeader>
+  1659→          <CardContent className="p-0 space-y-4">
+  1660→            <div className="grid grid-cols-3 gap-3">
+  1661→              <div className="space-y-2">
+  1662→                <Label className="text-zinc-400 text-xs">Balance ($)</Label>
+  1663→                <Input type="number" value={riskForm.balance}
+  1664→                  onChange={(e) => setRiskForm(f => ({ ...f, balance: parseFloat(e.target.value) || 0 }))}
+  1665→                  className="bg-zinc-800 border-zinc-700 text-white" />
+  1666→              </div>
+  1667→              <div className="space-y-2">
+  1668→                <Label className="text-zinc-400 text-xs">Risk %</Label>
+  1669→                <Input type="number" step="0.1" value={riskForm.riskPct}
+  1670→                  onChange={(e) => setRiskForm(f => ({ ...f, riskPct: parseFloat(e.target.value) || 0 }))}
+  1671→                  className="bg-zinc-800 border-zinc-700 text-white" />
+  1672→              </div>
+  1673→              <div className="space-y-2">
+  1674→                <Label className="text-zinc-400 text-xs">SL (pips)</Label>
+  1675→                <Input type="number" value={riskForm.slPips}
+  1676→                  onChange={(e) => setRiskForm(f => ({ ...f, slPips: parseInt(e.target.value) || 0 }))}
+  1677→                  className="bg-zinc-800 border-zinc-700 text-white" />
+  1678→              </div>
+  1679→            </div>
+  1680→            <Button onClick={handleCalculateRisk} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white">
+  1681→              <Crosshair className="w-4 h-4" /> Calculate
+  1682→            </Button>
+  1683→
+  1684→            {riskCalc && (
+  1685→              <div className="bg-zinc-800/50 rounded-lg p-4 space-y-2">
+  1686→                <h4 className="text-xs font-medium text-white mb-2">Results</h4>
+  1687→                {[
+  1688→                  { label: 'Recommended Lot Size', value: String(riskCalc.lotSize), color: 'text-emerald-400' },
+  1689→                  { label: 'Pip Value', value: `$${riskCalc.pipValue.toFixed(2)}`, color: 'text-white' },
+  1690→                  { label: 'Risk Amount', value: `$${riskCalc.riskAmount.toFixed(2)}`, color: 'text-amber-400' },
+  1691→                  { label: 'Potential Loss', value: `$${riskCalc.potentialLoss.toFixed(2)}`, color: 'text-rose-400' },
+  1692→                  { label: 'Potential Profit', value: `$${riskCalc.potentialProfit.toFixed(2)}`, color: 'text-emerald-400' },
+  1693→                  { label: 'R:R Ratio', value: `1:${riskCalc.riskRewardRatio.toFixed(1)}`, color: 'text-white' },
+  1694→                ].map((item) => (
+  1695→                  <div key={item.label} className="flex justify-between text-xs">
+  1696→                    <span className="text-zinc-400">{item.label}</span>
+  1697→                    <span className={`font-mono font-medium ${item.color}`}>{item.value}</span>
+  1698→                  </div>
+  1699→                ))}
+  1700→              </div>
+  1701→            )}
+  1702→          </CardContent>
+  1703→        </Card>
+  1704→
+  1705→        {/* FINEX Indonesia specs */}
+  1706→        <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1707→          <CardHeader className="p-0 pb-3">
+  1708→            <CardTitle className="text-sm text-white">FINEX Indonesia Specifications</CardTitle>
+  1709→          </CardHeader>
+  1710→          <CardContent className="p-0">
+  1711→            <div className="bg-zinc-800/50 rounded-lg p-4 space-y-2">
+  1712→              {[
+  1713→                { label: 'Leverage', value: `1:${FINEX_CONFIG.leverage}` },
+  1714→                { label: 'Spread', value: `${FINEX_CONFIG.spreadPip} pip` },
+  1715→                { label: 'Commission', value: `$${FINEX_CONFIG.commissionPerLot}/lot` },
+  1716→                { label: 'Min Lot', value: String(FINEX_CONFIG.minLot) },
+  1717→                { label: 'Max Lot/Order', value: String(FINEX_CONFIG.maxLotPerOrder) },
+  1718→                { label: 'Max Open Positions', value: String(FINEX_CONFIG.maxOpenPositions) },
+  1719→                { label: 'Margin Call Level', value: `${FINEX_CONFIG.marginCallLevel}%` },
+  1720→                { label: 'Stop Out Level', value: `${FINEX_CONFIG.stopOutLevel}%` },
+  1721→              ].map((item) => (
+  1722→                <div key={item.label} className="flex justify-between text-xs">
+  1723→                  <span className="text-zinc-400">{item.label}</span>
+  1724→                  <span className="text-zinc-200 font-mono">{item.value}</span>
+  1725→                </div>
+  1726→              ))}
+  1727→            </div>
+  1728→          </CardContent>
+  1729→        </Card>
+  1730→      </div>
+  1731→
+  1732→      {/* Money management rules */}
+  1733→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1734→        <CardHeader className="p-0 pb-3">
+  1735→          <CardTitle className="text-sm text-white flex items-center gap-2">
+  1736→            <Shield className="w-4 h-4" /> Money Management Rules
+  1737→          </CardTitle>
+  1738→        </CardHeader>
+  1739→        <CardContent className="p-0">
+  1740→          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+  1741→            {[
+  1742→              { label: 'Risk/Trade', value: '0.5-1%' },
+  1743→              { label: 'SL Range', value: '5-15 pips' },
+  1744→              { label: 'R:R Ratio', value: '1:1.5' },
+  1745→              { label: 'Max Positions', value: '3' },
+  1746→              { label: 'Daily Risk Limit', value: '2-3%' },
+  1747→              { label: 'Daily Target', value: '1.5-2%' },
+  1748→            ].map((rule) => (
+  1749→              <div key={rule.label} className="bg-zinc-800/50 rounded-lg p-3 text-center">
+  1750→                <p className="text-[10px] text-zinc-500 mb-1">{rule.label}</p>
+  1751→                <p className="text-sm font-mono font-bold text-emerald-400">{rule.value}</p>
+  1752→              </div>
+  1753→            ))}
+  1754→          </div>
+  1755→        </CardContent>
+  1756→      </Card>
+  1757→
+  1758→      {/* Daily risk usage */}
+  1759→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1760→        <CardHeader className="p-0 pb-3">
+  1761→          <CardTitle className="text-sm text-white">Daily Risk Usage</CardTitle>
+  1762→        </CardHeader>
+  1763→        <CardContent className="p-0 space-y-3">
+  1764→          <div className="flex items-center justify-between text-xs mb-1">
+  1765→            <span className="text-zinc-400">Risk Used Today</span>
+  1766→            <span className={`font-mono font-medium ${todayRiskUsed > 2 ? 'text-rose-400' : todayRiskUsed > 1 ? 'text-amber-400' : 'text-emerald-400'}`}>
+  1767→              {todayRiskUsed.toFixed(2)}% / 3.00%
+  1768→            </span>
+  1769→          </div>
+  1770→          <Progress value={Math.min(todayRiskUsed / 3 * 100, 100)} className="h-3 bg-zinc-800" />
+  1771→          <Alert className={`${todayRiskUsed > 2 ? 'border-rose-500/30 bg-rose-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
+  1772→            {todayRiskUsed > 2 ? <AlertTriangle className="w-4 h-4 text-rose-400" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+  1773→            <AlertTitle className={`text-xs ${todayRiskUsed > 2 ? 'text-rose-400' : 'text-emerald-400'}`}>
+  1774→              {todayRiskUsed > 2 ? 'Daily Risk Limit Approaching' : 'Risk Level Healthy'}
+  1775→            </AlertTitle>
+  1776→            <AlertDescription className="text-xs text-zinc-400">
+  1777→              {todayRiskUsed > 2
+  1778→                ? 'You are approaching your daily risk limit. Consider closing some positions or waiting.'
+  1779→                : 'Your current risk usage is within safe limits.'}
+  1780→            </AlertDescription>
+  1781→          </Alert>
+  1782→        </CardContent>
+  1783→      </Card>
+  1784→
+  1785→      {/* Risk per pair breakdown */}
+  1786→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1787→        <CardHeader className="p-0 pb-3">
+  1788→          <CardTitle className="text-sm text-white">Risk per Pair</CardTitle>
+  1789→        </CardHeader>
+  1790→        <CardContent className="p-0">
+  1791→          <Table>
+  1792→            <TableHeader>
+  1793→              <TableRow className="border-zinc-800 hover:bg-transparent">
+  1794→                <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+  1795→                <TableHead className="text-[10px] text-zinc-500">Positions</TableHead>
+  1796→                <TableHead className="text-[10px] text-zinc-500 text-right">Total Lots</TableHead>
+  1797→                <TableHead className="text-[10px] text-zinc-500 text-right">Total P&L</TableHead>
+  1798→              </TableRow>
+  1799→            </TableHeader>
+  1800→            <TableBody>
+  1801→              {FOREX_PAIRS.map((pair) => {
+  1802→                const pairPos = positions.filter(p => p.pair === pair);
+  1803→                const pairPnl = pairPos.reduce((s, p) => s + (p.pnl || 0), 0);
+  1804→                const pairLots = pairPos.reduce((s, p) => s + p.lotSize, 0);
+  1805→                return (
+  1806→                  <TableRow key={pair} className="border-zinc-800/50">
+  1807→                    <TableCell className="text-xs text-zinc-200 font-mono font-medium">{PAIR_DISPLAY[pair]}</TableCell>
+  1808→                    <TableCell className="text-xs text-zinc-400">{pairPos.length}</TableCell>
+  1809→                    <TableCell className="text-xs text-zinc-300 font-mono text-right">{pairLots.toFixed(2)}</TableCell>
+  1810→                    <TableCell className={`text-xs font-mono text-right ${pairPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+  1811→                      {pairPnl >= 0 ? '+' : ''}{pairPnl.toFixed(2)}
+  1812→                    </TableCell>
+  1813→                  </TableRow>
+  1814→                );
+  1815→              })}
+  1816→            </TableBody>
+  1817→          </Table>
+  1818→        </CardContent>
+  1819→      </Card>
+  1820→    </div>
+  1821→  );
+  1822→
+  1823→  // ============================================================
+  1824→  // PANEL 6: PRICE ALERTS
+  1825→  // ============================================================
+  1826→  const PriceAlertsPanel = () => (
+  1827→    <div className="space-y-4">
+  1828→      {/* Create alert button */}
+  1829→      <Dialog open={createAlertDialog} onOpenChange={setCreateAlertDialog}>
+  1830→        <DialogTrigger asChild>
+  1831→          <Button className="bg-emerald-600 hover:bg-emerald-700 text-white">
+  1832→            <Plus className="w-4 h-4" /> Create Alert
+  1833→          </Button>
+  1834→        </DialogTrigger>
+  1835→        <DialogContent className="bg-zinc-900 border-zinc-700 sm:max-w-md">
+  1836→          <DialogHeader>
+  1837→            <DialogTitle className="text-white">Create Price Alert</DialogTitle>
+  1838→            <DialogDescription className="text-zinc-400">Set a price alert for a currency pair</DialogDescription>
+  1839→          </DialogHeader>
+  1840→          <div className="space-y-4 py-2">
+  1841→            <div className="grid grid-cols-2 gap-4">
+  1842→              <div className="space-y-2">
+  1843→                <Label className="text-zinc-300">Pair</Label>
+  1844→                <Select value={newAlert.pair} onValueChange={(v) => setNewAlert(a => ({ ...a, pair: v as ForexPair }))}>
+  1845→                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+  1846→                    <SelectValue />
+  1847→                  </SelectTrigger>
+  1848→                  <SelectContent className="bg-zinc-800 border-zinc-700">
+  1849→                    {FOREX_PAIRS.map(p => <SelectItem key={p} value={p} className="text-zinc-200">{PAIR_DISPLAY[p]}</SelectItem>)}
+  1850→                  </SelectContent>
+  1851→                </Select>
+  1852→              </div>
+  1853→              <div className="space-y-2">
+  1854→                <Label className="text-zinc-300">Condition</Label>
+  1855→                <Select value={newAlert.condition} onValueChange={(v) => setNewAlert(a => ({ ...a, condition: v as PriceAlert['condition'] }))}>
+  1856→                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+  1857→                    <SelectValue />
+  1858→                  </SelectTrigger>
+  1859→                  <SelectContent className="bg-zinc-800 border-zinc-700">
+  1860→                    <SelectItem value="above" className="text-emerald-400">Above</SelectItem>
+  1861→                    <SelectItem value="below" className="text-rose-400">Below</SelectItem>
+  1862→                    <SelectItem value="crosses_above" className="text-emerald-400">Crosses Above</SelectItem>
+  1863→                    <SelectItem value="crosses_below" className="text-rose-400">Crosses Below</SelectItem>
+  1864→                  </SelectContent>
+  1865→                </Select>
+  1866→              </div>
+  1867→            </div>
+  1868→            <div className="space-y-2">
+  1869→              <Label className="text-zinc-300">Target Price</Label>
+  1870→              <Input type="number" step="0.00001" value={newAlert.targetPrice}
+  1871→                onChange={(e) => setNewAlert(a => ({ ...a, targetPrice: parseFloat(e.target.value) || 0 }))}
+  1872→                className="bg-zinc-800 border-zinc-700 text-white" />
+  1873→            </div>
+  1874→            <div className="flex items-center gap-3">
+  1875→              <Switch checked={newAlert.emailNotify} onCheckedChange={(v) => setNewAlert(a => ({ ...a, emailNotify: v }))} />
+  1876→              <Label className="text-zinc-300 text-sm">Email notification</Label>
+  1877→            </div>
+  1878→          </div>
+  1879→          <DialogFooter>
+  1880→            <Button variant="outline" onClick={() => setCreateAlertDialog(false)} className="border-zinc-700 text-zinc-300">Cancel</Button>
+  1881→            <Button onClick={handleCreateAlert} className="bg-emerald-600 hover:bg-emerald-700 text-white">Create Alert</Button>
+  1882→          </DialogFooter>
+  1883→        </DialogContent>
+  1884→      </Dialog>
+  1885→
+  1886→      {/* Active alerts */}
+  1887→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1888→        <CardHeader className="p-0 pb-3">
+  1889→          <CardTitle className="text-sm text-white flex items-center gap-2">
+  1890→            <Bell className="w-4 h-4" /> Active Alerts
+  1891→            <Badge variant="secondary" className="text-[10px] bg-zinc-800 text-zinc-300 ml-auto">{alerts.length}</Badge>
+  1892→          </CardTitle>
+  1893→        </CardHeader>
+  1894→        <CardContent className="p-0">
+  1895→          {alerts.length === 0 ? (
+  1896→            <p className="text-xs text-zinc-500 text-center py-8">No active alerts. Create one above.</p>
+  1897→          ) : (
+  1898→            <Table>
+  1899→              <TableHeader>
+  1900→                <TableRow className="border-zinc-800 hover:bg-transparent">
+  1901→                  <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+  1902→                  <TableHead className="text-[10px] text-zinc-500">Condition</TableHead>
+  1903→                  <TableHead className="text-[10px] text-zinc-500">Target</TableHead>
+  1904→                  <TableHead className="text-[10px] text-zinc-500">Email</TableHead>
+  1905→                  <TableHead className="text-[10px] text-zinc-500">Status</TableHead>
+  1906→                  <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
+  1907→                </TableRow>
+  1908→              </TableHeader>
+  1909→              <TableBody>
+  1910→                {alerts.map((alert) => (
+  1911→                  <TableRow key={alert.id} className="border-zinc-800/50">
+  1912→                    <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[alert.pair]}</TableCell>
+  1913→                    <TableCell className="text-xs text-zinc-300">{alert.condition.replace('_', ' ')}</TableCell>
+  1914→                    <TableCell className="text-xs text-white font-mono">{fmtPrice(alert.pair, alert.targetPrice)}</TableCell>
+  1915→                    <TableCell className="text-xs">{alert.emailNotify ? '✉️' : '-'}</TableCell>
+  1916→                    <TableCell>
+  1917→                      <Switch checked={alert.isActive} onCheckedChange={(v) => handleToggleAlert(alert.id, v)} className="scale-75" />
+  1918→                    </TableCell>
+  1919→                    <TableCell className="text-right">
+  1920→                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+  1921→                        onClick={() => handleDeleteAlert(alert.id)}>
+  1922→                        <Trash2 className="w-3 h-3" />
+  1923→                      </Button>
+  1924→                    </TableCell>
+  1925→                  </TableRow>
+  1926→                ))}
+  1927→              </TableBody>
+  1928→            </Table>
+  1929→          )}
+  1930→        </CardContent>
+  1931→      </Card>
+  1932→
+  1933→      {/* Triggered alerts history */}
+  1934→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1935→        <CardHeader className="p-0 pb-3">
+  1936→          <CardTitle className="text-sm text-white">Triggered Alerts</CardTitle>
+  1937→        </CardHeader>
+  1938→        <CardContent className="p-0">
+  1939→          {triggeredAlerts.length === 0 ? (
+  1940→            <p className="text-xs text-zinc-500 text-center py-4">No triggered alerts yet</p>
+  1941→          ) : (
+  1942→            <ScrollArea className="max-h-48">
+  1943→              <div className="space-y-1.5">
+  1944→                {triggeredAlerts.slice(0, 20).map((alert) => (
+  1945→                  <div key={alert.id} className="flex items-center justify-between bg-zinc-800/30 rounded-lg px-3 py-2">
+  1946→                    <div className="flex items-center gap-2">
+  1947→                      <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+  1948→                      <span className="text-xs text-zinc-300 font-mono">{PAIR_DISPLAY[alert.pair]}</span>
+  1949→                      <span className="text-xs text-zinc-400">{alert.condition.replace('_', ' ')}</span>
+  1950→                      <span className="text-xs text-white font-mono">{fmtPrice(alert.pair, alert.targetPrice)}</span>
+  1951→                    </div>
+  1952→                    <span className="text-[10px] text-zinc-500">{alert.triggeredAt ? format(new Date(alert.triggeredAt), 'MM/dd HH:mm') : '-'}</span>
+  1953→                  </div>
+  1954→                ))}
+  1955→              </div>
+  1956→            </ScrollArea>
+  1957→          )}
+  1958→        </CardContent>
+  1959→      </Card>
+  1960→    </div>
+  1961→  );
+  1962→
+  1963→  // ============================================================
+  1964→  // PANEL 7: BACKTESTING
+  1965→  // ============================================================
+  1966→  const BacktestingPanel = () => (
+  1967→    <div className="space-y-4">
+  1968→      {/* Configuration form */}
+  1969→      <Card className="bg-zinc-900 border-zinc-800 p-4">
+  1970→        <CardHeader className="p-0 pb-3">
+  1971→          <CardTitle className="text-sm text-white">Backtest Configuration</CardTitle>
+  1972→        </CardHeader>
+  1973→        <CardContent className="p-0">
+  1974→          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-4">
+  1975→            <div className="space-y-1.5">
+  1976→              <Label className="text-zinc-400 text-xs">Pair</Label>
+  1977→              <Select value={backtestConfig.pair} onValueChange={(v) => setBacktestConfig(c => ({ ...c, pair: v as ForexPair }))}>
+  1978→                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs">
+  1979→                  <SelectValue />
+  1980→                </SelectTrigger>
+  1981→                <SelectContent className="bg-zinc-800 border-zinc-700">
+  1982→                  {FOREX_PAIRS.map(p => <SelectItem key={p} value={p} className="text-zinc-200">{PAIR_DISPLAY[p]}</SelectItem>)}
+  1983→                </SelectContent>
+  1984→              </Select>
+  1985→            </div>
+  1986→            <div className="space-y-1.5">
+  1987→              <Label className="text-zinc-400 text-xs">Strategy</Label>
+  1988→              <Select value={backtestConfig.strategy} onValueChange={(v) => setBacktestConfig(c => ({ ...c, strategy: v as StrategyName }))}>
+  1989→                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs">
+  1990→                  <SelectValue />
+  1991→                </SelectTrigger>
+  1992→                <SelectContent className="bg-zinc-800 border-zinc-700">
+  1993→                  {(Object.entries(STRATEGY_LABELS) as [StrategyName, string][]).map(([k, v]) => (
+  1994→                    <SelectItem key={k} value={k} className="text-zinc-200">{v}</SelectItem>
+  1995→                  ))}
+  1996→                </SelectContent>
+  1997→              </Select>
+  1998→            </div>
+  1999→            <div className="space-y-1.5">
+  2000→              <Label className="text-zinc-400 text-xs">Timeframe</Label>
+
+[showing lines 1-2000 of 2506; use offset=2001 with limit to continue reading]

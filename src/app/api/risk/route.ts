@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
     const potentialLoss = stopLossPips * pipValue;
 
     // Suggested take profit based on risk:reward ratio
-    const suggestedTPPips = Math.round(stopLossPips * FINEX_CONFIG.riskRewardRatio);
+    const suggestedTPPips = Math.round(stopLossPips * 1.5);
     const potentialProfit = suggestedTPPips * pipValue;
 
     // Risk:Reward ratio

@@ -227,7 +227,7 @@ function precomputeIndicators(candles: OHLCV[]): Record<string, unknown> {
     lrcUpper: linearRegressionChannel(closes, 20).upper,
     lrcMiddle: linearRegressionChannel(closes, 20).middle,
     lrcLower: linearRegressionChannel(closes, 20).lower,
-    atr: atr(closes, 14),
+    atr: atr(candles, 14),
   };
 }
 
@@ -440,8 +440,8 @@ function calculateBacktestStats(
     profitFactor,
     avgWin,
     avgLoss,
-    maxConsecutiveWins,
-    maxConsecutiveLosses,
+    maxConsecutiveWins: maxConsecWins,
+    maxConsecutiveLosses: maxConsecLosses,
   };
 }
 

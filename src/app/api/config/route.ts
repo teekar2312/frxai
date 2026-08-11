@@ -77,7 +77,7 @@ export async function PUT(request: NextRequest) {
     }
 
     // Validate constraints
-    if (updateData.riskPerTrade !== undefined) {
+    if (typeof updateData.riskPerTrade === 'number') {
       if (updateData.riskPerTrade < 0.1 || updateData.riskPerTrade > 5) {
         return NextResponse.json(
           { error: 'riskPerTrade must be between 0.1 and 5 percent' },
@@ -86,7 +86,7 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    if (updateData.maxOpenPositions !== undefined) {
+    if (typeof updateData.maxOpenPositions === 'number') {
       if (updateData.maxOpenPositions < 1 || updateData.maxOpenPositions > FINEX_CONFIG.maxOpenPositions) {
         return NextResponse.json(
           { error: `maxOpenPositions must be between 1 and ${FINEX_CONFIG.maxOpenPositions}` },
@@ -95,8 +95,8 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    if (updateData.leverage !== undefined) {
-      if (![100, 200, 300, 500].includes(updateData.leverage as number)) {
+    if (typeof updateData.leverage === 'number') {
+      if (![100, 200, 300, 500].includes(updateData.leverage)) {
         return NextResponse.json(
           { error: 'leverage must be 100, 200, 300, or 500' },
           { status: 400 }

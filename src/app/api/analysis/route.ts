@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createLLM } from 'z-ai-web-dev-sdk';
+import ZAI from 'z-ai-web-dev-sdk';
 import { db } from '@/lib/db';
 import type { ForexPair, AiAnalysisResult, MarketCondition, StrategyName, IndicatorValue } from '@/lib/trading-types';
 
@@ -18,10 +18,9 @@ function buildAnalysisPrompt(
   news: Array<{ title: string; description: string; impact: string; sentiment: string }>
 ): string {
   const pairDisplay = pair.replace(/([A-Z]{3})([A-Z]{3})/, '$1/$2');
-  
   const newsSummary = news.length > 0
-    ? news.slice(0, 15).map((n, i) => 
-        `${i + 1}. [${n.impact.toUpperCase()}] ${n.title} (${n.sentiment}) - ${(n.description || '').slice(0, 150)}...`
+    ? news.slice(0, 15).map((n, i) =>
+        `${i + 1}. [${n.impact.toUpperCase()}] ${n.title} (${n.sentiment}) - ${(n.description || '').slice(0, 150)}`
       ).join('\n')
     : 'No recent news available.';
 
@@ -38,12 +37,12 @@ ${newsSummary}
 ## ANALYSIS REQUIREMENTS
 Analyze considering these factors:
 1. **Central Bank Policy**: ECB, Fed, BOJ, BOE - interest rate decisions, forward guidance, QE/tapering
-2. **Economic Data**: NFP, CPI, PPI, GDP, unemployment rate, retail sales, PMI (manufacturing & services)
-3. **Political/Geopolitical**: Elections, trade wars, sanctions, geopolitical tensions affecting the pair
+2. **Economic Data**: NFP, CPI, PPI, GDP, unemployment rate, retail sales, PMI
+3. **Political/Geopolitical**: Elections, trade wars, sanctions, geopolitical tensions
 4. **Fiscal Policy**: Government spending, tax policies, budget deficits
 5. **Commodity Prices**: Especially for XAUUSD - gold prices, oil, risk sentiment
-6. **Market Sentiment**: Risk-on/risk-off, VIX, safe-haven flows, carry trade dynamics
-7. **Breaking News**: Any urgent developments that could cause sudden moves
+6. **Market Sentiment**: Risk-on/risk-off, VIX, safe-haven flows, carry trade
+7. **Breaking News**: Any urgent developments
 
 ## REQUIRED OUTPUT FORMAT
 Respond ONLY with valid JSON (no markdown, no code blocks):
@@ -51,8 +50,8 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
   "marketCondition": "<one of: trending, range_bound, high_volatility, low_volatility>",
   "recommendation": "<one of: BUY, SELL, HOLD, AVOID>",
   "confidence": <float 0.0 to 1.0>,
-  "reasoning": "<detailed 3-5 sentence analysis explaining your recommendation>",
-  "newsImpact": "<summary of how news is affecting this pair>",
+  "reasoning": "<detailed 3-5 sentence analysis>",
+  "newsImpact": "<summary of how news affects this pair>",
   "bestStrategy": "<one of: MA_RIBBON, MOMENTUM_SCALPING, PIVOT_POINT, EMA_CROSSOVER, RMI_TREND_SYNC, LINEAR_REGRESSION, EMA_RSI_FILTER>",
   "riskLevel": "<one of: low, medium, high>",
   "entryPrice": <number or null>,
@@ -66,10 +65,11 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
 CRITICAL RULES:
 - Return ONLY raw JSON, no markdown formatting, no code fences
 - confidence must be between 0.0 and 1.0
-- Provide specific entry/SL/TP prices based on the current market data
-- SL should be at least 1.5x the risk from entry for the reward to be at least 1.5:1
-- Consider the current market condition when selecting the best strategy
-- If major news events are imminent, recommend HOLD or AVOID`;}
+- Provide specific entry/SL/TP prices
+- SL should ensure at least 1:1.5 risk:reward ratio
+- Consider market condition when selecting best strategy
+- If major news events are imminent, recommend HOLD or AVOID`;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -96,51 +96,46 @@ export async function POST(request: NextRequest) {
 
     const prompt = buildAnalysisPrompt(pair, marketData, news || []);
 
-    const llm = createLLM({ model: 'gpt-4o-mini' });
-    const result = await llm.chat({
-      messages: [{ role: 'user', content: prompt }],
+    const zai = await ZAI.create();
+    const completion = await zai.chat.completions.create({
+      messages: [
+        { role: 'assistant', content: 'You are a forex market analysis AI. Always respond with valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+      thinking: { type: 'disabled' },
     });
 
-    const responseText = typeof result === 'string' ? result : (result as Record<string, unknown>).content as string || JSON.stringify(result);
+    const responseText = completion.choices?.[0]?.message?.content || '';
 
-    // Parse JSON from response - handle potential markdown wrapping
+    if (!responseText) {
+      return NextResponse.json({ error: 'Empty AI response' }, { status: 502 });
+    }
+
+    // Parse JSON from response
     let cleanJson = responseText.trim();
     const jsonMatch = cleanJson.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      cleanJson = jsonMatch[0];
-    }
+    if (jsonMatch) cleanJson = jsonMatch[0];
 
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(cleanJson);
     } catch {
-      console.error('[Analysis] Failed to parse LLM response:', responseText.slice(0, 500));
+      console.error('[Analysis] Failed to parse AI response:', responseText.slice(0, 500));
       return NextResponse.json(
         { error: 'Failed to parse AI analysis response', raw: responseText.slice(0, 500) },
         { status: 502 }
       );
     }
 
-    // Validate and normalize the response
     const marketCondition = VALID_CONDITIONS.includes(parsed.marketCondition as MarketCondition)
-      ? (parsed.marketCondition as MarketCondition)
-      : 'range_bound';
-
+      ? (parsed.marketCondition as MarketCondition) : 'range_bound';
     const recommendation = VALID_RECOMMENDATIONS.includes(parsed.recommendation as typeof VALID_RECOMMENDATIONS[number])
-      ? (parsed.recommendation as AiAnalysisResult['recommendation'])
-      : 'HOLD';
-
-    const confidence = typeof parsed.confidence === 'number'
-      ? Math.min(1, Math.max(0, parsed.confidence))
-      : 0.5;
-
+      ? (parsed.recommendation as AiAnalysisResult['recommendation']) : 'HOLD';
+    const confidence = typeof parsed.confidence === 'number' ? Math.min(1, Math.max(0, parsed.confidence)) : 0.5;
     const bestStrategy = VALID_STRATEGIES.includes(parsed.bestStrategy as StrategyName)
-      ? (parsed.bestStrategy as StrategyName)
-      : 'EMA_CROSSOVER';
-
+      ? (parsed.bestStrategy as StrategyName) : 'EMA_CROSSOVER';
     const riskLevel = VALID_RISK_LEVELS.includes(parsed.riskLevel as typeof VALID_RISK_LEVELS[number])
-      ? (parsed.riskLevel as AiAnalysisResult['riskLevel'])
-      : 'medium';
+      ? (parsed.riskLevel as AiAnalysisResult['riskLevel']) : 'medium';
 
     const analysisResult: AiAnalysisResult = {
       pair,
@@ -154,9 +149,7 @@ export async function POST(request: NextRequest) {
       stopLoss: typeof parsed.stopLoss === 'number' ? parsed.stopLoss : undefined,
       takeProfit: typeof parsed.takeProfit === 'number' ? parsed.takeProfit : undefined,
       bestStrategy,
-      indicators: Array.isArray(parsed.indicators)
-        ? (parsed.indicators as IndicatorValue[]).slice(0, 20)
-        : [],
+      indicators: Array.isArray(parsed.indicators) ? (parsed.indicators as IndicatorValue[]).slice(0, 20) : [],
     };
 
     // Store in database
@@ -175,57 +168,50 @@ export async function POST(request: NextRequest) {
           entryPrice: analysisResult.entryPrice,
           stopLoss: analysisResult.stopLoss,
           takeProfit: analysisResult.takeProfit,
-          lotSize: analysisResult.lotSize,
-          expiresAt: new Date(Date.now() + 30 * 60 * 1000), // Expires in 30 minutes
+          expiresAt: new Date(Date.now() + 30 * 60 * 1000),
         },
       });
     } catch (dbErr) {
       console.warn('[Analysis] DB save failed:', dbErr);
     }
 
-    // Log the analysis
     try {
       await db.activityLog.create({
         data: {
-          level: 'info',
-          category: 'analysis',
+          level: 'info', category: 'analysis',
           message: `AI analysis completed for ${pair}: ${recommendation} (confidence: ${(confidence * 100).toFixed(1)}%)`,
           pair,
-          metadata: JSON.stringify({
-            strategy: bestStrategy,
-            riskLevel,
-            marketCondition,
-          }),
         },
       });
-    } catch {
-      // Log failure is non-critical
-    }
+    } catch { /* non-critical */ }
 
-    return NextResponse.json({
-      success: true,
-      analysis: analysisResult,
-      timestamp: Date.now(),
-    });
+    return NextResponse.json({ success: true, analysis: analysisResult, timestamp: Date.now() });
   } catch (error) {
     console.error('[Analysis API] Error:', error);
-
-    // Log the error
     try {
       await db.activityLog.create({
         data: {
-          level: 'error',
-          category: 'analysis',
+          level: 'error', category: 'analysis',
           message: `AI analysis failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
         },
       });
-    } catch {
-      // Ignore
-    }
-
+    } catch { /* ignore */ }
     return NextResponse.json(
       { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown' },
       { status: 500 }
     );
+  }
+}
+
+export async function GET() {
+  try {
+    const analyses = await db.aiAnalysis.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+    return NextResponse.json({ analyses });
+  } catch (error) {
+    console.error('[Analysis API] GET Error:', error);
+    return NextResponse.json({ error: 'Failed to fetch analyses' }, { status: 500 });
   }
 }

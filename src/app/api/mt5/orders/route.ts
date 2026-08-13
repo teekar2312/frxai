@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
-
-const MIN_LOT = 0.01; // M1: Must stay in sync with bridge MIN_LOT
-const MAX_LOT = 50;   // M1: Must stay in sync with bridge MAX_LOT
+import { FINEX_CONFIG } from '@/lib/trading-types';
 
 // POST - Send order to MT5
 export async function POST(request: NextRequest) {
@@ -25,9 +23,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (typeof lotSize !== 'number' || lotSize < MIN_LOT || lotSize > MAX_LOT) {
+    if (typeof lotSize !== 'number' || lotSize < FINEX_CONFIG.minLot || lotSize > FINEX_CONFIG.maxLotPerOrder) {
       return NextResponse.json(
-        { error: `lotSize must be between ${MIN_LOT} and ${MAX_LOT}` },
+        { error: `lotSize must be between ${FINEX_CONFIG.minLot} and ${FINEX_CONFIG.maxLotPerOrder}` },
         { status: 400 }
       );
     }

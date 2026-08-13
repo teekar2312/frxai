@@ -306,8 +306,8 @@ export function Mt5ConnectionPanel() {
               </div>
               <div>
                 <p className="text-[10px] text-zinc-500">Margin Level</p>
-                <p className={`text-sm font-mono ${mt5AccountInfo.marginLevel > 200 ? 'text-emerald-400' : mt5AccountInfo.marginLevel > 100 ? 'text-amber-400' : 'text-rose-400'}`}>
-                  {mt5AccountInfo.marginLevel.toFixed(1)}%
+                <p className={`text-sm font-mono ${mt5AccountInfo.marginLevel > 0 ? (mt5AccountInfo.marginLevel > 200 ? 'text-emerald-400' : mt5AccountInfo.marginLevel > 100 ? 'text-amber-400' : 'text-rose-400') : 'text-zinc-500'}`}>
+                  {mt5AccountInfo.marginLevel > 0 ? `${mt5AccountInfo.marginLevel.toFixed(1)}%` : 'N/A'}
                 </p>
               </div>
               <div>

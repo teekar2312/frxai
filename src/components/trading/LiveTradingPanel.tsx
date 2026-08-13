@@ -36,6 +36,7 @@ export function LiveTradingPanel() {
   const {
     accountBalance, isAutoTrading, toggleAutoTrading,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
+    setDailyPnl, setOpenPositionsCount,
   } = useTradingStore();
 
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
@@ -60,6 +61,14 @@ export function LiveTradingPanel() {
     strategy: StrategyName;
     trailingStop: boolean;
   } | null>(null);
+
+  // L2: Sync simulation state to store (sidebar uses these values)
+  useEffect(() => {
+    if (isMt5Live) return; // MT5 mode reads from mt5AccountInfo/mt5Positions directly
+    const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
+    setDailyPnl(totalPnl);
+    setOpenPositionsCount(positions.length);
+  }, [positions, isMt5Live, setDailyPnl, setOpenPositionsCount]);
 
   // Fetch positions (for polling)
   useEffect(() => {

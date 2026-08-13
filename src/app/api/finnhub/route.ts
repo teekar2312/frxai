@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { ForexPair, QuoteData, CandleData } from '@/lib/trading-types';
+import { logApiError } from '@/lib/safe-log';
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 
@@ -247,7 +248,7 @@ export async function GET(request: NextRequest) {
       simulated: Object.keys(quotes).length < pairs.length,
     });
   } catch (error) {
-    console.error('[Finnhub API] Error:', error);
+    logApiError('Finnhub', error);
     // Ultimate fallback
     const quotes = generateSimulatedQuotes();
     return NextResponse.json({ timestamp: Date.now(), quotes, simulated: true, error: 'fallback' });

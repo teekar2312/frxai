@@ -362,3 +362,77 @@ Stage Summary:
 - L-4: volumeProfile no longer crashes on empty/null candle input
 - L-7: Bridge prices map restricted to 4 known pairs, preventing memory growth from unknown pairs
 - Zero lint errors, db:push successful
+---
+Task ID: 3-a
+Agent: Lib Creator
+Task: Create api-auth.ts, rate-limit.ts, safe-log.ts, price-fetcher.ts
+
+Work Log:
+- Created src/lib/api-auth.ts (C-1): API key auth middleware. Reads API_SECRET_KEY env var; auth disabled if unset. Supports `Authorization: Bearer <key>` and `X-API-Key: <key>` headers. Exports `validateAuth()` and `requireAuthForMutation()` (GETs always allowed).
+- Created src/lib/rate-limit.ts (H-1): In-memory sliding window rate limiter. Three preset configs: trade (10/min), analysis (5/min), general (60/min). Auto-cleanup interval every 5 min. Exports `checkRateLimit()`, `rateLimitedResponse()`, `clientIp()`.
+- Created src/lib/safe-log.ts (H-11): Safe structured logger. In dev, logs include full error details. In prod, sanitizes file paths, stack traces, and truncates to 200 chars. Exports `safeLog()` and `logApiError()`.
+- Created src/lib/price-fetcher.ts (H-7): Shared price fetching utility. Tries Finnhub API first, falls back to simulated random-walk with mean reversion. In-memory state for continuity. Exports `getCurrentMidPrice()`.
+- Ran `bun run lint` — zero errors, clean pass.
+
+Stage Summary:
+- 4 new files created in src/lib/: api-auth.ts, rate-limit.ts, safe-log.ts, price-fetcher.ts
+- C-1: API key auth ready for integration into route handlers
+- H-1: Rate limiter ready to protect trade, analysis, and general endpoints
+- H-11: Safe logger ready to replace raw console.error calls in routes
+- H-7: Price fetcher eliminates self-referencing HTTP calls; can be imported directly by positions route
+- Zero lint errors
+
+---
+Task ID: 3-b
+Agent: Lib Integration Agent
+Task: Integrate utility libraries into API routes (C-1, H-1, H-7, H-11)
+
+Work Log:
+- C-1: Added `requireAuthForMutation` guard to top of all mutating handlers across 7 route files:
+  - positions/route.ts: POST, PUT, DELETE
+  - alerts/route.ts: POST, PUT, DELETE
+  - config/route.ts: PUT
+  - mt5/orders/route.ts: POST, DELETE, PATCH
+  - analysis/route.ts: POST
+  - backtest/route.ts: POST, DELETE
+  - logs/route.ts: POST, DELETE
+- H-1: Added rate limiting (via `checkRateLimit`/`rateLimitedResponse`/`clientIp`) to 4 endpoints:
+  - positions POST: 'trade' config
+  - mt5/orders POST: 'trade' config
+  - analysis POST: 'analysis' config
+  - backtest POST: 'general' config
+- H-7: Replaced 2 self-referencing `fetch('http://localhost:3000/api/finnhub')` calls in positions/route.ts (POST entry price lookup, PUT close price lookup) with direct `getCurrentMidPrice()` import from `@/lib/price-fetcher`
+- H-11: Replaced all `console.error('[Xxx] Error:', error)` calls with `logApiError('Xxx', error)` across 11 route files:
+  - config, positions, alerts, analysis, backtest, indicators, logs, market-condition, mt5/orders, news, finnhub
+  - Preserved intentional `console.log` calls (e.g., `[EMAIL NOTIFY]`)
+  - Preserved non-matching `console.error` patterns (e.g., fetch error batch logging in backtest)
+- Ran `bun run lint` — zero errors, clean pass.
+
+Stage Summary:
+- All 4 integration tasks (C-1, H-1, H-7, H-11) applied across 11 API route files
+- 16 mutating endpoint handlers now protected by auth checks
+- 4 high-traffic endpoints rate-limited
+- 2 self-referencing fetch calls eliminated in favor of direct library import
+- 18 console.error calls replaced with safe logger
+- Zero lint errors
+
+---
+Task ID: 3-c
+Agent: Audit Fix Agent
+Task: Fix M-8, M-9, L-1, L-6, L-8, C-3/H-8 audit findings
+
+Work Log:
+- M-8 (Batch Alert Price Updates): Restructured the GET handler loop in alerts/route.ts to check trigger conditions BEFORE updating currentPrice. Non-triggered alerts get a price-only update; triggered alerts skip the redundant write since the trigger update already sets currentPrice. Saves one DB write per triggered alert.
+- M-9 (News URL Deduplication): Added `@@unique([source, title])` to NewsItem model in prisma/schema.prisma. Ran `bun run db:push` successfully.
+- L-1 (Content-Type Validation): Added `content-type` header check returning 415 before `request.json()` in 6 route handlers: positions POST, alerts POST, config PUT, analysis POST, backtest POST, logs POST.
+- L-6 (RiskManagementPanel Balance Display): Added "• server overrides" hint to Balance label in RiskManagementPanel.tsx. Removed leaked `details` field from risk/route.ts error response (line 160).
+- L-8 (URL Length Validation): Truncated NewsItem URL field to 2048 chars via `.slice(0, 2048)` in news/route.ts DB create block.
+- C-3 + H-8 (Document Platform Limitations): Created SECURITY.md documenting XTransformPort SSRF mitigation (C-3), security headers configuration for Caddyfile (H-8), API auth (C-1), rate limiting (H-1), and required environment variables.
+- Ran `bun run lint` — zero errors, clean pass.
+
+Stage Summary:
+- 6 audit findings resolved: M-8, M-9, L-1, L-6, L-8, C-3/H-8
+- Files modified: alerts/route.ts, positions/route.ts, config/route.ts, analysis/route.ts, backtest/route.ts, logs/route.ts, risk/route.ts, news/route.ts, RiskManagementPanel.tsx, prisma/schema.prisma
+- File created: SECURITY.md
+- DB schema pushed with new unique constraint on NewsItem
+- Zero lint errors

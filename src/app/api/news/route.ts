@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair, NewsArticle } from '@/lib/trading-types';
+import { logApiError } from '@/lib/safe-log';
 
 const MARKETAUX_BASE = 'https://api.marketaux.com/v1/news/all';
 
@@ -200,7 +201,7 @@ export async function GET(request: NextRequest) {
               data: {
                 id: uuid, source: (article.source as string) || 'Unknown',
                 title, description: description.slice(0, 1000),
-                url: (article.url as string) || '', imageUrl: (article.image_url as string) || '',
+                url: ((article.url as string) || '').slice(0, 2048), imageUrl: (article.image_url as string) || '',
                 publishedAt: article.published_at ? new Date(article.published_at as string) : null,
                 category: 'forex', pair: pair || null,
                 impact: determineImpact(title, description),
@@ -220,7 +221,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ total: news.length, page: 1, limit: 20, news, simulated: true, fallback: true });
     }
   } catch (error) {
-    console.error('[News API] Error:', error);
+    logApiError('News', error);
     let news = [...SIMULATED_NEWS];
     return NextResponse.json({ total: news.length, page: 1, limit: 20, news, simulated: true, error: 'fallback' });
   }

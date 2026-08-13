@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import ZAI from 'z-ai-web-dev-sdk';
 import { db } from '@/lib/db';
 import type { ForexPair, AiAnalysisResult, MarketCondition, StrategyName, IndicatorValue } from '@/lib/trading-types';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
+import { logApiError } from '@/lib/safe-log';
 
 const VALID_PAIRS: ForexPair[] = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
 const VALID_CONDITIONS: MarketCondition[] = ['trending', 'range_bound', 'high_volatility', 'low_volatility'];
@@ -72,6 +75,13 @@ CRITICAL RULES:
 }
 
 export async function POST(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
+  const rateCheck = checkRateLimit(clientIp(request), 'analysis');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const { pair, marketData, news } = body as {
@@ -187,7 +197,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, analysis: analysisResult, timestamp: Date.now() });
   } catch (error) {
-    console.error('[Analysis API] Error:', error);
+    logApiError('Analysis', error);
     try {
       await db.activityLog.create({
         data: {
@@ -211,7 +221,7 @@ export async function GET() {
     });
     return NextResponse.json({ analyses });
   } catch (error) {
-    console.error('[Analysis API] GET Error:', error);
+    logApiError('Analysis', error);
     return NextResponse.json({ error: 'Failed to fetch analyses' }, { status: 500 });
   }
 }

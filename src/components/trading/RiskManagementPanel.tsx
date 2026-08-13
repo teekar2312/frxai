@@ -90,7 +90,7 @@ export function RiskManagementPanel() {
                 </Select>
               </div>
               <div className="space-y-2">
-                <Label className="text-zinc-400 text-xs">Balance ($)</Label>
+                <Label className="text-zinc-400 text-xs">Balance ($) <span className="text-zinc-600">• server overrides</span></Label>
                 <Input type="number" value={riskForm.accountBalance}
                   onChange={(e) => setRiskForm(f => ({ ...f, accountBalance: parseFloat(e.target.value) || 0 }))}
                   className="bg-zinc-800 border-zinc-700 text-white" />

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
 import { FOREX_PAIRS } from '@/lib/trading-types';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { logApiError } from '@/lib/safe-log';
 
 const PAIR_TO_FINNHUB: Record<ForexPair, string> = {
   EURUSD: 'OANDA:EUR_USD',
@@ -69,6 +71,8 @@ export async function GET() {
         priceCache[pair] = await getCurrentPrice(pair);
       }
 
+      // M-8: Check conditions first; only update price for non-triggered alerts
+      // (triggered alerts already set currentPrice in the trigger update)
       for (const alert of activeAlerts) {
         const price = priceCache[alert.pair];
         if (price === null) continue;
@@ -76,14 +80,8 @@ export async function GET() {
         // ALR-01: Pass previousPrice (stored as currentPrice) for cross conditions
         const previousPrice = alert.currentPrice ?? undefined;
 
-        // Update current price on alert
-        await db.priceAlert.update({
-          where: { id: alert.id },
-          data: { currentPrice: price },
-        });
-
         if (checkAlertCondition(alert.condition, price, alert.targetPrice, previousPrice)) {
-          // Trigger the alert
+          // Trigger the alert (includes currentPrice update)
           await db.priceAlert.update({
             where: { id: alert.id },
             data: {
@@ -122,6 +120,14 @@ export async function GET() {
           if (alert.emailNotify) {
             console.log(`[EMAIL NOTIFY] Price Alert: ${alert.pair} ${alert.condition} ${alert.targetPrice} - Current: ${price}. Note: ${alert.note || 'No note'}`);
           }
+        } else {
+          // M-8: Only update price for non-triggered alerts
+          try {
+            await db.priceAlert.update({
+              where: { id: alert.id },
+              data: { currentPrice: price },
+            });
+          } catch { /* non-critical */ }
         }
       }
     }
@@ -133,7 +139,7 @@ export async function GET() {
       triggeredCount: alerts.filter((a) => a.isTriggered).length,
     });
   } catch (error) {
-    console.error('[Alerts GET] Error:', error);
+    logApiError('Alerts', error);
     return NextResponse.json(
       { error: 'Failed to fetch alerts' },
       { status: 500 }
@@ -143,6 +149,11 @@ export async function GET() {
 
 // POST - Create new alert
 export async function POST(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
   try {
     const body = await request.json();
     const { pair, condition, targetPrice, note, emailNotify } = body as {
@@ -206,7 +217,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ alert }, { status: 201 });
   } catch (error) {
-    console.error('[Alerts POST] Error:', error);
+    logApiError('Alerts', error);
     return NextResponse.json(
       { error: 'Failed to create alert' },
       { status: 500 }
@@ -216,6 +227,8 @@ export async function POST(request: NextRequest) {
 
 // PUT - Update alert (toggle active, update fields)
 export async function PUT(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const body = await request.json();
     const { id, isActive, targetPrice, condition, note, emailNotify, resetTriggered } = body as {
@@ -263,7 +276,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ alert: updated });
   } catch (error) {
-    console.error('[Alerts PUT] Error:', error);
+    logApiError('Alerts', error);
     return NextResponse.json(
       { error: 'Failed to update alert' },
       { status: 500 }
@@ -273,6 +286,8 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - Delete alert
 export async function DELETE(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -303,7 +318,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ success: true, deletedId: id });
   } catch (error) {
-    console.error('[Alerts DELETE] Error:', error);
+    logApiError('Alerts', error);
     return NextResponse.json(
       { error: 'Failed to delete alert' },
       { status: 500 }

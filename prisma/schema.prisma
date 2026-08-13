@@ -139,6 +139,7 @@ model NewsItem {
 
   @@index([publishedAt])
   @@index([pair])
+  @@unique([source, title])
 }
 
 model TradingConfig {

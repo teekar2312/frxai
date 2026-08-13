@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { FINEX_CONFIG } from '@/lib/trading-types';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { logApiError } from '@/lib/safe-log';
 
 const DEFAULT_CONFIG = {
   id: 'default',
@@ -35,7 +37,7 @@ export async function GET() {
 
     return NextResponse.json({ config });
   } catch (error) {
-    console.error('[Config GET] Error:', error);
+    logApiError('Config', error);
     return NextResponse.json(
       { error: 'Failed to fetch config' },
       { status: 500 }
@@ -45,6 +47,11 @@ export async function GET() {
 
 // PUT - Update trading config
 export async function PUT(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
   try {
     const body = await request.json();
 
@@ -176,7 +183,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ config: updated });
   } catch (error) {
-    console.error('[Config PUT] Error:', error);
+    logApiError('Config', error);
     return NextResponse.json(
       { error: 'Failed to update config' },
       { status: 500 }

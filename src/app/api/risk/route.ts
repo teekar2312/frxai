@@ -157,7 +157,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Risk API] Error:', error);
     return NextResponse.json(
-      { error: 'Risk calculation failed', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Risk calculation failed' },
       { status: 500 }
     );
   }

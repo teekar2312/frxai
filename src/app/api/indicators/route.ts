@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { CandleData, ForexPair } from '@/lib/trading-types';
+import { logApiError } from '@/lib/safe-log';
 import {
   sma, ema, hma, vwap,
   rsi, stochastic, macd, williamsR, cci, mfi, tsi, roc, momentum, ultimateOscillator,
@@ -301,7 +302,7 @@ export async function POST(request: NextRequest) {
       candleCount: candles.length,
     });
   } catch (error) {
-    console.error('[Indicators API] Error:', error);
+    logApiError('Indicators', error);
     return NextResponse.json(
       { error: 'Internal server error' },
       { status: 500 }

@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { logApiError } from '@/lib/safe-log';
 
 // GET - Fetch activity logs (paginated)
 export async function GET(request: NextRequest) {
@@ -43,7 +45,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('[Logs GET] Error:', error);
+    logApiError('Logs', error);
     // Auto-log error (best effort)
     try {
       await db.activityLog.create({
@@ -65,6 +67,11 @@ export async function GET(request: NextRequest) {
 
 // POST - Create a new log entry
 export async function POST(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
   try {
     const body = await request.json();
     const { level, category, message, pair, details, metadata } = body as {
@@ -96,7 +103,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ log }, { status: 201 });
   } catch (error) {
-    console.error('[Logs POST] Error:', error);
+    logApiError('Logs', error);
     return NextResponse.json(
       { error: 'Failed to create log' },
       { status: 500 }
@@ -106,6 +113,8 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Clear old logs
 export async function DELETE(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const { searchParams } = new URL(request.url);
     const beforeDate = searchParams.get('beforeDate');
@@ -169,7 +178,7 @@ export async function DELETE(request: NextRequest) {
       { status: 400 }
     );
   } catch (error) {
-    console.error('[Logs DELETE] Error:', error);
+    logApiError('Logs', error);
     return NextResponse.json(
       { error: 'Failed to delete logs' },
       { status: 500 }

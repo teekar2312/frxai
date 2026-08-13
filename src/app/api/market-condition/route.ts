@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { CandleData } from '@/lib/trading-types';
+import { logApiError } from '@/lib/safe-log';
 import { detectMarketCondition } from '@/lib/indicators';
 import type { OHLCV } from '@/lib/indicators';
 
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
       timestamp: Date.now(),
     });
   } catch (error) {
-    console.error('[Market Condition API] Error:', error);
+    logApiError('Market Condition', error);
     return NextResponse.json(
       { error: 'Failed to detect market condition' },
       { status: 500 }

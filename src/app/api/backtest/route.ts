@@ -8,6 +8,9 @@ import {
   hma, tsi, linearRegressionChannel, schaffTrendCycle, mfi,
 } from '@/lib/indicators';
 import type { OHLCV } from '@/lib/indicators';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
+import { logApiError } from '@/lib/safe-log';
 
 interface BacktestTrade {
   id: number;
@@ -446,6 +449,13 @@ function calculateBacktestStats(
 }
 
 export async function POST(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const config = body as BacktestConfig;
@@ -570,7 +580,7 @@ export async function POST(request: NextRequest) {
       equityCurve,
     });
   } catch (error) {
-    console.error('[Backtest API] Error:', error);
+    logApiError('Backtest', error);
     return NextResponse.json(
       { error: 'Backtest failed' },
       { status: 500 }
@@ -587,7 +597,7 @@ export async function GET() {
     });
     return NextResponse.json({ results });
   } catch (error) {
-    console.error('[Backtest GET] Error:', error);
+    logApiError('Backtest', error);
     return NextResponse.json(
       { error: 'Failed to fetch backtest results' },
       { status: 500 }
@@ -597,6 +607,8 @@ export async function GET() {
 
 // DELETE - Delete a backtest result
 export async function DELETE(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -606,7 +618,7 @@ export async function DELETE(request: NextRequest) {
     await db.backtestResult.delete({ where: { id } });
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error('[Backtest DELETE] Error:', error);
+    logApiError('Backtest', error);
     return NextResponse.json(
       { error: 'Failed to delete backtest result' },
       { status: 500 }

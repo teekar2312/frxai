@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
+import { getCurrentMidPrice } from '@/lib/price-fetcher';
+import { logApiError } from '@/lib/safe-log';
 
 // GET - Fetch positions (supports ?status=open|closed|cancelled filter)
 export async function GET(request: NextRequest) {
@@ -24,7 +28,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ positions });
   } catch (error) {
-    console.error('[Positions GET] Error:', error);
+    logApiError('Positions', error);
     return NextResponse.json(
       { error: 'Failed to fetch positions' },
       { status: 500 }
@@ -34,6 +38,13 @@ export async function GET(request: NextRequest) {
 
 // POST - Create new position
 export async function POST(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
+  const rateCheck = checkRateLimit(clientIp(request), 'trade');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const {
@@ -76,20 +87,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Try to get entryPrice from Finnhub if not provided
     if (!entryPrice || entryPrice === 0) {
-      try {
-        const finnhubRes = await fetch('http://localhost:3000/api/finnhub');
-        if (finnhubRes.ok) {
-          const finnhubData = await finnhubRes.json();
-          const quote = finnhubData.quotes?.[pair as string];
-          if (quote?.mid) {
-            entryPrice = quote.mid;
-          }
-        }
-      } catch {
-        // Finnhub fetch failed, will check below
-      }
+      const mid = await getCurrentMidPrice(pair);
+      if (mid) entryPrice = mid;
     }
 
     if (!entryPrice || entryPrice === 0) {
@@ -226,7 +226,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ position }, { status: 201 });
   } catch (error) {
-    console.error('[Positions POST] Error:', error);
+    logApiError('Positions', error);
     return NextResponse.json(
       { error: 'Failed to create position' },
       { status: 500 }
@@ -236,6 +236,8 @@ export async function POST(request: NextRequest) {
 
 // PUT - Update position (close, modify SL/TP, trailing stop)
 export async function PUT(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const body = await request.json();
     const { id, action, stopLoss, takeProfit, trailingStop, currentPrice } = body as {
@@ -264,16 +266,9 @@ export async function PUT(request: NextRequest) {
 
     if (action === 'close') {
       let closePrice = currentPrice || 0;
-      // POS-07: Fetch current market price if not provided
       if (!closePrice || closePrice === 0) {
-        try {
-          const finnhubRes = await fetch('http://localhost:3000/api/finnhub');
-          if (finnhubRes.ok) {
-            const finnhubData = await finnhubRes.json();
-            const quote = finnhubData.quotes?.[existing.pair as string];
-            if (quote?.mid) closePrice = quote.mid;
-          }
-        } catch { /* fallback below */ }
+        const mid = await getCurrentMidPrice(existing.pair);
+        if (mid) closePrice = mid;
       }
       if (!closePrice || closePrice === 0) {
         return NextResponse.json(
@@ -388,7 +383,7 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ error: 'Invalid action. Use: close, modify, update_price, trailing_stop' }, { status: 400 });
   } catch (error) {
-    console.error('[Positions PUT] Error:', error);
+    logApiError('Positions', error);
     return NextResponse.json(
       { error: 'Failed to update position' },
       { status: 500 }
@@ -398,6 +393,8 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - Cancel position
 export async function DELETE(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
@@ -441,7 +438,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ position: cancelled });
   } catch (error) {
-    console.error('[Positions DELETE] Error:', error);
+    logApiError('Positions', error);
     return NextResponse.json(
       { error: 'Failed to cancel position' },
       { status: 500 }

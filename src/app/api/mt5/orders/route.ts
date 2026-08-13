@@ -2,9 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
 import { FINEX_CONFIG } from '@/lib/trading-types';
+import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
+import { logApiError } from '@/lib/safe-log';
 
 // POST - Send order to MT5
 export async function POST(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+  const rateCheck = checkRateLimit(clientIp(request), 'trade');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   // L1: Parse body once at the top level
   let body: Record<string, unknown>;
   try {
@@ -75,7 +82,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(data, { status: res.ok ? 200 : 502 });
   } catch (error) {
-    console.error('[MT5 Orders POST] Error:', error);
+    logApiError('MT5 Orders', error);
 
     // L1: Use pre-parsed body for error logging
     try {
@@ -101,6 +108,8 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Close order on MT5
 export async function DELETE(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const { searchParams } = new URL(request.url);
     const ticket = searchParams.get('ticket');
@@ -145,7 +154,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json(data, { status: res.ok ? 200 : 502 });
   } catch (error) {
-    console.error('[MT5 Orders DELETE] Error:', error);
+    logApiError('MT5 Orders', error);
 
     try {
       const { searchParams } = new URL(request.url);
@@ -171,6 +180,8 @@ export async function DELETE(request: NextRequest) {
 
 // PATCH - Modify order SL/TP on MT5
 export async function PATCH(request: NextRequest) {
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   let body: Record<string, unknown>;
   try {
     body = await request.json();
@@ -230,7 +241,7 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json(data, { status: res.ok ? 200 : 502 });
   } catch (error) {
-    console.error('[MT5 Orders PATCH] Error:', error);
+    logApiError('MT5 Orders', error);
 
     // L1: Use pre-parsed body for error logging
     try {

@@ -222,3 +222,21 @@ Stage Summary:
 - Store persists trading mode across page reloads
 - EA improved: configurable magic number, robust JSON parsing
 - Ready to push to repository
+---
+Task ID: audit-final-cleanup
+Agent: Main Orchestrator
+Task: Complete remaining 4 MT5 audit fixes and push to repository
+
+Work Log:
+- Verified 17 of 21 audit findings were already applied in previous session
+- Applied M1: Imported lot size limits from FINEX_CONFIG instead of duplicated constants in orders/route.ts
+- Applied M2: Removed dead MT5_BRIDGE_PORT export from trading-types.ts
+- Applied L2: Wired setDailyPnl/setOpenPositionsCount from LiveTradingPanel useEffect for simulation mode sidebar
+- Applied L5: Handle marginLevel 0 as 'N/A' display in Mt5ConnectionPanel
+- Ran ESLint — clean, no errors
+- Committed as 8809ad3 and pushed to GitHub main branch
+
+Stage Summary:
+- All 21 MT5 audit findings are now fully applied (except L3 informational - user compiles .ex5, and M6 - N/A since EA uses HTTP polling)
+- 4 files changed: orders/route.ts, LiveTradingPanel.tsx, Mt5ConnectionPanel.tsx, trading-types.ts
+- Push successful to https://github.com/teekar2312/frxai.git (main)

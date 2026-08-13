@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { FINEX_CONFIG } from '@/lib/trading-types';
+import { FINEX_CONFIG, VALID_AI_PROVIDER_IDS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { logApiError } from '@/lib/safe-log';
+import { AI_PROVIDERS, getModelsForProvider } from '@/lib/ai-provider';
 
 const DEFAULT_CONFIG = {
   id: 'default',
@@ -27,6 +28,8 @@ const DEFAULT_CONFIG = {
   maxLotPerOrder: FINEX_CONFIG.maxLotPerOrder,
   avoidNewsTrading: true,
   accountBalance: 10000,
+  aiProvider: 'zai',
+  aiModel: 'default',
 };
 
 // GET - Fetch trading config (initialize default if none exists)
@@ -58,6 +61,9 @@ export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
 
+    // Fetch current config for cross-field validation
+    const currentConfig = await db.tradingConfig.findUnique({ where: { id: 'default' } });
+
     // Validate numeric fields
     const numericFields = [
       'riskPerTrade', 'stopLossMin', 'stopLossMax', 'riskRewardRatio',
@@ -73,7 +79,10 @@ export async function PUT(request: NextRequest) {
     const allowedFields = new Set([
       ...numericFields,
       'autoTrading', 'autoTrailingStop', 'avoidNewsTrading',
+      'aiProvider', 'aiModel',
     ]);
+
+    const stringFields = ['aiProvider', 'aiModel'];
 
     // M-7: Handle config reset
     if (body.reset === true) {
@@ -102,6 +111,29 @@ export async function PUT(request: NextRequest) {
         updateData[key] = num;
       } else if (key === 'autoTrading' || key === 'autoTrailingStop' || key === 'avoidNewsTrading') {
         updateData[key] = Boolean(value);
+      } else if (stringFields.includes(key)) {
+        // AI-006: Validate AI provider/model fields
+        const strVal = String(value);
+        if (key === 'aiProvider') {
+          if (!VALID_AI_PROVIDER_IDS.includes(strVal as typeof VALID_AI_PROVIDER_IDS[number])) {
+            return NextResponse.json(
+              { error: `Invalid aiProvider. Must be one of: ${VALID_AI_PROVIDER_IDS.join(', ')}` },
+              { status: 400 }
+            );
+          }
+          updateData[key] = strVal;
+        } else if (key === 'aiModel') {
+          // Validate model belongs to the selected provider (or a provider being set in same request)
+          const targetProvider = (updateData.aiProvider || currentConfig?.aiProvider || 'zai') as typeof VALID_AI_PROVIDER_IDS[number];
+          const validModels = getModelsForProvider(targetProvider);
+          if (validModels.length > 0 && !validModels.some(m => m.id === strVal)) {
+            return NextResponse.json(
+              { error: `Invalid aiModel for ${AI_PROVIDERS[targetProvider]?.name}. Valid: ${validModels.map(m => m.id).join(', ')}` },
+              { status: 400 }
+            );
+          }
+          updateData[key] = strVal;
+        }
       }
     }
 

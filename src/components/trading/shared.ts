@@ -72,6 +72,8 @@ export interface TradingConfig {
   trailingStopPips: number;
   avoidNewsTrading: boolean;
   accountBalance: number;
+  aiProvider: string;  // AI-006
+  aiModel: string;     // AI-006
 }
 
 export interface EquityPoint {

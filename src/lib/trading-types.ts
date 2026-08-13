@@ -323,6 +323,32 @@ export const OVERLAP_SESSIONS = [
   { name: 'London - New York', startHour: 13, endHour: 17 },
 ];
 
+// ============================================================
+// AI-006: Multi-Provider AI Architecture
+// ============================================================
+
+export type AiProviderId = 'zai' | 'groq' | 'openai' | 'tinyfish' | 'together' | 'lokal_ai';
+
+export interface AiModel {
+  id: string;
+  name: string;
+}
+
+export interface AiProviderConfig {
+  id: AiProviderId;
+  name: string;
+  baseUrl: string;
+  apiKeyEnvVar: string;
+  models: AiModel[];
+}
+
+/** Result from AI completion call */
+export interface AiCompletionResult {
+  content: string;
+  provider: AiProviderId;
+  model: string;
+}
+
 /** Finnhub free tier: 60 calls/min. With 4 pairs polled every 5s = 48/min. */
 export const FINNHUB_RATE_LIMIT_PER_MIN = 60;
 /** MARKETAUX free tier: 100 requests/day */

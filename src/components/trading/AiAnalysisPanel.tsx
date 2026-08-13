@@ -26,6 +26,9 @@ export function AiAnalysisPanel() {
 
   const [analysisHistory, setAnalysisHistory] = useState<AiAnalysisResult[]>([]);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  // AI-010: Track provider/model from last analysis response
+  const [lastProvider, setLastProvider] = useState<string>('');
+  const [lastModel, setLastModel] = useState<string>('');
 
   // Fetch analysis history
   const fetchAnalysisHistory = useCallback(async () => {
@@ -58,6 +61,9 @@ export function AiAnalysisPanel() {
         const data = await res.json();
         if (data.analysis) {
           setAiAnalysis(selectedPair, data.analysis as AiAnalysisResult);
+          // AI-010: Track which provider/model was used
+          setLastProvider(data.aiProvider || 'zai');
+          setLastModel(data.aiModel || 'default');
           toast.success(`AI Analysis complete for ${PAIR_DISPLAY[selectedPair]}`);
         }
       } else {
@@ -92,7 +98,7 @@ export function AiAnalysisPanel() {
           className="bg-emerald-600 hover:bg-emerald-700 text-white"
         >
           {analysisLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
-          Run AI Analysis
+          {lastProvider ? `Run Analysis (${lastProvider}/${lastModel})` : 'Run AI Analysis'}
         </Button>
       </div>
 

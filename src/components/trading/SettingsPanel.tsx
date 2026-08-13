@@ -2,22 +2,34 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Settings, RefreshCw, Cable, Shield, FileText, Info } from 'lucide-react';
+import { Settings, RefreshCw, Cable, Shield, FileText, Info, Brain, CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Badge } from '@/components/ui/badge';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { type TradingConfig } from './shared';
 import { Mt5ConnectionPanel } from './Mt5ConnectionPanel';
 import { useTradingStore } from '@/lib/trading-store';
+
+interface AiProviderInfo {
+  id: string;
+  name: string;
+  models: { id: string; name: string }[];
+  isAvailable: boolean;
+}
 
 export function SettingsPanel() {
   const { tradingMode } = useTradingStore();
   const [config, setConfig] = useState<TradingConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
+  const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
 
   // Fetch config
   const fetchConfig = useCallback(async () => {
@@ -35,9 +47,23 @@ export function SettingsPanel() {
     }
   }, []);
 
+  // Fetch AI providers
+  const fetchAiProviders = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ai-providers');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.providers) setAiProviders(data.providers);
+      }
+    } catch {
+      // silent
+    }
+  }, []);
+
   useEffect(() => {
     fetchConfig();
-  }, [fetchConfig]);
+    fetchAiProviders();
+  }, [fetchConfig, fetchAiProviders]);
 
   // Save config
   const handleSaveConfig = async () => {
@@ -52,7 +78,8 @@ export function SettingsPanel() {
       if (res.ok) {
         toast.success('Configuration saved');
       } else {
-        toast.error('Failed to save configuration');
+        const errData = await res.json().catch(() => ({}));
+        toast.error(errData.error || 'Failed to save configuration');
       }
     } catch {
       toast.error('Network error saving config');
@@ -103,10 +130,90 @@ export function SettingsPanel() {
     setConfig(prev => prev ? { ...prev, [key]: value } : prev);
   };
 
+  const selectedProvider = aiProviders.find(p => p.id === config.aiProvider);
+  const availableModels = selectedProvider?.models || [];
+
   return (
     <div className="space-y-4">
       {/* MT5 Integration */}
       <Mt5ConnectionPanel />
+
+      {/* AI-006: AI Provider Configuration */}
+      <Card className="bg-zinc-900 border-zinc-800 p-4">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="text-sm text-white flex items-center gap-2">
+            <Brain className="w-4 h-4" /> AI Provider Configuration
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-zinc-300 text-xs">AI Provider</Label>
+              <Select value={config.aiProvider} onValueChange={(v) => {
+                updateConfig('aiProvider', v);
+                const provider = aiProviders.find(p => p.id === v);
+                if (provider && provider.models.length > 0) {
+                  updateConfig('aiModel', provider.models[0].id);
+                }
+              }}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700">
+                  {aiProviders.map((p) => (
+                    <SelectItem key={p.id} value={p.id} className="text-zinc-200">
+                      <div className="flex items-center gap-2">
+                        {p.isAvailable
+                          ? <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                          : <XCircle className="w-3 h-3 text-zinc-500" />
+                        }
+                        <span>{p.name}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-zinc-300 text-xs">Model</Label>
+              <Select value={config.aiModel} onValueChange={(v) => updateConfig('aiModel', v)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700">
+                  {availableModels.map((m) => (
+                    <SelectItem key={m.id} value={m.id} className="text-zinc-200">
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {aiProviders.map((p) => (
+              <Badge
+                key={p.id}
+                variant="outline"
+                className={`text-[10px] ${
+                  p.id === config.aiProvider
+                    ? 'border-emerald-500/40 text-emerald-400'
+                    : p.isAvailable
+                      ? 'border-zinc-700 text-zinc-400'
+                      : 'border-zinc-800 text-zinc-600'
+                }`}
+              >
+                {p.isAvailable ? '●' : '○'} {p.name}
+              </Badge>
+            ))}
+          </div>
+          {selectedProvider && !selectedProvider.isAvailable && selectedProvider.id !== 'zai' && (
+            <p className="text-[10px] text-amber-400 bg-amber-500/5 border border-amber-500/20 rounded-lg p-2">
+              API key for {selectedProvider.name} is not configured. Set {selectedProvider.id === 'lokal_ai' ? 'LOKAL_AI_BASE_URL' : selectedProvider.apiKeyEnvVar || 'the API key'} in environment variables.
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Mode indicator on config card */}
       <Card className="bg-zinc-900 border-zinc-800 p-4">

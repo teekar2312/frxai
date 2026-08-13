@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import ZAI from 'z-ai-web-dev-sdk';
 import { db } from '@/lib/db';
 import type { ForexPair, AiAnalysisResult, MarketCondition, StrategyName, IndicatorValue } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
+import { aiComplete, resolveAiConfig, AI_PROVIDERS } from '@/lib/ai-provider';
 
 const VALID_PAIRS: ForexPair[] = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
 const VALID_CONDITIONS: MarketCondition[] = ['trending', 'range_bound', 'high_volatility', 'low_volatility'];
@@ -87,7 +87,6 @@ export async function POST(request: NextRequest) {
     const { pair, marketData } = body as {
       pair: ForexPair;
       marketData: Record<string, unknown>;
-      news?: Array<{ title: string; description: string; impact: string; sentiment: string }>;
     };
 
     // RD-002: Always fetch news server-side from DB — ignore client-sent news
@@ -125,18 +124,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // AI-006: Resolve active AI provider/model from DB config
+    const config = await db.tradingConfig.upsert({ where: { id: 'default' }, update: {}, create: {} });
+    const { provider, model } = resolveAiConfig(config.aiProvider, config.aiModel);
+    const providerName = AI_PROVIDERS[provider]?.name || provider;
+
     const prompt = buildAnalysisPrompt(pair, marketData, news || []);
 
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: 'assistant', content: 'You are a forex market analysis AI. Always respond with valid JSON only.' },
-        { role: 'user', content: prompt },
-      ],
-      thinking: { type: 'disabled' },
-    });
+    // AI-006: Use unified multi-provider completion with automatic failover
+    const aiResult = await aiComplete(provider, model, [
+      { role: 'assistant', content: 'You are a forex market analysis AI. Always respond with valid JSON only.' },
+      { role: 'user', content: prompt },
+    ]);
 
-    const responseText = completion.choices?.[0]?.message?.content || '';
+    const responseText = aiResult.content;
+    const actualProvider = aiResult.provider;
+    const actualModel = aiResult.model;
 
     if (!responseText) {
       return NextResponse.json({ error: 'Empty AI response' }, { status: 502 });
@@ -183,7 +186,7 @@ export async function POST(request: NextRequest) {
       indicators: Array.isArray(parsed.indicators) ? (parsed.indicators as IndicatorValue[]).slice(0, 20) : [],
     };
 
-    // Store in database
+    // Store in database — AI-009: include provider and model
     try {
       await db.aiAnalysis.create({
         data: {
@@ -199,6 +202,8 @@ export async function POST(request: NextRequest) {
           entryPrice: analysisResult.entryPrice,
           stopLoss: analysisResult.stopLoss,
           takeProfit: analysisResult.takeProfit,
+          aiProvider: actualProvider,  // AI-009
+          aiModel: actualModel,       // AI-009
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
         },
       });
@@ -206,17 +211,24 @@ export async function POST(request: NextRequest) {
       safeLog({ level: 'warn', route: 'Analysis', message: 'DB save failed', error: dbErr instanceof Error ? dbErr.message : String(dbErr) });
     }
 
+    // AI-008: Include provider/model in activity log
     try {
       await db.activityLog.create({
         data: {
           level: 'info', category: 'analysis',
-          message: `AI analysis completed for ${pair}: ${recommendation} (confidence: ${(confidence * 100).toFixed(1)}%)`,
+          message: `AI analysis completed for ${pair}: ${recommendation} (confidence: ${(confidence * 100).toFixed(1)}%) [${actualProvider}/${actualModel}]`,
           pair,
         },
       });
     } catch { /* non-critical */ }
 
-    return NextResponse.json({ success: true, analysis: analysisResult, timestamp: Date.now() });
+    return NextResponse.json({
+      success: true,
+      analysis: analysisResult,
+      aiProvider: actualProvider,
+      aiModel: actualModel,
+      timestamp: Date.now(),
+    });
   } catch (error) {
     logApiError('Analysis', error);
     try {

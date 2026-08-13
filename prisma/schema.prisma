@@ -87,6 +87,8 @@ model AiAnalysis {
   stopLoss        Float?
   takeProfit      Float?
   lotSize         Float?
+  aiProvider      String?  // AI-009: which provider generated this
+  aiModel         String?  // AI-009: which model was used
   expiresAt       DateTime?
   createdAt       DateTime @default(now())
 
@@ -164,5 +166,7 @@ model TradingConfig {
   trailingStopPips      Float    @default(10)
   avoidNewsTrading      Boolean  @default(true)
   accountBalance        Float    @default(10000)
+  aiProvider            String   @default("zai")  // AI-006: active AI provider
+  aiModel               String   @default("default") // AI-006: active AI model
   updatedAt             DateTime @updatedAt
 }

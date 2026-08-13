@@ -1384,3 +1384,34 @@ The following comprehensive searches were performed:
 9. Inspected trading-store — no AI provider state
 10. Searched worklog history — no previous mention of these 5 providers
 
+
+---
+Task ID: AI-FIX-1
+Agent: Main Orchestrator
+Task: Implement all 10 AI audit findings (AI-001 through AI-010)
+
+Work Log:
+- AI-001~AI-005: Integrated 5 new AI providers (Groq, OpenAI, Tinyfish.ai, together.ai, Lokal AI)
+- AI-006: Built multi-provider architecture with abstraction layer, config, UI, failover
+- AI-007: Made provider/model configurable and visible in UI
+- AI-008: Activity log now includes provider/model in analysis messages
+- AI-009: Added aiProvider/aiModel fields to AiAnalysis and TradingConfig Prisma models
+- AI-010: Frontend displays active provider/model in analysis button
+
+Files changed:
+- prisma/schema.prisma — Added aiProvider/aiModel to AiAnalysis + TradingConfig
+- src/lib/trading-types.ts — Added AiProviderId, AiModel, AiProviderConfig, AiCompletionResult types
+- src/lib/ai-provider.ts — NEW: Multi-provider abstraction layer (6 providers, failover, unified API)
+- src/app/api/analysis/route.ts — Replaced ZAI direct call with aiComplete(), added provider tracking
+- src/app/api/config/route.ts — Added aiProvider/aiModel field validation and persistence
+- src/app/api/ai-providers/route.ts — NEW: API endpoint to list providers and availability
+- src/components/trading/SettingsPanel.tsx — NEW: AI Provider Configuration card with provider/model selectors
+- src/components/trading/shared.ts — Added aiProvider/aiModel to TradingConfig interface
+- src/components/trading/AiAnalysisPanel.tsx — Button shows active provider/model
+
+Stage Summary:
+- All 10 audit findings implemented
+- Lint clean (0 errors)
+- 8 files changed, 2 new files created
+- 6 AI providers: ZAI (default), Groq, OpenAI, Tinyfish.ai, together.ai, Lokal AI
+- Automatic failover: external provider → ZAI on failure

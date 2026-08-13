@@ -104,3 +104,38 @@ Stage Summary:
 - Application is fully functional with simulated data
 - Real API keys (FINNHUB_API_KEY, MARKETAUX_API_KEY) can be added to .env for live data
 - Dashboard accessible through Preview Panel
+
+---
+Task ID: 8
+Agent: Main Orchestrator
+Task: MT5 Integration - Implement full MetaTrader 5 connectivity
+
+Work Log:
+- Audit found MT5 had 0 references in codebase - all trading was 100% simulated
+- Added MT5 types to trading-types.ts: Mt5ConnectionStatus, TradingMode, Mt5AccountInfo, Mt5Position, Mt5OrderResult, Mt5ConnectionConfig
+- Added MT5 state to trading-store.ts: tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions
+- Created MT5 Bridge mini-service (mini-services/mt5-bridge/): Bun HTTP + WebSocket server on port 3004
+  - REST endpoints: status, account, orders (POST/DELETE/PATCH), positions, prices
+  - WebSocket /ws for MT5 Expert Advisor to connect
+  - Pending request map with 10s timeout for order operations
+  - Ping/pong heartbeat, auto state sync on EA connect
+  - CORS support, proper 503 error codes when EA not connected
+- Created 5 MT5 API routes under src/app/api/mt5/:
+  - connection/route.ts: GET status, POST enable/disable
+  - account/route.ts: GET account info
+  - orders/route.ts: POST send, DELETE close, PATCH modify
+  - positions/route.ts: GET positions
+  - prices/route.ts: GET live prices
+- Created Mt5ConnectionPanel.tsx: Mode toggle (Simulation/MT5 Live), connection status indicators, EA setup instructions, account info display, MT5 positions table
+- Integrated into SettingsPanel: Mt5ConnectionPanel at top, MT5 LIVE badge on config card
+- Integrated into LiveTradingPanel: MT5 live banner, order routing (sim vs MT5), MT5 positions table with close, account display from MT5
+- Integrated into Sidebar: MT5 connection status indicator in account summary
+- Integrated into page.tsx: MT5 status in top status bar and footer
+- All endpoints verified: /api/mt5/connection returns bridgeReachable=true, /api/mt5/account returns 503 when no EA
+- ESLint passes clean, commit 01f79c7
+
+Stage Summary:
+- 15 files changed: 3 new bridge files, 5 new API routes, 1 new UI component, 6 modified files
+- Full MT5 integration architecture: Bridge (port 3004) ← EA (WebSocket) | Next.js (API routes) ← Bridge (HTTP)
+- Mode switching: Simulation (local SQLite) ↔ MT5 Live (orders via bridge → EA → MT5 Terminal)
+- Push failed: no SSH/HTTPS credentials in sandbox environment. User must push manually.

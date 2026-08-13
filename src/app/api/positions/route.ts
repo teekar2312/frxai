@@ -4,7 +4,7 @@ import type { ForexPair } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
-import { getCurrentMidPrice } from '@/lib/price-fetcher';
+import { getCurrentMidPriceLegacy as getCurrentMidPrice } from '@/lib/price-fetcher';
 import { logApiError } from '@/lib/safe-log';
 
 // GET - Fetch positions (supports ?status=open|closed|cancelled filter)

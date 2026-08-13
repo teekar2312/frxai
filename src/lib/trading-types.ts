@@ -190,6 +190,43 @@ export const MARKET_CONDITION_LABELS: Record<MarketCondition, string> = {
 
 export const TIMEFRAMES = ['M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] as const;
 
+// ============================================================
+// FNH-002: Single source of truth for Finnhub OANDA symbol mapping
+// ============================================================
+export const PAIR_TO_FINNHUB_SYMBOL: Record<ForexPair, string> = {
+  EURUSD: 'OANDA:EUR_USD',
+  USDJPY: 'OANDA:USD_JPY',
+  GBPUSD: 'OANDA:GBP_USD',
+  XAUUSD: 'OANDA:XAU_USD',
+};
+
+// ============================================================
+// FNH-003: Single source of truth for simulated base prices
+// ============================================================
+export const SIMULATED_BASES: Record<ForexPair, { price: number; pipSize: number; volatility: number }> = {
+  EURUSD: { price: 1.0872, pipSize: 0.0001, volatility: 0.0003 },
+  USDJPY: { price: 154.32, pipSize: 0.01, volatility: 0.15 },
+  GBPUSD: { price: 1.2715, pipSize: 0.0001, volatility: 0.0004 },
+  XAUUSD: { price: 2658.50, pipSize: 0.01, volatility: 3.5 },
+};
+
+// ============================================================
+// FNH-019: Single source of truth for resolution → seconds mapping
+// ============================================================
+export const RESOLUTION_TO_SECONDS: Record<string, number> = {
+  '1': 60, '5': 300, M1: 60, M2: 120, M5: 300, M15: 900,
+  M30: 1800, '60': 3600, H1: 3600, H4: 14400, D1: 86400, W1: 604800,
+};
+
+/** Convert resolution alias (M1, H1, etc.) to Finnhub numeric format (1, 60, etc.) */
+export function toFinnhubResolution(resolution: string): string {
+  const map: Record<string, string> = { M1: '1', M2: '2', M5: '5', M15: '15', M30: '30', H1: '60', H4: '240', D1: 'D', W1: 'W' };
+  return map[resolution] || resolution;
+}
+
+/** Get valid Finnhub resolutions for validation */
+export const VALID_FINNHUB_RESOLUTIONS = ['1', '2', '5', '15', '30', '60', '240', 'D', 'W', 'M', 'M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
+
 export const FINEX_CONFIG = {
   leverage: 100,
   spreadPip: 0.5,
@@ -285,6 +322,11 @@ export const OVERLAP_SESSIONS = [
   { name: 'Tokyo - London', startHour: 8, endHour: 9 },
   { name: 'London - New York', startHour: 13, endHour: 17 },
 ];
+
+/** Finnhub free tier: 60 calls/min. With 4 pairs polled every 5s = 48/min. */
+export const FINNHUB_RATE_LIMIT_PER_MIN = 60;
+/** MARKETAUX free tier: 100 requests/day */
+export const MARKETAUX_RATE_LIMIT_PER_DAY = 100;
 
 export const INDICATOR_POOL = [
   'EMA', 'SMA', 'VWAP', 'Supertrend', 'Parabolic SAR', 'RSI', 'Stochastic Oscillator',

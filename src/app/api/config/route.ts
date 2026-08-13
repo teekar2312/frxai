@@ -125,9 +125,10 @@ export async function PUT(request: NextRequest) {
     }
 
     if (typeof updateData.leverage === 'number') {
-      if (![100, 200, 300, 500].includes(updateData.leverage)) {
+      // BAPPEBTI compliance: only allow 1:100 leverage
+      if (updateData.leverage !== 100) {
         return NextResponse.json(
-          { error: 'leverage must be 100, 200, 300, or 500' },
+          { error: 'BAPPEBTI compliance: leverage must be 100 (max 1:100)' },
           { status: 400 }
         );
       }

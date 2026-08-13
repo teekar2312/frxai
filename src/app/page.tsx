@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
-import { Menu, TrendingUp, Wifi, WifiOff, Globe, CircleDot, Cable } from 'lucide-react';
+import { Menu, TrendingUp, Wifi, WifiOff, Globe, CircleDot, Cable, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -24,11 +24,23 @@ import { SettingsPanel } from '@/components/trading/SettingsPanel';
 
 export default function TradingDashboard() {
   const { activeTab, setQuote, setNews, isAutoTrading, tradingMode, mt5ConnectionStatus } = useTradingStore();
-  const [connected, setConnected] = useState(true);
+  const [connected, setConnected] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
   const [priceSourceWarning, setPriceSourceWarning] = useState(false);
+  // FNH-005/MTX-011: Track simulation mode for UI indicator
+  const [isSimulated, setIsSimulated] = useState(true);
+  const [newsSimulated, setNewsSimulated] = useState(true);
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
+  // FNH-012: Pause polling when tab is hidden
+  const [isVisible, setIsVisible] = useState(true);
+
+  // FNH-012: Track tab visibility
+  useEffect(() => {
+    const handler = () => setIsVisible(!document.hidden);
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
 
   // Jakarta timezone clock
   useEffect(() => {
@@ -92,17 +104,22 @@ export default function TradingDashboard() {
           if (data.quotes[pair]) setQuote(pair, data.quotes[pair] as QuoteData);
         });
       }
-      setConnected(true);
+      // FNH-005: Only set connected=true when real data, show simulation mode otherwise
+      const sim = !!data.simulated;
+      setIsSimulated(sim);
+      setConnected(!sim || isMt5Live);
     } catch {
       setConnected(false);
     }
   }, [setQuote, isMt5Live]);
 
+  // FNH-012: Only poll when tab is visible
   useEffect(() => {
     fetchPrices();
+    if (!isVisible) return;
     const interval = setInterval(fetchPrices, 5000);
     return () => clearInterval(interval);
-  }, [fetchPrices]);
+  }, [fetchPrices, isVisible]);
 
   // Fetch news every 60 seconds
   const fetchNews = useCallback(async () => {
@@ -110,18 +127,24 @@ export default function TradingDashboard() {
       const res = await fetch('/api/news');
       if (res.ok) {
         const data = await res.json();
-        if (data.news) setNews(data.news);
+        if (data.news) {
+          setNews(data.news);
+          // MTX-011: Track news data source
+          setNewsSimulated(!!data.simulated);
+        }
       }
     } catch {
       // silent
     }
   }, [setNews]);
 
+  // FNH-012: Only poll news when tab is visible, and less frequently
   useEffect(() => {
     fetchNews();
-    const interval = setInterval(fetchNews, 60000);
+    if (!isVisible) return;
+    const interval = setInterval(fetchNews, 120000); // MTX-001: Reduced from 60s to 120s
     return () => clearInterval(interval);
-  }, [fetchNews]);
+  }, [fetchNews, isVisible]);
 
   // Panel router
   const renderPanel = () => {
@@ -183,6 +206,14 @@ export default function TradingDashboard() {
         <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 text-[10px] text-amber-400/80 text-center">
           ⚠️ Perdagangan berjangka memiliki risiko tinggi. Anda dapat mengalami kerugian melebihi investasi awal. Pastikan Anda memahami risiko sebelum bertransaksi.
         </div>
+
+        {/* FNH-005: Simulation Mode Banner */}
+        {isSimulated && !isMt5Live && (
+          <div className="bg-rose-500/10 border-b border-rose-500/20 px-3 py-1.5 text-[10px] text-rose-400/90 text-center flex items-center justify-center gap-1.5">
+            <AlertTriangle className="w-3 h-3" />
+            MODE SIMULASI — Harga dan data bukan data pasar nyata. Untuk data live, konfigurasi FINNHUB_API_KEY.
+          </div>
+        )}
 
         {/* MT5 Price Fallback Warning (P-03) */}
         {priceSourceWarning && (

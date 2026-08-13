@@ -1,83 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { ForexPair, QuoteData, CandleData } from '@/lib/trading-types';
+import {
+  PAIR_TO_FINNHUB_SYMBOL, FOREX_PAIRS, PAIR_PIP_VALUES, FINEX_CONFIG,
+  SIMULATED_BASES, RESOLUTION_TO_SECONDS, VALID_FINNHUB_RESOLUTIONS,
+  toFinnhubResolution,
+} from '@/lib/trading-types';
+import { refreshAllQuotes, getCachedQuote, isAnySimulated, getCacheAge } from '@/lib/price-cache';
 import { logApiError } from '@/lib/safe-log';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
-
-const PAIR_TO_SYMBOL: Record<ForexPair, string> = {
-  EURUSD: 'OANDA:EUR_USD',
-  USDJPY: 'OANDA:USD_JPY',
-  GBPUSD: 'OANDA:GBP_USD',
-  XAUUSD: 'OANDA:XAU_USD',
-};
-
-interface FinnhubQuote {
-  c: number; h: number; l: number; o: number; pc: number; t: number;
-}
 
 interface FinnhubCandle {
   t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[]; s: string;
 }
 
-// Simulated base prices for when API is not available
-const SIMULATED_BASES: Record<ForexPair, { price: number; pipSize: number; volatility: number }> = {
-  EURUSD: { price: 1.0872, pipSize: 0.0001, volatility: 0.0003 },
-  USDJPY: { price: 154.32, pipSize: 0.01, volatility: 0.15 },
-  GBPUSD: { price: 1.2715, pipSize: 0.0001, volatility: 0.0004 },
-  XAUUSD: { price: 2658.50, pipSize: 0.01, volatility: 3.5 },
-};
-
-// Store simulated state for continuity between refreshes
-let simState: Record<ForexPair, { price: number; prevClose: number; high: number; low: number }> | null = null;
-
-function getSimulatedState() {
-  if (simState) return simState;
-  simState = {
-    EURUSD: { price: 1.0872, prevClose: 1.0865, high: 1.0890, low: 1.0850 },
-    USDJPY: { price: 154.32, prevClose: 154.18, high: 154.55, low: 154.00 },
-    GBPUSD: { price: 1.2715, prevClose: 1.2702, high: 1.2740, low: 1.2690 },
-    XAUUSD: { price: 2658.50, prevClose: 2652.30, high: 2665.00, low: 2645.00 },
-  };
-  return simState;
-}
-
-function generateSimulatedQuotes(): Record<ForexPair, QuoteData> {
-  const state = getSimulatedState();
-  const quotes = {} as Record<ForexPair, QuoteData>;
-  
-  for (const pair of ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'] as ForexPair[]) {
-    const base = SIMULATED_BASES[pair];
-    const s = state[pair];
-    // Random walk with mean reversion
-    const change = (Math.random() - 0.5) * 2 * base.volatility;
-    const meanRevert = (base.price - s.price) * 0.05;
-    s.price = Math.max(s.price + change + meanRevert, s.low);
-    s.high = Math.max(s.high, s.price);
-    s.low = Math.min(s.low, s.price);
-
-    const spread = 0.5 * base.pipSize;
-    quotes[pair] = {
-      pair,
-      bid: parseFloat(s.price.toFixed(5)),
-      ask: parseFloat((s.price + spread).toFixed(5)),
-      mid: parseFloat((s.price + spread / 2).toFixed(5)),
-      spread: 0.5,
-      change: parseFloat((s.price - s.prevClose).toFixed(5)),
-      changePercent: parseFloat((((s.price - s.prevClose) / s.prevClose) * 100).toFixed(4)),
-      high: s.high,
-      low: s.low,
-      timestamp: Date.now(),
+// FNH-015: AbortController timeout for candle fetches
+async function fetchWithTimeout(url: string, timeoutMs = 8000, retries = 2): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const attempt = (tryNum: number) => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      fetch(url, { signal: controller.signal })
+        .then((res) => {
+          clearTimeout(timer);
+          if (res.status === 429 && tryNum < retries) {
+            setTimeout(() => attempt(tryNum + 1), 1000 * (tryNum + 1));
+            return;
+          }
+          resolve(res);
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          if (tryNum < retries) {
+            setTimeout(() => attempt(tryNum + 1), 500 * (tryNum + 1));
+            return;
+          }
+          reject(err);
+        });
     };
-  }
-  return quotes;
+    attempt(0);
+  });
 }
 
+// FNH-011: Simulated candles with time-weighted volume
 function generateSimulatedCandles(pair: ForexPair, count: number): CandleData[] {
   const base = SIMULATED_BASES[pair];
   const candles: CandleData[] = [];
   let price = base.price * (1 - base.volatility * 2);
   const now = Math.floor(Date.now() / 1000);
-  const interval = 300; // 5 min
+  const interval = 300;
 
   for (let i = 0; i < count; i++) {
     const open = price;
@@ -87,7 +59,10 @@ function generateSimulatedCandles(pair: ForexPair, count: number): CandleData[] 
     const close = open + change1 + change2 + change3;
     const high = Math.max(open, close) + Math.random() * base.volatility * 0.5;
     const low = Math.min(open, close) - Math.random() * base.volatility * 0.5;
-    const volume = Math.floor(Math.random() * 5000) + 500;
+    // FNH-018: Time-weighted volume (higher during London/NY sessions)
+    const hour = new Date((now - (count - i) * interval) * 1000).getUTCHours();
+    const sessionMultiplier = (hour >= 7 && hour <= 17) ? 1.5 : 0.6;
+    const volume = Math.floor((Math.random() * 3000 + 500) * sessionMultiplier);
 
     candles.push({
       time: (now - (count - i) * interval) * 1000,
@@ -100,41 +75,6 @@ function generateSimulatedCandles(pair: ForexPair, count: number): CandleData[] 
     price = close;
   }
   return candles;
-}
-
-async function fetchWithRetry(url: string, retries = 2): Promise<Response> {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const res = await fetch(url);
-      if (res.status === 429) {
-        await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
-        continue;
-      }
-      return res;
-    } catch (err) {
-      if (i === retries - 1) throw err;
-      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
-    }
-  }
-  throw new Error('Max retries exceeded');
-}
-
-function normalizeQuote(pair: ForexPair, raw: FinnhubQuote): QuoteData {
-  const bid = raw.c;
-  const pipSize = pair === 'USDJPY' || pair === 'XAUUSD' ? 0.01 : 0.0001;
-  const spread = 0.5 * pipSize;
-  return {
-    pair,
-    bid,
-    ask: bid + spread,
-    mid: bid + spread / 2,
-    spread: parseFloat((spread / pipSize).toFixed(1)),
-    change: parseFloat((raw.c - raw.pc).toFixed(5)),
-    changePercent: parseFloat((((raw.c - raw.pc) / raw.pc) * 100).toFixed(4)),
-    high: raw.h,
-    low: raw.l,
-    timestamp: raw.t * 1000,
-  };
 }
 
 function normalizeCandles(raw: FinnhubCandle): CandleData[] {
@@ -150,6 +90,10 @@ function normalizeCandles(raw: FinnhubCandle): CandleData[] {
 }
 
 export async function GET(request: NextRequest) {
+  // FNH-001: Rate limiting — max 12 req/min (4 pairs × 3 polls, leaves room for alerts)
+  const rateCheck = checkRateLimit(clientIp(request), 'finnhub');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+
   try {
     const apiKey = process.env.FINNHUB_API_KEY;
     const { searchParams } = new URL(request.url);
@@ -158,107 +102,64 @@ export async function GET(request: NextRequest) {
     // Candle data request
     if (type === 'candles') {
       const symbolParam = searchParams.get('symbol') as ForexPair | null;
-      const resolution = searchParams.get('resolution') || 'M5';
-      // H-6: Validate resolution parameter
-      const VALID_RESOLUTIONS = ['1', '5', 'M1', 'M2', 'M5', 'M15', 'M30', '60', 'H1', 'H4', 'D1', 'W1'];
-      if (!VALID_RESOLUTIONS.includes(resolution)) {
-        return NextResponse.json({ error: `Invalid resolution. Must be one of: ${VALID_RESOLUTIONS.join(', ')}` }, { status: 400 });
+      const resolutionParam = searchParams.get('resolution') || 'M5';
+
+      // FNH-014: Validate resolution
+      if (!VALID_FINNHUB_RESOLUTIONS.includes(resolutionParam)) {
+        return NextResponse.json({ error: `Invalid resolution. Must be one of: ${VALID_FINNHUB_RESOLUTIONS.join(', ')}` }, { status: 400 });
       }
       const count = Math.min(Math.max(1, parseInt(searchParams.get('count') || '100', 10)), 5000);
 
-      if (!symbolParam || !PAIR_TO_SYMBOL[symbolParam]) {
+      if (!symbolParam || !PAIR_TO_FINNHUB_SYMBOL[symbolParam]) {
         return NextResponse.json({ error: 'Invalid symbol' }, { status: 400 });
       }
 
-      // Return simulated candles if no API key
+      // Return simulated candles if no API key (FNH-007: consistent fallback)
       if (!apiKey) {
         const candles = generateSimulatedCandles(symbolParam, count);
-        return NextResponse.json({ pair: symbolParam, resolution, count: candles.length, candles, simulated: true });
+        return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles, simulated: true });
       }
 
-      const finnhubSymbol = PAIR_TO_SYMBOL[symbolParam];
+      // FNH-014: Convert alias to Finnhub numeric format
+      const finnhubResolution = toFinnhubResolution(resolutionParam);
+      const finnhubSymbol = PAIR_TO_FINNHUB_SYMBOL[symbolParam];
       const now = Math.floor(Date.now() / 1000);
-      const from = now - count * getResolutionSeconds(resolution);
-      const url = `${FINNHUB_BASE}/stock/candle?symbol=${finnhubSymbol}&resolution=${resolution}&from=${from}&to=${now}&token=${apiKey}`;
+      const from = now - count * (RESOLUTION_TO_SECONDS[resolutionParam] || 300);
+      const url = `${FINNHUB_BASE}/stock/candle?symbol=${finnhubSymbol}&resolution=${finnhubResolution}&from=${from}&to=${now}&token=${apiKey}`;
 
       try {
-        const res = await fetchWithRetry(url);
+        const res = await fetchWithTimeout(url);
         if (!res.ok) {
-          // Fallback to simulated data
           const candles = generateSimulatedCandles(symbolParam, count);
-          return NextResponse.json({ pair: symbolParam, resolution, count: candles.length, candles, simulated: true, fallback: true });
+          return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles, simulated: true, fallback: true });
         }
         const data: FinnhubCandle = await res.json();
         const candles = normalizeCandles(data);
         if (candles.length === 0) {
           const simCandles = generateSimulatedCandles(symbolParam, count);
-          return NextResponse.json({ pair: symbolParam, resolution, count: simCandles.length, candles: simCandles, simulated: true, fallback: true });
+          return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: simCandles.length, candles: simCandles, simulated: true, fallback: true });
         }
-        return NextResponse.json({ pair: symbolParam, resolution, count: candles.length, candles });
+        return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles });
       } catch {
         const candles = generateSimulatedCandles(symbolParam, count);
-        return NextResponse.json({ pair: symbolParam, resolution, count: candles.length, candles, simulated: true, fallback: true });
+        return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles, simulated: true, fallback: true });
       }
     }
 
-    // Default: fetch all forex quotes
-    if (!apiKey) {
-      const quotes = generateSimulatedQuotes();
-      return NextResponse.json({ timestamp: Date.now(), quotes, simulated: true });
-    }
-
-    const pairs: ForexPair[] = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
-    const quotes: Record<ForexPair, QuoteData> = {} as Record<ForexPair, QuoteData>;
-    const errors: string[] = [];
-
-    for (const pair of pairs) {
-      try {
-        const symbol = PAIR_TO_SYMBOL[pair];
-        const url = `${FINNHUB_BASE}/quote?symbol=${symbol}&token=${apiKey}`;
-        const res = await fetchWithRetry(url);
-        if (!res.ok) {
-          errors.push(`${pair}: HTTP ${res.status}`);
-          continue;
-        }
-        const data: FinnhubQuote = await res.json();
-        if (data.c === 0 && data.h === 0 && data.l === 0) {
-          errors.push(`${pair}: No data`);
-          continue;
-        }
-        quotes[pair] = normalizeQuote(pair, data);
-      } catch (err) {
-        errors.push(`${pair}: ${err instanceof Error ? err.message : 'Unknown'}`);
-      }
-      if (pair !== pairs[pairs.length - 1]) {
-        await new Promise((r) => setTimeout(r, 250));
-      }
-    }
-
-    // Fill in missing pairs with simulated data
-    for (const pair of pairs) {
-      if (!quotes[pair]) {
-        const simQuotes = generateSimulatedQuotes();
-        quotes[pair] = simQuotes[pair];
-      }
-    }
+    // Default: fetch all forex quotes via centralized cache (C-001)
+    const { quotes, simulated } = await refreshAllQuotes();
 
     return NextResponse.json({
       timestamp: Date.now(),
       quotes,
-      simulated: Object.keys(quotes).length < pairs.length,
+      simulated,
+      cacheAgeMs: getCacheAge(),
+      anySimulated: isAnySimulated(),
     });
   } catch (error) {
     logApiError('Finnhub', error);
-    // Ultimate fallback
-    const quotes = generateSimulatedQuotes();
+    // Force simulated fallback
+    const { quotes, simulated } = await refreshAllQuotes();
     return NextResponse.json({ timestamp: Date.now(), quotes, simulated: true, error: 'fallback' });
   }
-}
-
-function getResolutionSeconds(resolution: string): number {
-  const map: Record<string, number> = {
-    '1': 60, '5': 300, M1: 60, M2: 120, M5: 300, M15: 900,
-    M30: 1800, '60': 3600, H1: 3600, H4: 14400, D1: 86400, W1: 604800,
-  };
-  return map[resolution] || 300;
 }

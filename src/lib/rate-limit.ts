@@ -33,6 +33,10 @@ const DEFAULT_CONFIGS: Record<string, RateLimitConfig> = {
   analysis: { maxRequests: 5, windowMs: 60_000 },
   // General API: 60 req/min
   general: { maxRequests: 60, windowMs: 60_000 },
+  // FNH-001: Finnhub quotes: 12 req/min (conserves 60/min Finnhub free tier)
+  finnhub: { maxRequests: 12, windowMs: 60_000 },
+  // MTX-001: MARKETAUX news: 3 req/min (conserves 100/day free tier)
+  news: { maxRequests: 3, windowMs: 60_000 },
 };
 
 /**

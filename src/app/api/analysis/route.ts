@@ -84,11 +84,34 @@ export async function POST(request: NextRequest) {
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
-    const { pair, marketData, news } = body as {
+    const { pair, marketData } = body as {
       pair: ForexPair;
       marketData: Record<string, unknown>;
-      news: Array<{ title: string; description: string; impact: string; sentiment: string }>;
+      news?: Array<{ title: string; description: string; impact: string; sentiment: string }>;
     };
+
+    // C-003: Fetch news server-side from DB instead of trusting client data
+    let news = body.news as Array<{ title: string; description: string; impact: string; sentiment: string }> | undefined;
+    if (!news || news.length === 0) {
+      try {
+        const recentNews = await db.newsItem.findMany({
+          where: { pair: pair, publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+          orderBy: { publishedAt: 'desc' },
+          take: 10,
+          select: { title: true, description: true, impact: true, sentiment: true },
+        });
+        if (recentNews.length > 0) {
+          news = recentNews.map(n => ({
+            title: n.title,
+            description: (n.description || '').slice(0, 150),
+            impact: n.impact || 'low',
+            sentiment: n.sentiment || 'neutral',
+          }));
+        }
+      } catch {
+        // Non-critical — continue without news
+      }
+    }
 
     if (!pair || !VALID_PAIRS.includes(pair)) {
       return NextResponse.json(

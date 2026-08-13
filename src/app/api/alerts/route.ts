@@ -5,26 +5,13 @@ import { FOREX_PAIRS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
+import { getCachedQuote } from '@/lib/price-cache';
 
-const PAIR_TO_FINNHUB: Record<ForexPair, string> = {
-  EURUSD: 'OANDA:EUR_USD',
-  USDJPY: 'OANDA:USD_JPY',
-  GBPUSD: 'OANDA:GBP_USD',
-  XAUUSD: 'OANDA:XAU_USD',
-};
-
+// FNH-002/FNH-010/C-001: Use centralized price cache instead of direct Finnhub calls
 async function getCurrentPrice(pair: string): Promise<number | null> {
-  try {
-    const apiKey = process.env.FINNHUB_API_KEY;
-    if (!apiKey) return null;
-    const symbol = PAIR_TO_FINNHUB[pair as ForexPair] || `OANDA:${pair.slice(0, 3)}_${pair.slice(3)}`;
-    const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${apiKey}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.c || null;
-  } catch {
-    return null;
-  }
+  const cached = getCachedQuote(pair as ForexPair);
+  if (cached) return cached.quote.mid;
+  return null;
 }
 
 function checkAlertCondition(

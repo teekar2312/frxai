@@ -1070,3 +1070,114 @@ Stage Summary:
 - 8 CRITICAL, 14 HIGH, 18 MEDIUM findings addressed
 - New file: src/lib/price-cache.ts
 - Committed as fa6d17b
+
+---
+Task ID: 8
+Agent: Main Orchestrator (Post-Fix Re-Audit)
+Task: Deep re-audit of FINNHUB & MARKETAUX integration after all fixes applied
+
+Work Log:
+- Read and analyzed all 12 source files related to FINNHUB/MARKETAUX integration
+- Verified centralized price cache (price-cache.ts), shared constants (trading-types.ts), rate limiting (rate-limit.ts)
+- Traced data flow from Finnhub API → price-cache → finnhub route → frontend → Zustand store
+- Traced data flow from MARKETAUX API → news route → DB cache → frontend → Zustand store
+- Cross-verified: price-fetcher, alerts, analysis, indicators, market-condition, backtest routes
+- Checked for remaining duplications, dead code, API contract violations, edge cases
+
+Stage Summary:
+- Total findings: 18 (0 CRITICAL, 3 HIGH, 9 MEDIUM, 6 LOW)
+- Previous CRITICAL issues (8) all verified as FIXED
+- No new CRITICAL issues found — integration is now structurally sound
+- Remaining issues are code quality and minor correctness improvements
+
+================================================================
+RE-AUDIT REPORT: FINNHUB & MARKETAUX INTEGRATION (POST-FIX)
+================================================================
+
+**Verdict: INTEGRASI SUDAH BENAR — 0 CRITICAL, 3 HIGH perlu perbaikan lanjutan.**
+
+Semua 8 temuan CRITICAL dari audit sebelumnya telah terverifikasi FIXED:
+✅ C-001: Centralized price cache (price-cache.ts, 3s TTL)
+✅ FNH-001: Rate limiting finnhub (12/min)
+✅ MTX-001: Rate limiting news (3/min)
+✅ FNH-002: PAIR_TO_FINNHUB_SYMBOL di trading-types.ts (single source)
+✅ FNH-003: SIMULATED_BASES di trading-types.ts (single source)
+✅ MTX-002: DB cache read-first (5min TTL, >=10 articles threshold)
+✅ FNH-005: Simulation mode banner di frontend
+✅ C-003: Analysis route fetches news server-side from DB
+
+## TEMUAN SISA (18 findings)
+
+### DIMENSI A: ARSITEKTUR & KONSISTENSI (5 Temuan)
+
+| ID | Severity | File | Temuan |
+|---|----------|------|--------|
+| RA-001 | MEDIUM | price-cache.ts:25, finnhub/route.ts:19, backtest/route.ts:38 | `fetchWithTimeout`/`fetchWithRetry` dipindahkan ke 3 file — identik secara logis. Seharusnya satu shared utility di `src/lib/fetch-utils.ts` |
+| RA-002 | MEDIUM | price-fetcher.ts:26 | pipSize dihitung manual `(pair === 'USDJPY' || pair === 'XAUUSD') ? 0.01 : 0.0001` padahal `PAIR_PIP_VALUES[pair]?.pipSize` sudah tersedia dan digunakan di tempat lain |
+| RA-003 | MEDIUM | news/route.ts:138 | DB cache threshold hardcoded `>=10` — jika MARKETAUX hanya mengembalikan 5 artikel (pagi hari, forex sepi), cache tidak pernah terpakai. Seharusnya `>=5` atau proporsional terhadap `limit` param |
+| RA-004 | LOW | finnhub/route.ts:47-78 | `generateSimulatedCandles` di finnhub route dan backtest route hampir identik. Bisa dijadikan shared function (perbedaan hanya `interval=300` vs `3600`) |
+| RA-005 | LOW | news/route.ts:70-113 | `SIMULATED_NEWS` tanggal `2025-01-13..15` sudah basi (8 bulan lalu). Seharusnya menggunakan tanggal dinamis relatif terhadap hari ini |
+
+### DIMENSI B: FINNHUB API CONTRACT (3 Temuan)
+
+| ID | Severity | File | Temuan |
+|---|----------|------|--------|
+| RB-001 | MEDIUM | price-cache.ts:127 | `if (!data.c \\|\\| data.c === 0) continue;` — Finnhub mengembalikan `c=0` saat market tutup (weekend). Ini menyebabkan quote di-skip dan fallback ke simulated padahal data valid (hanya sedang tutup). Seharusnya hanya skip jika `data.c == null` atau `data.s !== 'ok'` |
+| RB-002 | LOW | price-cache.ts:142-144 | `high: data.h \\|\\| lastPrice, low: data.l \\|\\| lastPrice` — Finnhub tidak selalu mengembalikan intraday high/low pada free tier forex. Fallback ke `lastPrice` menyebabkan high===low===mid. Tidak ada mekanisme untuk track session high/low di server-side |
+| RB-003 | LOW | finnhub/route.ts:152-158 | Tidak ada `Cache-Control` header pada response quotes. Finnhub free tier tidak berubah lebih cepat dari 1 detik, tapi browser tidak tahu ini. Menambah `Cache-Control: public, max-age=2` bisa mengurangi unnecessary requests |
+
+### DIMENSI C: MARKETAUX INTEGRATION (4 Temuan)
+
+| ID | Severity | File | Temuan |
+|---|----------|------|--------|
+| RC-001 | HIGH | news/route.ts:174 | `fetch(url.toString())` tanpa `AbortController` timeout. MARKETAUX bisa hang tanpa batas waktu. Finnhub route dan price-cache sudah punya timeout, tapi news route tidak |
+| RC-002 | HIGH | news/route.ts:136-155 | DB cache read-first: query `publishedAt >= cacheExpiry` mengasumsikan semua news terbaru berada di DB. Tapi jika aplikasi restart, cache DB kosong → selalu fetch MARKETAUX. Ini benar secara logika, tapi ada race condition: jika 2 request paralel datang saat cache expired, keduanya akan fetch MARKETAUX (double spend quota). Perlu "cache lock" atau deduplication |
+| RC-003 | MEDIUM | news/route.ts:196 | `category: (article.snippet as string) ? 'forex' : 'general'` — Field MARKETAUX `snippet` bukan field kategori. Seharusnya menggunakan `article.category` atau `article.entities` untuk menentukan kategori |
+| RC-004 | LOW | news/route.ts:169 | `api_token` sebagai query parameter (bukan header). Ini sesuai MARKETAUX docs, tapi API key terekspose di server logs dan browser history. Tidak bisa dihindari (MARKETAUX tidak support header auth), tapi perlu di dokumentasikan |
+
+### DIMENSI D: CROSS-INTEGRATION & DATA FLOW (4 Temuan)
+
+| ID | Severity | File | Temuan |
+|---|----------|------|--------|
+| RD-001 | HIGH | positions/route.ts:364-368 | PnL saat close posisi TIDAK mengurangkan spread. Formula: `pnl = pnlPips * pipValue - existing.commission`. Spread cost hanya diterapkan saat OPEN (entry price di-adjust, line 106-107), tapi saat CLOSE, `closePrice` menggunakan `mid` dari `getCurrentMidPrice`. Seharusnya: close BUY menggunakan `bid`, close SELL menggunakan `ask` — atau setidaknya mengurangkan spread saat close juga |
+| RD-002 | MEDIUM | analysis/route.ts:94 | Client tetap bisa mengirim `news` array dari body dan server akan menggunakannya (line 94: `let news = body.news`). Validasi ada tapi hanya fallback — jika client mengirim news palsu, server mempercayainya. Seharusnya selalu ignore client news dan hanya gunakan server-side DB fetch |
+| RD-003 | MEDIUM | indicators/route.ts:38-42, market-condition/route.ts:13 | Kedua route tetap menerima `candles` dari client. Tidak ada server-side fetch ke Finnhub. Ini membuat indikator bisa dihitung dari candles palsu/manipulasi |
+| RD-004 | LOW | alerts/route.ts:11-15 | `getCachedQuote` mengembalikan null jika cache expired (>3s). Alert check bisa gagal mendeteksi trigger hanya karena cache expired di antara polling interval. Seharusnya ada fallback ke `refreshAllQuotes()` atau `getCurrentMidPrice()` |
+
+### DIMENSI E: CODE QUALITY (2 Temuan)
+
+| ID | Severity | File | Temuan |
+|---|----------|------|--------|
+| RE-001 | MEDIUM | positions/route.ts:397, alerts/route.ts:109, analysis/route.ts:208, page.tsx:95 | 4 lokasi masih menggunakan `console.log`/`console.warn` mentah. Seharusnya menggunakan `safeLog()`/`logApiError()` |
+| RE-002 | LOW | positions/route.ts:30 | TradingPosition.leverage default=500 di Prisma schema (line 30). Meskipun config.leverage=100 digunakan saat create (line 211), posisi lama yang sudah ada di DB tetap leverage=500. Perlu migration |
+
+## RINGKASAN
+
+| Kategori | CRITICAL | HIGH | MEDIUM | LOW | Total |
+|----------|----------|------|--------|-----|-------|
+| Arsitektur & Konsistensi | 0 | 0 | 3 | 2 | 5 |
+| Finnhub API Contract | 0 | 0 | 1 | 2 | 3 |
+| MARKETAUX Integration | 0 | 2 | 1 | 1 | 4 |
+| Cross-Integration | 0 | 1 | 2 | 1 | 4 |
+| Code Quality | 0 | 0 | 1 | 1 | 2 |
+| **TOTAL** | **0** | **3** | **8** | **7** | **18** |
+
+## PRIORITAS PERBAIKAN
+1. **RC-001** [HIGH] — Tambah AbortController timeout ke MARKETAUX fetch
+2. **RC-002** [HIGH] — Cache deduplication untuk mencegah double-spend quota
+3. **RD-001** [HIGH] — Spread deduction saat close posisi (BUY→bid, SELL→ask)
+4. **RA-001** [MEDIUM] — Extract shared fetchWithTimeout utility
+5. **RA-002** [MEDIUM] — Use PAIR_PIP_VALUES in price-fetcher
+6. **RA-003** [MEDIUM] — Lower DB cache threshold
+7. **RB-001** [MEDIUM] — Fix data.c===0 handling untuk market tutup
+8. **RD-002** [MEDIUM] — Ignore client-sent news di analysis route
+9. **RD-003** [MEDIUM] — Server-side candle fetch untuk indicators/market-condition
+10. **RC-003** [MEDIUM] — Fix category mapping dari snippet ke field yang benar
+11. **RE-001** [MEDIUM] — Ganti 4 raw console.* ke safeLog
+12. **RA-004** [LOW] — Shared generateSimulatedCandles
+13. **RA-005** [LOW] — Dynamic dates di SIMULATED_NEWS
+14. **RB-002** [LOW] — Session high/low tracking
+15. **RB-003** [LOW] — Cache-Control header
+16. **RC-004** [LOW] — Dokumentasi api_token exposure
+17. **RD-004** [LOW] — Fallback saat cache expired di alerts
+18. **RE-002** [LOW] — Migration leverage 500→100 di existing positions

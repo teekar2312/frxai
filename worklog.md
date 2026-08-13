@@ -1208,3 +1208,179 @@ Stage Summary:
 - 2 new files: fetch-utils.ts, sim-candles.ts
 - All 18 findings fixed: 3 HIGH, 8 MEDIUM, 7 LOW
 - Note: RD-003 (server-side candles for indicators/market-condition) not implemented — requires significant architectural change, marked as future enhancement
+
+---
+Task ID: AI-AUDIT-1
+Agent: Main Orchestrator
+Task: Deep audit — Verify AI provider integrations (Lokal AI, Groq, OpenAI, Tinyfish.ai, together.ai)
+
+Work Log:
+- Searched entire codebase (src/**, *.ts, *.tsx, *.prisma, .env*, worklog.md, package.json) for references to: groq, openai, tinyfish, together, lokal
+- ZERO matches found — none of the 5 AI providers are mentioned anywhere in the project
+- Analyzed z-ai-web-dev-sdk (v0.0.18) — single-provider SDK that reads config from `.z-ai-config` file, proxies to Z.ai platform's own API endpoint
+- SDK does NOT support multi-provider routing to Groq, OpenAI, Tinyfish, together.ai, or Lokal AI
+- SDK `model` parameter is passed through to request body but there is no UI, configuration, or environment variables for provider selection
+- Audited all files that use AI: only `src/app/api/analysis/route.ts` (lines 130-137) calls `ZAI.create()` + `zai.chat.completions.create()`
+- Checked Prisma schema — no AI provider configuration model exists
+- Checked Settings panel — no AI provider selection UI exists
+- Checked .env file — only contains `DATABASE_URL`, no AI API keys
+- Checked trading-store — no AI provider state management
+- Checked all 11 API routes — none reference any of the 5 providers
+
+Stage Summary:
+- **ALL 5 AI PROVIDERS ARE NOT INTEGRATED** — This is not a bug fix audit; the integrations do not exist at all.
+- The project uses ONLY `z-ai-web-dev-sdk` (Z.ai platform SDK) as a single, opaque AI backend for the analysis feature
+- No provider selection UI, no API key configuration, no database schema, no routing logic exists for any of the requested providers
+- See detailed findings below.
+
+## AI Integration Audit Report
+**Scope:** Lokal AI, Groq, OpenAI, Tinyfish.ai, together.ai  
+**Date:** 2025-06-13  
+**Auditor:** AI-AUDIT-1  
+**Verdict:** ❌ NONE INTEGRATED — 0/5 providers implemented
+
+---
+
+### EXECUTIVE SUMMARY
+
+The user requested a deep audit to verify whether 5 specific AI providers (Lokal AI, Groq, OpenAI, Tinyfish.ai, together.ai) have been correctly integrated into the FINEX Indonesia trading dashboard. After an exhaustive search of every source file, configuration file, database schema, environment variable, dependency manifest, and log entry in the project, the finding is unambiguous:
+
+**None of the 5 AI providers are integrated. Not partially, not incorrectly — they simply do not exist in the codebase.**
+
+The project has exactly ONE AI integration point: the `z-ai-web-dev-sdk` package (v0.0.18), used in a single file (`src/app/api/analysis/route.ts`), which is a proprietary SDK that communicates with the Z.ai platform's own API backend. It does not expose any multi-provider routing capability.
+
+### FINDINGS
+
+---
+#### AI-001: Lokal AI — NOT INTEGRATED [CRITICAL]
+**Severity:** CRITICAL  
+**File:** None (does not exist)  
+**Description:** There is zero reference to "Lokal AI" or "lokal" anywhere in the project. No API key, no endpoint configuration, no SDK import, no routing logic, no UI for selection, no Prisma model for storing provider preference.
+**Impact:** Users cannot use Lokal AI as an analysis provider.  
+**Required:** Full integration needed (API client, env var, config UI, routing logic).
+
+---
+#### AI-002: Groq — NOT INTEGRATED [CRITICAL]
+**Severity:** CRITICAL  
+**File:** None (does not exist)  
+**Description:** There is zero reference to "Groq" or "groq" anywhere in the project. No API key (`GROQ_API_KEY`), no endpoint (`https://api.groq.com/openai/v1`), no SDK import (`groq-sdk`), no model list (`llama-3.3-70b-versatile`, `mixtral-8x7b-32768`, etc.), no UI for selection.
+**Impact:** Users cannot use Groq as an analysis provider.  
+**Required:** Full integration needed (groq-sdk or REST client, env var, config UI, routing logic).
+
+---
+#### AI-003: OpenAI — NOT INTEGRATED [CRITICAL]
+**Severity:** CRITICAL  
+**File:** None (does not exist)  
+**Description:** There is zero reference to "OpenAI" or "openai" anywhere in the project. No API key (`OPENAI_API_KEY`), no endpoint (`https://api.openai.com/v1`), no SDK import (`openai`), no model list (`gpt-4o`, `gpt-4o-mini`, `gpt-3.5-turbo`, etc.), no UI for selection.
+**Impact:** Users cannot use OpenAI as an analysis provider.  
+**Required:** Full integration needed (openai SDK or REST client, env var, config UI, routing logic).
+
+---
+#### AI-004: Tinyfish.ai — NOT INTEGRATED [CRITICAL]
+**Severity:** CRITICAL  
+**File:** None (does not exist)  
+**Description:** There is zero reference to "Tinyfish" or "tinyfish" anywhere in the project. No API key, no endpoint configuration, no SDK import, no model list, no UI for selection.
+**Impact:** Users cannot use Tinyfish.ai as an analysis provider.  
+**Required:** Full integration needed (REST client, env var, config UI, routing logic).
+
+---
+#### AI-005: together.ai — NOT INTEGRATED [CRITICAL]
+**Severity:** CRITICAL  
+**File:** None (does not exist)  
+**Description:** There is zero reference to "together" (AI context) anywhere in the project. No API key (`TOGETHER_API_KEY`), no endpoint (`https://api.together.xyz/v1`), no SDK import, no model list (`meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo`, etc.), no UI for selection.
+**Impact:** Users cannot use together.ai as an analysis provider.  
+**Required:** Full integration needed (REST client, env var, config UI, routing logic).
+
+---
+#### AI-006: No Multi-Provider AI Architecture [CRITICAL]
+**Severity:** CRITICAL  
+**File:** Entire project  
+**Description:** The project has no architectural foundation for multi-provider AI routing. Specifically missing:
+- **AI Provider Abstraction Layer**: No `src/lib/ai-provider.ts` or equivalent that abstracts provider-specific APIs behind a common interface
+- **Provider Configuration Schema**: Prisma schema `TradingConfig` has no `aiProvider`, `aiModel`, or `aiModelId` fields
+- **Provider Selection UI**: Settings panel (`SettingsPanel.tsx`) has no AI provider dropdown or model selector
+- **API Key Management**: `.env` file only has `DATABASE_URL`; no `GROQ_API_KEY`, `OPENAI_API_KEY`, `TOGETHER_API_KEY`, `TINYFISH_API_KEY`, `LOKAL_AI_KEY`
+- **Provider Routing Logic**: `src/app/api/analysis/route.ts` hardcodes `ZAI.create()` with no provider parameter
+- **Fallback/Failover**: No logic to retry with an alternative provider if one fails
+- **Provider Status Indicators**: No UI showing which provider is active or available
+- **Cost Tracking**: No per-provider usage/cost tracking
+**Impact:** The entire multi-provider AI feature is absent from the codebase.  
+**Required:** Complete architectural design and implementation of multi-provider AI system.
+
+---
+#### AI-007: z-ai-web-dev-sdk is Opaque Single-Provider [MEDIUM]
+**Severity:** MEDIUM  
+**File:** `src/app/api/analysis/route.ts:130-137`  
+**Description:** The current AI integration uses `z-ai-web-dev-sdk` (v0.0.18) which:
+- Reads config from `.z-ai-config` file (not `.env`)
+- Connects to a single `baseUrl` endpoint
+- Does not expose any provider selection or model routing
+- Has no TypeScript types for provider-specific features
+- The `model` parameter in `CreateChatCompletionBody` is optional and undocumented in terms of which models are available
+**Impact:** Users have no visibility or control over which AI model processes their trading analysis.  
+**Recommendation:** Either document the Z.ai SDK's model capabilities or implement a proper multi-provider abstraction.
+
+---
+#### AI-008: No AI Provider in Activity Logging [LOW]
+**Severity:** LOW  
+**File:** `src/app/api/analysis/route.ts:209-217`  
+**Description:** When AI analysis is logged to `ActivityLog`, the log entry (`AI analysis completed for ${pair}: ${recommendation}`) does not include which AI provider or model was used. This makes debugging and analytics difficult when multi-provider support is eventually added.
+**Recommendation:** Include `provider` and `model` in activity log metadata when AI analysis is performed.
+
+---
+#### AI-009: AiAnalysis DB Schema Missing Provider Fields [LOW]
+**Severity:** LOW  
+**File:** `prisma/schema.prisma:75-95` (AiAnalysis model)  
+**Description:** The `AiAnalysis` Prisma model stores pair, confidence, recommendation, strategy, indicators, etc. but has no fields for `provider` (which AI service generated this analysis) or `model` (which specific model was used). This data would be essential for comparing provider performance.
+**Recommendation:** Add `provider String?` and `model String?` fields to the AiAnalysis model.
+
+---
+#### AI-010: Frontend Shows Generic "AI Analysis" Label [LOW]
+**Severity:** LOW  
+**File:** `src/components/trading/AiAnalysisPanel.tsx:94`, `src/components/trading/Sidebar.tsx:93`  
+**Description:** The UI labels say "Run AI Analysis" and "AI Analysis" generically. When multi-provider support is implemented, the UI should indicate which provider is being used (e.g., "Run Analysis (Groq Llama 3.1)").
+**Recommendation:** Display active provider/model in the analysis button and panel header.
+
+### AUDIT STATISTICS
+
+| Severity | Count | Finding IDs |
+|----------|-------|-------------|
+| CRITICAL | 6     | AI-001 through AI-006 |
+| MEDIUM   | 1     | AI-007 |
+| LOW      | 3     | AI-008, AI-009, AI-010 |
+| **TOTAL**| **10** | |
+
+### WHAT EXISTS vs. WHAT'S MISSING
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| z-ai-web-dev-sdk usage | ✅ Working | Single provider, used in analysis route |
+| Analysis prompt engineering | ✅ Working | Comprehensive forex analysis prompt |
+| AI response parsing & validation | ✅ Working | JSON extraction, field validation, fallbacks |
+| AI analysis history (DB) | ✅ Working | Stored in AiAnalysis model |
+| Activity logging for AI | ✅ Working | Logged to ActivityLog |
+| Lokal AI integration | ❌ Missing | No code, no config, no UI |
+| Groq integration | ❌ Missing | No code, no config, no UI |
+| OpenAI integration | ❌ Missing | No code, no config, no UI |
+| Tinyfish.ai integration | ❌ Missing | No code, no config, no UI |
+| together.ai integration | ❌ Missing | No code, no config, no UI |
+| AI provider abstraction layer | ❌ Missing | No unified interface for multiple providers |
+| Provider selection UI | ❌ Missing | No dropdown/selector in Settings |
+| API key configuration | ❌ Missing | No env vars or config UI for provider keys |
+| Provider failover/fallback | ❌ Missing | No retry with alternate provider |
+| Provider/model in logs | ❌ Missing | Not tracked in DB or activity logs |
+
+### SEARCH METHODOLOGY
+
+The following comprehensive searches were performed:
+1. `rg -i "groq|openai|tinyfish|together|lokal"` across entire project — 0 matches
+2. `rg "aiProvider|ai_provider|aiModel|ai_model"` — 0 matches in source files
+3. Inspected all 11 API routes — none reference external AI providers
+4. Inspected Prisma schema — no AI provider fields
+5. Inspected `.env` — only `DATABASE_URL` present
+6. Inspected `package.json` — no groq-sdk, openai, together-ai packages
+7. Inspected `z-ai-web-dev-sdk` source — single-endpoint SDK, no multi-provider support
+8. Inspected Settings panel — no AI configuration section
+9. Inspected trading-store — no AI provider state
+10. Searched worklog history — no previous mention of these 5 providers
+

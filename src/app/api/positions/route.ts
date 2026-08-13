@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
-import { PAIR_PIP_VALUES, FINEX_CONFIG } from '@/lib/trading-types';
+import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types';
 
 // GET - Fetch all positions
 export async function GET() {
@@ -50,9 +50,16 @@ export async function POST(request: NextRequest) {
     // L14: entryPrice is optional for simulation (can be fetched from market data)
     let entryPrice: number = body.entryPrice || 0;
 
-    if (!pair || !direction) {
+    // POS-05: Validate pair against allowed list
+    if (!pair || !FOREX_PAIRS.includes(pair as ForexPair)) {
       return NextResponse.json(
-        { error: 'pair and direction are required' },
+        { error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` },
+        { status: 400 }
+      );
+    }
+    if (!direction) {
+      return NextResponse.json(
+        { error: 'direction is required' },
         { status: 400 }
       );
     }
@@ -87,9 +94,55 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // POS-01: Fetch TradingConfig from DB instead of using hardcoded FINEX_CONFIG
+    let config = await db.tradingConfig.findFirst();
+    if (!config) config = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 500, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
+
+    // POS-03: SL/TP directional validation
+    if (stopLoss !== undefined && stopLoss !== null && stopLoss > 0) {
+      if (direction === 'BUY' && stopLoss >= entryPrice) {
+        return NextResponse.json({ error: 'For BUY, stop-loss must be below entry price' }, { status: 400 });
+      }
+      if (direction === 'SELL' && stopLoss <= entryPrice) {
+        return NextResponse.json({ error: 'For SELL, stop-loss must be above entry price' }, { status: 400 });
+      }
+    }
+    if (takeProfit !== undefined && takeProfit !== null && takeProfit > 0) {
+      if (direction === 'BUY' && takeProfit <= entryPrice) {
+        return NextResponse.json({ error: 'For BUY, take-profit must be above entry price' }, { status: 400 });
+      }
+      if (direction === 'SELL' && takeProfit >= entryPrice) {
+        return NextResponse.json({ error: 'For SELL, take-profit must be above entry price' }, { status: 400 });
+      }
+    }
+
+    // POS-04: SL pip range validation
+    const pipConfig = PAIR_PIP_VALUES[pair] || { standard: 10, pipSize: 0.0001 };
+    if (stopLoss && stopLoss > 0) {
+      const slPips = Math.abs(entryPrice - stopLoss) / pipConfig.pipSize;
+      if (slPips < config.stopLossMin) {
+        return NextResponse.json({ error: `Stop-loss too close: ${slPips.toFixed(1)} pips (minimum: ${config.stopLossMin} pips)` }, { status: 400 });
+      }
+      if (slPips > config.stopLossMax) {
+        return NextResponse.json({ error: `Stop-loss too far: ${slPips.toFixed(1)} pips (maximum: ${config.stopLossMax} pips)` }, { status: 400 });
+      }
+    }
+
+    // POS-02: Enforce daily risk limit
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayClosed = await db.tradingPosition.findMany({
+      where: { status: 'closed', closedAt: { gte: todayStart } },
+      select: { pnl: true },
+    });
+    const todayLoss = todayClosed.filter(p => p.pnl < 0).reduce((sum, p) => sum + Math.abs(p.pnl), 0);
+    const dailyRiskAmount = (config.dailyRiskLimit / 100) * config.accountBalance;
+    if (todayLoss >= dailyRiskAmount) {
+      return NextResponse.json({ error: `Daily risk limit reached: $${todayLoss.toFixed(2)} lost of $${dailyRiskAmount.toFixed(2)} max` }, { status: 429 });
+    }
+
     // Calculate lot size based on risk if not provided
     let lotSize = requestedLotSize;
-    const pipConfig = PAIR_PIP_VALUES[pair] || { standard: 10, pipSize: 0.0001 };
 
     if (!lotSize && stopLoss && riskAmount) {
       const slPips = Math.abs(entryPrice - stopLoss) / pipConfig.pipSize;
@@ -111,9 +164,9 @@ export async function POST(request: NextRequest) {
       where: { status: 'open' },
     });
 
-    if (openCount >= FINEX_CONFIG.maxOpenPositions) {
+    if (openCount >= config.maxOpenPositions) {
       return NextResponse.json(
-        { error: `Maximum open positions reached (${FINEX_CONFIG.maxOpenPositions})` },
+        { error: `Maximum open positions reached (${config.maxOpenPositions})` },
         { status: 400 }
       );
     }
@@ -138,8 +191,8 @@ export async function POST(request: NextRequest) {
         strategy: strategy ?? null,
         marketCondition: marketCondition ?? null,
         aiConfidence: aiConfidence ?? null,
-        leverage: FINEX_CONFIG.leverage,
-        commission: FINEX_CONFIG.commissionPerLot * lotSize,
+        leverage: config.leverage,
+        commission: config.commissionPerLot * lotSize,
         status: 'open',
       },
     });
@@ -198,7 +251,24 @@ export async function PUT(request: NextRequest) {
     }
 
     if (action === 'close') {
-      const closePrice = currentPrice || existing.entryPrice;
+      let closePrice = currentPrice || 0;
+      // POS-07: Fetch current market price if not provided
+      if (!closePrice || closePrice === 0) {
+        try {
+          const finnhubRes = await fetch('http://localhost:3000/api/finnhub');
+          if (finnhubRes.ok) {
+            const finnhubData = await finnhubRes.json();
+            const quote = finnhubData.quotes?.[existing.pair as string];
+            if (quote?.mid) closePrice = quote.mid;
+          }
+        } catch { /* fallback below */ }
+      }
+      if (!closePrice || closePrice === 0) {
+        return NextResponse.json(
+          { error: 'currentPrice is required and could not be determined from market data' },
+          { status: 400 }
+        );
+      }
       const pipConfig = PAIR_PIP_VALUES[existing.pair as ForexPair] || { standard: 10, pipSize: 0.0001 };
       const pipValue = pipConfig.standard * existing.lotSize;
       const priceDiff = existing.direction === 'BUY'

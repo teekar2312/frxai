@@ -54,7 +54,7 @@ export async function POST(request: NextRequest) {
     }
 
     const data = await res.json();
-    const isSuccess = res.ok;
+    const isSuccess = res.ok && data.success !== false;
 
     // Activity log for MT5 order
     try {
@@ -120,7 +120,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const data = await res.json();
-    const isSuccess = res.ok;
+    const isSuccess = res.ok && data.success !== false;
 
     // Activity log for MT5 close
     try {
@@ -196,7 +196,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const data = await res.json();
-    const isSuccess = res.ok;
+    const isSuccess = res.ok && data.success !== false;
 
     // Activity log for MT5 modify
     try {

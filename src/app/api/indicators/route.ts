@@ -42,6 +42,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // IND-02: Cap candles array size
+    if (candles.length > 5000) {
+      return NextResponse.json({ error: 'Too many candles (max 5000)' }, { status: 400 });
+    }
+
+    // IND-01: Validate candle structure
+    for (let i = 0; i < Math.min(candles.length, 10); i++) {
+      const c = candles[i];
+      if (typeof c.time !== 'number' || typeof c.open !== 'number' || typeof c.high !== 'number' || typeof c.low !== 'number' || typeof c.close !== 'number' || typeof c.volume !== 'number' || !isFinite(c.open) || !isFinite(c.high) || !isFinite(c.low) || !isFinite(c.close) || c.high < c.low) {
+        return NextResponse.json({ error: `Invalid candle data at index ${i}` }, { status: 400 });
+      }
+    }
+
     const ohlcv: OHLCV[] = candles.map((c) => ({
       time: c.time,
       open: c.open,

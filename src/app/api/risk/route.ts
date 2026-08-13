@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { db } from '@/lib/db';
 import type { ForexPair, RiskCalculation } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES, FINEX_CONFIG } from '@/lib/trading-types';
 
@@ -23,8 +24,29 @@ export async function POST(request: NextRequest) {
       todayRiskUsed?: number;
     };
 
+    // RISK-01/02/03: Use server-side values instead of client-provided
+    let serverConfig = await db.tradingConfig.findFirst();
+    if (!serverConfig) serverConfig = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 500, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
+
+    const serverBalance = serverConfig.accountBalance;
+    const serverPositions = await db.tradingPosition.count({ where: { status: 'open' } });
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayClosed = await db.tradingPosition.findMany({
+      where: { status: 'closed', closedAt: { gte: todayStart } },
+      select: { pnl: true },
+    });
+    const serverTodayRisk = todayClosed.filter(p => p.pnl < 0).reduce((sum, p) => sum + Math.abs(p.pnl), 0);
+
+    // Override client values (client values are only used as fallback if DB is empty)
+    const finalBalance = accountBalance && accountBalance > 0 ? accountBalance : serverBalance;
+    const finalPositions = currentPositions ?? serverPositions;
+    const finalTodayRisk = todayRiskUsed ?? serverTodayRisk;
+    const finalRiskPct = riskPerTrade ?? serverConfig.riskPerTrade;
+    const finalDailyLimit = dailyRiskLimit ?? serverConfig.dailyRiskLimit;
+
     // Validate inputs
-    if (!accountBalance || accountBalance <= 0) {
+    if (!finalBalance || finalBalance <= 0) {
       return NextResponse.json({ error: 'accountBalance must be positive' }, { status: 400 });
     }
     if (!pair || !PAIR_PIP_VALUES[pair]) {
@@ -37,16 +59,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'stopLossPips must be positive' }, { status: 400 });
     }
 
-    const riskPct = riskPerTrade ?? 0.75;
-    const dailyLimit = dailyRiskLimit ?? 2.5;
     const pipConfig = PAIR_PIP_VALUES[pair];
-    const leverage = FINEX_CONFIG.leverage;
+    const leverage = serverConfig.leverage;
 
     // Risk amount in account currency
-    const riskAmount = accountBalance * (riskPct / 100);
+    const riskAmount = finalBalance * (finalRiskPct / 100);
 
     // Remaining daily risk
-    const remainingDailyRisk = Math.max(0, (dailyLimit / 100) * accountBalance - todayRiskUsed);
+    const remainingDailyRisk = Math.max(0, (finalDailyLimit / 100) * finalBalance - finalTodayRisk);
 
     // Check if daily risk limit would be exceeded
     const canTrade = remainingDailyRisk >= riskAmount;
@@ -80,11 +100,11 @@ export async function POST(request: NextRequest) {
     const marginRequired = (lotSize * contractSize * pipConfig.pipSize) / leverage;
 
     // Margin as percentage of account
-    const marginPct = accountBalance > 0 ? (marginRequired / accountBalance) * 100 : 0;
+    const marginPct = finalBalance > 0 ? (marginRequired / finalBalance) * 100 : 0;
 
     const result: RiskCalculation = {
-      accountBalance,
-      riskPerTrade: riskPct,
+      accountBalance: finalBalance,
+      riskPerTrade: finalRiskPct,
       riskAmount: parseFloat(riskAmount.toFixed(2)),
       stopLossPips,
       lotSize,
@@ -92,10 +112,10 @@ export async function POST(request: NextRequest) {
       potentialLoss: parseFloat(potentialLoss.toFixed(2)),
       potentialProfit: parseFloat(potentialProfit.toFixed(2)),
       riskRewardRatio: parseFloat(riskRewardRatio.toFixed(2)),
-      dailyRiskLimit: dailyLimit,
+      dailyRiskLimit: finalDailyLimit,
       remainingDailyRisk: parseFloat(remainingDailyRisk.toFixed(2)),
-      maxPositions: FINEX_CONFIG.maxOpenPositions - currentPositions,
-      currentPositions,
+      maxPositions: serverConfig.maxOpenPositions - finalPositions,
+      currentPositions: finalPositions,
     };
 
     // Additional FINEX-specific information
@@ -104,7 +124,7 @@ export async function POST(request: NextRequest) {
       suggestedTPPips,
       marginRequired: parseFloat(marginRequired.toFixed(2)),
       marginPct: parseFloat(marginPct.toFixed(2)),
-      commission: parseFloat((FINEX_CONFIG.commissionPerLot * lotSize).toFixed(2)),
+      commission: parseFloat((serverConfig.commissionPerLot * lotSize).toFixed(2)),
       leverage,
       marginCallLevel: FINEX_CONFIG.marginCallLevel,
       stopOutLevel: FINEX_CONFIG.stopOutLevel,
@@ -119,14 +139,14 @@ export async function POST(request: NextRequest) {
     if (marginPct > 50) {
       extras.warnings.push(`High margin usage: ${marginPct.toFixed(1)}% of account`);
     }
-    if (currentPositions >= FINEX_CONFIG.maxOpenPositions - 1) {
-      extras.warnings.push(`Near max positions limit: ${currentPositions}/${FINEX_CONFIG.maxOpenPositions}`);
+    if (finalPositions >= serverConfig.maxOpenPositions - 1) {
+      extras.warnings.push(`Near max positions limit: ${finalPositions}/${serverConfig.maxOpenPositions}`);
     }
     if (lotSize === FINEX_CONFIG.maxLotPerOrder) {
       extras.warnings.push(`Lot size capped at maximum: ${FINEX_CONFIG.maxLotPerOrder}`);
     }
     if (lotSize === FINEX_CONFIG.minLot && riskAmount > stopLossPips * pipConfig.standard * FINEX_CONFIG.minLot) {
-      extras.warnings.push(`Lot size at minimum (${FINEX_CONFIG.minLot}) - risk reduced from ${riskPct}%`);
+      extras.warnings.push(`Lot size at minimum (${FINEX_CONFIG.minLot}) - risk reduced from ${finalRiskPct}%`);
     }
 
     return NextResponse.json({

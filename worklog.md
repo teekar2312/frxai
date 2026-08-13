@@ -240,3 +240,52 @@ Stage Summary:
 - All 21 MT5 audit findings are now fully applied (except L3 informational - user compiles .ex5, and M6 - N/A since EA uses HTTP polling)
 - 4 files changed: orders/route.ts, LiveTradingPanel.tsx, Mt5ConnectionPanel.tsx, trading-types.ts
 - Push successful to https://github.com/teekar2312/frxai.git (main)
+---
+Task ID: security-fixes-pos-risk
+Agent: Main Orchestrator
+Task: Apply 6 security fixes to positions and risk API routes
+
+Work Log:
+- **POS-01 CRITICAL**: positions/route.ts POST handler now fetches TradingConfig from DB (with auto-create fallback) instead of using hardcoded FINEX_CONFIG.maxOpenPositions (200), FINEX_CONFIG.leverage (500), and FINEX_CONFIG.commissionPerLot (1). Uses config.maxOpenPositions, config.leverage, and config.commissionPerLot throughout.
+- **POS-02 CRITICAL**: Added daily risk limit enforcement in positions/route.ts POST handler. Calculates today's realized losses from closed positions, compares against (dailyRiskLimit/100)*accountBalance from DB config. Returns 429 if limit reached.
+- **POS-03 HIGH**: Added SL/TP directional validation. BUY: SL must be below entry, TP must be above. SELL: SL must be above entry, TP must be below. Returns 400 with descriptive error.
+- **POS-04 HIGH**: Added SL pip range validation against config.stopLossMin and config.stopLossMax. Calculates pip distance and rejects if too close or too far. Returns 400 with actual pips and limits shown.
+- **POS-05 HIGH**: Replaced truthiness-only pair check with FOREX_PAIRS array validation. Imported FOREX_PAIRS from trading-types. Returns 400 listing all valid pairs if invalid.
+- **RISK-01/02/03 CRITICAL/HIGH**: risk/route.ts now imports db, fetches TradingConfig from DB, and computes server-side values for accountBalance, currentPositions (count of open positions), and todayRiskUsed (sum of today's realized losses). Client-provided values serve as fallback only. Uses serverConfig.leverage and serverConfig.commissionPerLot instead of FINEX_CONFIG. All downstream calculations use final* variables (finalBalance, finalPositions, finalTodayRisk, finalRiskPct, finalDailyLimit). Max positions warnings use serverConfig.maxOpenPositions.
+- ESLint passes clean with zero errors.
+
+Stage Summary:
+- 2 files modified: src/app/api/positions/route.ts, src/app/api/risk/route.ts
+- All 6 security findings applied: 3 Critical, 3 High
+- Positions route: DB-driven config, daily risk limit, SL/TP directional + range validation, pair allowlist
+- Risk route: server-side overrides for all client-controllable risk parameters
+---
+Task ID: batch-fixes-round2
+Agent: Main Orchestrator
+Task: Apply 8 audit fixes across schema, API routes, and lib
+
+Work Log:
+- **SCHEMA-01 HIGH**: Added @@index directives to 6 models in prisma/schema.prisma:
+  - TradingPosition: [status], [pair], [createdAt]
+  - ActivityLog: [createdAt], [category], [pair]
+  - PriceAlert: [isActive, isTriggered]
+  - AiAnalysis: [pair], [createdAt]
+  - NewsItem: [publishedAt], [pair]
+  - BacktestResult: [pair], [createdAt]
+  - Ran db:push successfully, Prisma Client regenerated
+- **FIN-01 HIGH**: Capped candle count parameter in finnhub/route.ts with `Math.min(Math.max(1, ...), 5000)` to prevent unbounded data requests
+- **IND-01/02 MEDIUM**: Added candle array size cap (max 5000) and OHLCV validation (type checks, isFinite checks, high >= low) for first 10 candles in indicators/route.ts
+- **BT-01 HIGH**: Added numeric field validation in backtest/route.ts: stopLossPips (1-500), riskPerTrade (0.1-100), initialBalance (>=100)
+- **BT-05 MEDIUM**: Added backtest date range limit (max 730 days, min 1 day) in backtest/route.ts
+- **LOG-01 MEDIUM**: Fixed page parameter to use `Math.max(1, ...)` with NaN fallback in logs/route.ts
+- **CROSS-03 LOW**: Changed Prisma query logging to conditional (`process.env.NODE_ENV === 'development'`) in db.ts
+- **MT5-02 MEDIUM**: Added `data.success !== false` check to isSuccess in all three MT5 order handlers (POST/DELETE/PATCH) in mt5/orders/route.ts
+- ESLint passes clean with zero errors
+
+Stage Summary:
+- 7 files modified: schema.prisma, finnhub/route.ts, indicators/route.ts, backtest/route.ts, logs/route.ts, db.ts, mt5/orders/route.ts
+- 12 new database indexes created for frequently queried columns
+- Input validation hardened across candle, backtest, and pagination endpoints
+- Prisma query logging now only active in development
+- MT5 bridge response body properly checked for success flag
+- Zero lint errors, db:push successful

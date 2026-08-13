@@ -158,7 +158,7 @@ export async function GET(request: NextRequest) {
     if (type === 'candles') {
       const symbolParam = searchParams.get('symbol') as ForexPair | null;
       const resolution = searchParams.get('resolution') || 'M5';
-      const count = parseInt(searchParams.get('count') || '100', 10);
+      const count = Math.min(Math.max(1, parseInt(searchParams.get('count') || '100', 10)), 5000);
 
       if (!symbolParam || !PAIR_TO_SYMBOL[symbolParam]) {
         return NextResponse.json({ error: 'Invalid symbol' }, { status: 400 });

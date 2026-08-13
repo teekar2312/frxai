@@ -457,6 +457,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // BT-01: Validate numeric fields
+    const { stopLossPips, riskPerTrade, initialBalance, maxPositions: configMaxPositions } = body;
+    if (!stopLossPips || stopLossPips <= 0 || stopLossPips > 500) {
+      return NextResponse.json({ error: 'stopLossPips must be between 1 and 500' }, { status: 400 });
+    }
+    if (!riskPerTrade || riskPerTrade <= 0 || riskPerTrade > 100) {
+      return NextResponse.json({ error: 'riskPerTrade must be between 0.1 and 100' }, { status: 400 });
+    }
+    if (!initialBalance || initialBalance < 100) {
+      return NextResponse.json({ error: 'initialBalance must be at least 100' }, { status: 400 });
+    }
+
+    // BT-05: Limit backtest date range
+    const maxDays = 730; // 2 years
+    const dayDiff = (new Date(config.endDate).getTime() - new Date(config.startDate).getTime()) / (1000 * 60 * 60 * 24);
+    if (dayDiff > maxDays) {
+      return NextResponse.json({ error: `Date range too large (max ${maxDays} days)` }, { status: 400 });
+    }
+    if (dayDiff < 1) {
+      return NextResponse.json({ error: 'Date range must be at least 1 day' }, { status: 400 });
+    }
+
     // Fetch historical candles
     const candles = await fetchHistoricalCandles(
       config.pair,

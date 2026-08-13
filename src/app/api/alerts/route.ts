@@ -72,13 +72,16 @@ export async function GET() {
         const price = priceCache[alert.pair];
         if (price === null) continue;
 
+        // ALR-01: Pass previousPrice (stored as currentPrice) for cross conditions
+        const previousPrice = alert.currentPrice ?? undefined;
+
         // Update current price on alert
         await db.priceAlert.update({
           where: { id: alert.id },
           data: { currentPrice: price },
         });
 
-        if (checkAlertCondition(alert.condition, price, alert.targetPrice)) {
+        if (checkAlertCondition(alert.condition, price, alert.targetPrice, previousPrice)) {
           // Trigger the alert
           await db.priceAlert.update({
             where: { id: alert.id },

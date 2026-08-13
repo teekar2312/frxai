@@ -33,6 +33,10 @@ model TradingPosition {
   closedAt      DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([status])
+  @@index([pair])
+  @@index([createdAt])
 }
 
 model PriceAlert {
@@ -48,6 +52,8 @@ model PriceAlert {
   emailNotify Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  @@index([isActive, isTriggered])
 }
 
 model ActivityLog {
@@ -59,6 +65,10 @@ model ActivityLog {
   pair      String?
   metadata  String?  // JSON string
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([category])
+  @@index([pair])
 }
 
 model AiAnalysis {
@@ -78,6 +88,9 @@ model AiAnalysis {
   lotSize         Float?
   expiresAt       DateTime?
   createdAt       DateTime @default(now())
+
+  @@index([pair])
+  @@index([createdAt])
 }
 
 model BacktestResult {
@@ -104,6 +117,9 @@ model BacktestResult {
   maxConsecutiveLosses Int?
   parameters      String?  // JSON
   createdAt       DateTime @default(now())
+
+  @@index([pair])
+  @@index([createdAt])
 }
 
 model DailyPerformance {
@@ -132,6 +148,9 @@ model NewsItem {
   impact        String?  // high, medium, low
   sentiment     String?  // positive, negative, neutral
   analyzedAt    DateTime @default(now())
+
+  @@index([publishedAt])
+  @@index([pair])
 }
 
 model TradingConfig {

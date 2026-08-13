@@ -69,8 +69,8 @@ export default function TradingDashboard() {
                 spread: spreadPips,
                 change,
                 changePercent,
-                high: prev?.high ?? mid,
-                low: prev?.low ?? mid,
+                high: Math.max(prev?.high ?? mid, mid),
+                low: Math.min(prev?.low ?? mid, mid),
                 timestamp: p.timestamp,
               });
             }
@@ -106,7 +106,7 @@ export default function TradingDashboard() {
       const res = await fetch('/api/news');
       if (res.ok) {
         const data = await res.json();
-        if (data.articles) setNews(data.articles);
+        if (data.news) setNews(data.news);
       }
     } catch {
       // silent

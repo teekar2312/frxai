@@ -89,25 +89,22 @@ export function rsi(data: number[], period: number = 14): number[] {
     losses.push(change < 0 ? -change : 0);
   }
 
+  let smoothGain = 0;
+  let smoothLoss = 0;
+
   for (let i = 0; i < gains.length; i++) {
     if (i < period - 1) { result.push(NaN); continue; }
     if (i === period - 1) {
-      const avgGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
-      const avgLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
-      if (avgLoss === 0) { result.push(100); continue; }
-      const rs = avgGain / avgLoss;
-      result.push(100 - 100 / (1 + rs));
-      continue;
+      // Seed: simple average of first `period` values
+      smoothGain = gains.slice(0, period).reduce((a, b) => a + b, 0) / period;
+      smoothLoss = losses.slice(0, period).reduce((a, b) => a + b, 0) / period;
+    } else {
+      // Wilder's EMA smoothing
+      smoothGain = (smoothGain * (period - 1) + gains[i]) / period;
+      smoothLoss = (smoothLoss * (period - 1) + losses[i]) / period;
     }
-    const prevIdx = result.length - 1;
-    const prevRSI = result[prevIdx];
-    const prevAvgGain = (100 / (100 - prevRSI) - 1) > 0 ? gains[i - 1] : 0;
-    const currentGain = (prevAvgGain * (period - 1) + gains[i]) / period;
-    const currentLoss = (losses[i] + (i >= period ? 0 : 0)) / period;
-    const avgGain = gains.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
-    const avgLoss = losses.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0) / period;
-    if (avgLoss === 0) { result.push(100); continue; }
-    const rs = avgGain / avgLoss;
+    if (smoothLoss === 0) { result.push(100); continue; }
+    const rs = smoothGain / smoothLoss;
     result.push(100 - 100 / (1 + rs));
   }
   return [NaN, ...result];

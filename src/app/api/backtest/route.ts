@@ -462,7 +462,7 @@ export async function POST(request: NextRequest) {
     if (!stopLossPips || stopLossPips <= 0 || stopLossPips > 500) {
       return NextResponse.json({ error: 'stopLossPips must be between 1 and 500' }, { status: 400 });
     }
-    if (!riskPerTrade || riskPerTrade <= 0 || riskPerTrade > 100) {
+    if (typeof riskPerTrade !== 'number' || riskPerTrade < 0.1 || riskPerTrade > 100) {
       return NextResponse.json({ error: 'riskPerTrade must be between 0.1 and 100' }, { status: 400 });
     }
     if (!initialBalance || initialBalance < 100) {
@@ -559,6 +559,42 @@ export async function POST(request: NextRequest) {
     console.error('[Backtest API] Error:', error);
     return NextResponse.json(
       { error: 'Backtest failed', details: error instanceof Error ? error.message : 'Unknown' },
+      { status: 500 }
+    );
+  }
+}
+
+// GET - Fetch backtest history
+export async function GET() {
+  try {
+    const results = await db.backtestResult.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    return NextResponse.json({ results });
+  } catch (error) {
+    console.error('[Backtest GET] Error:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch backtest results', details: error instanceof Error ? error.message : 'Unknown' },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE - Delete a backtest result
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const id = searchParams.get('id');
+    if (!id) {
+      return NextResponse.json({ error: 'id query parameter is required' }, { status: 400 });
+    }
+    await db.backtestResult.delete({ where: { id } });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error('[Backtest DELETE] Error:', error);
+    return NextResponse.json(
+      { error: 'Failed to delete backtest result', details: error instanceof Error ? error.message : 'Unknown' },
       { status: 500 }
     );
   }

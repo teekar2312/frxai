@@ -55,12 +55,13 @@ export interface PriceAlert {
 export interface TradingConfig {
   id: string;
   riskPerTrade: number;
-  slMinPips: number;
-  slMaxPips: number;
+  stopLossMin: number;
+  stopLossMax: number;
   riskRewardRatio: number;
-  maxPositions: number;
+  maxOpenPositions: number;
   dailyRiskLimit: number;
-  dailyTarget: number;
+  dailyTargetMin: number;
+  dailyTargetMax: number;
   leverage: number;
   spreadPip: number;
   commissionPerLot: number;
@@ -70,6 +71,7 @@ export interface TradingConfig {
   autoTrailingStop: boolean;
   trailingStopPips: number;
   avoidNewsTrading: boolean;
+  accountBalance: number;
 }
 
 export interface EquityPoint {

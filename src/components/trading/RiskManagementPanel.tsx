@@ -16,6 +16,9 @@ import {
   type RiskCalculation, type ForexPair,
   FOREX_PAIRS, PAIR_DISPLAY, FINEX_CONFIG,
 } from '@/lib/trading-types';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 import { useTradingStore } from '@/lib/trading-store';
 import { type Position } from './shared';
 
@@ -24,7 +27,7 @@ export function RiskManagementPanel() {
 
   const [positions, setPositions] = useState<Position[]>([]);
   const [riskCalc, setRiskCalc] = useState<RiskCalculation | null>(null);
-  const [riskForm, setRiskForm] = useState({ balance: 10000, riskPct: 1, slPips: 10 });
+  const [riskForm, setRiskForm] = useState({ accountBalance: 10000, pair: 'EURUSD' as ForexPair, stopLossPips: 10, riskPerTrade: 1 });
 
   // Fetch positions
   useEffect(() => {
@@ -54,7 +57,9 @@ export function RiskManagementPanel() {
       });
       if (res.ok) {
         const data = await res.json();
-        setRiskCalc(data as RiskCalculation);
+        if (data.success && data.risk) {
+          setRiskCalc(data.risk as RiskCalculation);
+        }
       }
     } catch {
       toast.error('Risk calculation failed');
@@ -72,23 +77,34 @@ export function RiskManagementPanel() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0 space-y-4">
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="space-y-2">
+                <Label className="text-zinc-400 text-xs">Pair</Label>
+                <Select value={riskForm.pair} onValueChange={(v) => setRiskForm(f => ({ ...f, pair: v as ForexPair }))}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    {FOREX_PAIRS.map(p => <SelectItem key={p} value={p} className="text-zinc-200">{PAIR_DISPLAY[p]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label className="text-zinc-400 text-xs">Balance ($)</Label>
-                <Input type="number" value={riskForm.balance}
-                  onChange={(e) => setRiskForm(f => ({ ...f, balance: parseFloat(e.target.value) || 0 }))}
+                <Input type="number" value={riskForm.accountBalance}
+                  onChange={(e) => setRiskForm(f => ({ ...f, accountBalance: parseFloat(e.target.value) || 0 }))}
                   className="bg-zinc-800 border-zinc-700 text-white" />
               </div>
               <div className="space-y-2">
                 <Label className="text-zinc-400 text-xs">Risk %</Label>
-                <Input type="number" step="0.1" value={riskForm.riskPct}
-                  onChange={(e) => setRiskForm(f => ({ ...f, riskPct: parseFloat(e.target.value) || 0 }))}
+                <Input type="number" step="0.1" value={riskForm.riskPerTrade}
+                  onChange={(e) => setRiskForm(f => ({ ...f, riskPerTrade: parseFloat(e.target.value) || 0 }))}
                   className="bg-zinc-800 border-zinc-700 text-white" />
               </div>
               <div className="space-y-2">
                 <Label className="text-zinc-400 text-xs">SL (pips)</Label>
-                <Input type="number" value={riskForm.slPips}
-                  onChange={(e) => setRiskForm(f => ({ ...f, slPips: parseInt(e.target.value) || 0 }))}
+                <Input type="number" value={riskForm.stopLossPips}
+                  onChange={(e) => setRiskForm(f => ({ ...f, stopLossPips: parseInt(e.target.value) || 0 }))}
                   className="bg-zinc-800 border-zinc-700 text-white" />
               </div>
             </div>

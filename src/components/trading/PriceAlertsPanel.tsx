@@ -92,7 +92,7 @@ export function PriceAlertsPanel() {
     try {
       await fetch(`/api/alerts?id=${id}`, { method: 'DELETE' });
       toast.success('Alert deleted');
-      fetchAlerts();
+      refreshAlerts();
     } catch {
       toast.error('Failed to delete alert');
     }
@@ -106,7 +106,7 @@ export function PriceAlertsPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, isActive }),
       });
-      fetchAlerts();
+      refreshAlerts();
     } catch {
       toast.error('Failed to toggle alert');
     }

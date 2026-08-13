@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
+import { FOREX_PAIRS } from '@/lib/trading-types';
 
 const PAIR_TO_FINNHUB: Record<ForexPair, string> = {
   EURUSD: 'OANDA:EUR_USD',
@@ -152,7 +153,13 @@ export async function POST(request: NextRequest) {
       emailNotify?: boolean;
     };
 
-    if (!pair || !condition || !targetPrice) {
+    if (!pair || !FOREX_PAIRS.includes(pair as ForexPair)) {
+      return NextResponse.json(
+        { error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` },
+        { status: 400 }
+      );
+    }
+    if (!condition || !targetPrice) {
       return NextResponse.json(
         { error: 'pair, condition, and targetPrice are required' },
         { status: 400 }

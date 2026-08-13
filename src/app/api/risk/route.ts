@@ -38,10 +38,10 @@ export async function POST(request: NextRequest) {
     });
     const serverTodayRisk = todayClosed.filter(p => p.pnl < 0).reduce((sum, p) => sum + Math.abs(p.pnl), 0);
 
-    // Override client values (client values are only used as fallback if DB is empty)
-    const finalBalance = accountBalance && accountBalance > 0 ? accountBalance : serverBalance;
-    const finalPositions = currentPositions ?? serverPositions;
-    const finalTodayRisk = todayRiskUsed ?? serverTodayRisk;
+    // Server-side values ALWAYS take priority; client values only used as fallback when DB is empty
+    const finalBalance = serverBalance > 0 ? serverBalance : (accountBalance && accountBalance > 0 ? accountBalance : serverBalance);
+    const finalPositions = serverPositions;
+    const finalTodayRisk = serverTodayRisk;
     const finalRiskPct = riskPerTrade ?? serverConfig.riskPerTrade;
     const finalDailyLimit = dailyRiskLimit ?? serverConfig.dailyRiskLimit;
 

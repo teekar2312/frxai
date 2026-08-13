@@ -146,14 +146,14 @@ export function SettingsPanel() {
                 </div>
                 <div className="flex items-center justify-between">
                   <Label className="text-zinc-300 text-xs">SL Min (pips)</Label>
-                  <Input type="number" value={config.slMinPips}
-                    onChange={(e) => updateConfig('slMinPips', parseInt(e.target.value) || 5)}
+                  <Input type="number" value={config.stopLossMin}
+                    onChange={(e) => updateConfig('stopLossMin', parseInt(e.target.value) || 5)}
                     className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
                 </div>
                 <div className="flex items-center justify-between">
                   <Label className="text-zinc-300 text-xs">SL Max (pips)</Label>
-                  <Input type="number" value={config.slMaxPips}
-                    onChange={(e) => updateConfig('slMaxPips', parseInt(e.target.value) || 15)}
+                  <Input type="number" value={config.stopLossMax}
+                    onChange={(e) => updateConfig('stopLossMax', parseInt(e.target.value) || 15)}
                     className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
                 </div>
                 <div className="flex items-center justify-between">
@@ -164,8 +164,8 @@ export function SettingsPanel() {
                 </div>
                 <div className="flex items-center justify-between">
                   <Label className="text-zinc-300 text-xs">Max Positions</Label>
-                  <Input type="number" value={config.maxPositions}
-                    onChange={(e) => updateConfig('maxPositions', parseInt(e.target.value) || 3)}
+                  <Input type="number" value={config.maxOpenPositions}
+                    onChange={(e) => updateConfig('maxOpenPositions', parseInt(e.target.value) || 3)}
                     className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
                 </div>
                 <div className="flex items-center justify-between">
@@ -175,9 +175,15 @@ export function SettingsPanel() {
                     className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Label className="text-zinc-300 text-xs">Daily Target (%)</Label>
-                  <Input type="number" step="0.1" value={config.dailyTarget}
-                    onChange={(e) => updateConfig('dailyTarget', parseFloat(e.target.value) || 2)}
+                  <Label className="text-zinc-300 text-xs">Daily Target Min (%)</Label>
+                  <Input type="number" step="0.1" value={config.dailyTargetMin}
+                    onChange={(e) => updateConfig('dailyTargetMin', parseFloat(e.target.value) || 1)}
+                    className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label className="text-zinc-300 text-xs">Daily Target Max (%)</Label>
+                  <Input type="number" step="0.1" value={config.dailyTargetMax}
+                    onChange={(e) => updateConfig('dailyTargetMax', parseFloat(e.target.value) || 3)}
                     className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
                 </div>
               </div>

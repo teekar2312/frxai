@@ -3,10 +3,14 @@ import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types';
 
-// GET - Fetch all positions
-export async function GET() {
+// GET - Fetch positions (supports ?status=open|closed|cancelled filter)
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const status = searchParams.get('status');
+    const where = status ? { status: status as 'open' | 'closed' | 'cancelled' } : {};
     const positions = await db.tradingPosition.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
     });
 
@@ -112,7 +116,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'For BUY, take-profit must be above entry price' }, { status: 400 });
       }
       if (direction === 'SELL' && takeProfit >= entryPrice) {
-        return NextResponse.json({ error: 'For SELL, take-profit must be above entry price' }, { status: 400 });
+        return NextResponse.json({ error: 'For SELL, take-profit must be below entry price' }, { status: 400 });
       }
     }
 

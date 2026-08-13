@@ -1,0 +1,62 @@
+# Dependencies
+node_modules
+
+# Build output
+.next
+out
+
+# Development
+.devcontainer
+.vscode
+
+# Database
+db/*.db
+db/*.db-journal
+
+# Environment (use Docker secrets or env in compose)
+.env
+.env.local
+.env.production
+
+# Git
+git
+.git
+.gitignore
+
+# Tool artifacts
+tool-results
+agent-ctx
+worklog.md
+
+# Screenshots & images
+screenshot-*.png
+ss-*.png
+*.png
+!public/*.svg
+
+# Tests & examples
+tests
+examples
+skills
+
+# Mini-services (deployed separately)
+mini-services
+
+# Download artifacts
+download
+
+# Misc
+*.md
+!SECURITY.md
+SECURITY.md
+.DS_Store
+Thumbs.db
+*.log
+dev.log
+server.log
+Caddyfile
+postcss.config.mjs
+tailwind.config.ts
+components.json
+bun.lock
+package-lock.json

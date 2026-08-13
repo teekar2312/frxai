@@ -260,7 +260,7 @@ export async function PATCH(request: NextRequest) {
 
     // Activity log for MT5 modify
     try {
-      const parts = [];
+      const parts: string[] = [];
       if (stopLoss !== undefined) parts.push(`SL=${stopLoss}`);
       if (takeProfit !== undefined) parts.push(`TP=${takeProfit}`);
       const detailStr = parts.length > 0 ? ` ${parts.join(' ')}` : '';

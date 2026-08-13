@@ -183,7 +183,6 @@ async function fetchAndCacheNews(limit: number): Promise<void> {
               sentiment: determineSentiment(`${title} ${description}`),
             };
           }),
-          skipDuplicates: true,
         });
       }
 
@@ -231,7 +230,7 @@ export async function GET(request: NextRequest) {
         take: 50,
       });
       const news: NewsArticle[] = cachedNews.map(item => ({
-        id: item.id, title: item.title, description: item.description,
+        id: item.id, title: item.title, description: item.description || '',
         url: item.url || '', source: item.source, publishedAt: item.publishedAt?.toISOString() || '',
         category: item.category || 'forex', impact: (item.impact as 'high' | 'medium' | 'low') || 'low',
         sentiment: (item.sentiment as 'positive' | 'negative' | 'neutral') || 'neutral',

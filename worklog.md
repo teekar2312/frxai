@@ -1510,3 +1510,35 @@ Stage Summary:
 - All AI-related TypeScript compilation errors now resolved
 - Pre-existing non-AI TS errors remain (documented but out of scope)
 - All 10 original audit findings (AI-001~AI-010) verified as correctly implemented
+
+---
+Task ID: PROD-1
+Agent: Main Orchestrator
+Task: Prepare project for production
+
+Work Log:
+- Fixed all 8 TypeScript compilation errors in src/:
+  - mt5/orders/route.ts: typed `parts` as `string[]`
+  - news/route.ts: removed unsupported `skipDuplicates` (SQLite), fixed nullable `description`
+  - TradingSignalsPanel.tsx: typed `riskWarning` as `string[]`, replaced `title` prop with Tooltip components
+- Created .env.example with all 14 required env vars documented
+- Created security middleware (src/middleware.ts):
+  - X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy
+  - Permissions-Policy, Strict-Transport-Security (production only)
+  - Content-Security-Policy, route guard (non-API paths redirect to /)
+- Created /api/health endpoint with DB + AI provider availability checks
+- Created not-found.tsx (404 page) and loading.tsx (loading spinner)
+- Created Dockerfile (multi-stage, non-root user, standalone output)
+- Created .dockerignore (excludes dev artifacts, node_modules, db files)
+- Created docker-compose.yml (app + optional MT5 bridge service, healthcheck)
+- Updated next.config.ts (poweredByHeader:false, compress:true, image formats)
+- Updated .gitignore (tool-results/, agent-ctx/, screenshots, db files, .env.example kept)
+- Updated .env with API_SECRET_KEY, FINNHUB_API_KEY, MARKETAUX_API_KEY
+- Removed tool-results/ and screenshots from git tracking
+
+Stage Summary:
+- 0 TypeScript errors in src/
+- ESLint clean
+- Health check returns 200 with DB + AI provider status
+- All new production files created
+- Ready for Docker deployment

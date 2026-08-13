@@ -6,6 +6,7 @@ import { Zap, RefreshCw, ArrowUpCircle, ArrowDownCircle, Play, CheckCircle2, XCi
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -115,7 +116,7 @@ export function TradingSignalsPanel() {
         if (isMt5Live) {
           const currentMt5Positions = mt5Positions.length;
           const totalRiskAmount = eligible.reduce((sum, s) => sum + (Math.abs(s.entryPrice - s.stopLoss) * s.lotSize * 10000), 0);
-          const riskWarning = [];
+          const riskWarning: string[] = [];
 
           if (currentMt5Positions + eligible.length > 50) {
             riskWarning.push(`${currentMt5Positions + eligible.length} total positions (current: ${currentMt5Positions} + new: ${eligible.length})`);
@@ -290,9 +291,9 @@ export function TradingSignalsPanel() {
                   <div className="flex items-center gap-1.5">
                     {autoResult && (
                       autoResult.success ? (
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" title={autoResult.ticket ? `Ticket #${autoResult.ticket}` : 'Executed'} />
+                        <TooltipProvider><Tooltip><TooltipTrigger asChild><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /></TooltipTrigger><TooltipContent className="text-xs">{autoResult.ticket ? `Ticket #${autoResult.ticket}` : 'Executed'}</TooltipContent></Tooltip></TooltipProvider>
                       ) : (
-                        <XCircle className="w-3.5 h-3.5 text-rose-400" title={autoResult.error || 'Failed'} />
+                        <TooltipProvider><Tooltip><TooltipTrigger asChild><XCircle className="w-3.5 h-3.5 text-rose-400" /></TooltipTrigger><TooltipContent className="text-xs">{autoResult.error || 'Failed'}</TooltipContent></Tooltip></TooltipProvider>
                       )
                     )}
                     <Badge variant="outline" className={`text-[10px] border-zinc-700 ${signal.confidence >= AUTO_TRADE_CONFIDENCE_THRESHOLD && isAutoTrading ? 'text-emerald-400 border-emerald-500/30' : 'text-zinc-400'}`}>

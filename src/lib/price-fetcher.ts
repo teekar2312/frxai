@@ -23,7 +23,8 @@ export async function getCurrentPrice(pair: string): Promise<PriceQuote | null> 
   if (!result) return null;
 
   const mid = result.mid;
-  const pipSize = (pair === 'USDJPY' || pair === 'XAUUSD') ? 0.01 : 0.0001;
+  // RA-002: Use PAIR_PIP_VALUES instead of hardcoded pipSize
+  const pipSize = PAIR_PIP_VALUES[pair as ForexPair]?.pipSize ?? 0.0001;
   const spread = FINEX_CONFIG.spreadPip * pipSize; // C-007: use config spread
 
   return {

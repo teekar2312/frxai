@@ -7,6 +7,7 @@
 
 import type { ForexPair, QuoteData } from './trading-types';
 import { PAIR_TO_FINNHUB_SYMBOL, PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS, SIMULATED_BASES } from './trading-types';
+import { fetchWithTimeout } from './fetch-utils';
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 const CACHE_TTL_MS = 3000; // 3 seconds
@@ -21,32 +22,16 @@ const cache = new Map<ForexPair, CacheEntry>();
 let lastFetchAllAt = 0;
 let isFetchingAll = false;
 
-// FNH-015: AbortController timeout
-function fetchWithTimeout(url: string, timeoutMs = 5000, retries = 2): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const attempt = (tryNum: number) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      fetch(url, { signal: controller.signal })
-        .then((res) => {
-          clearTimeout(timer);
-          if (res.status === 429 && tryNum < retries) {
-            setTimeout(() => attempt(tryNum + 1), 1000 * (tryNum + 1));
-            return;
-          }
-          resolve(res);
-        })
-        .catch((err) => {
-          clearTimeout(timer);
-          if (tryNum < retries) {
-            setTimeout(() => attempt(tryNum + 1), 500 * (tryNum + 1));
-            return;
-          }
-          reject(err);
-        });
-    };
-    attempt(0);
-  });
+// RB-002: Track session high/low per pair
+const sessionHighLow = new Map<ForexPair, { high: number; low: number; date: string }>();
+
+function getSessionHL(pair: ForexPair): { high: number; low: number } {
+  const today = new Date().toISOString().slice(0, 10);
+  const entry = sessionHighLow.get(pair);
+  if (entry && entry.date === today) return { high: entry.high, low: entry.low };
+  const hl = { high: 0, low: Infinity, date: today };
+  sessionHighLow.set(pair, hl);
+  return hl;
 }
 
 // FNH-011: Simulated state with daily reset
@@ -124,12 +109,21 @@ export async function refreshAllQuotes(): Promise<{ quotes: Record<ForexPair, Qu
       const res = await fetchWithTimeout(url);
       if (!res.ok) continue;
       const data = await res.json();
-      if (!data.c || data.c === 0) continue;
+
+      // RB-001: data.c can be 0 when market is closed (weekend) — still valid
+      if (data.c == null) continue;
 
       // FNH-006: data.c is the last/mid price, NOT bid
       const lastPrice = data.c;
       const pipSize = PAIR_PIP_VALUES[pair]?.pipSize ?? 0.0001;
       const spread = FINEX_CONFIG.spreadPip * pipSize; // C-007: use config spread
+
+      // RB-002: Track session high/low
+      const hl = getSessionHL(pair);
+      if (data.h != null && data.h > 0) hl.high = Math.max(hl.high, data.h);
+      else hl.high = Math.max(hl.high, lastPrice);
+      if (data.l != null && data.l > 0) hl.low = Math.min(hl.low, data.l);
+      else hl.low = Math.min(hl.low, lastPrice);
 
       const quote: QuoteData = {
         pair,
@@ -139,8 +133,8 @@ export async function refreshAllQuotes(): Promise<{ quotes: Record<ForexPair, Qu
         spread: FINEX_CONFIG.spreadPip,
         change: parseFloat((data.c - (data.pc || data.c)).toFixed(5)),
         changePercent: data.pc ? parseFloat((((data.c - data.pc) / data.pc) * 100).toFixed(4)) : 0,
-        high: data.h || lastPrice,
-        low: data.l || lastPrice,
+        high: hl.high,
+        low: hl.low,
         timestamp: (data.t || Math.floor(Date.now() / 1000)) * 1000,
       };
       cache.set(pair, { quote, fetchedAt: Date.now(), simulated: false });
@@ -180,7 +174,7 @@ export function getCachedQuote(pair: ForexPair): { quote: QuoteData; simulated: 
 }
 
 /**
- * Get the current mid price for a pair (for position calculations).
+ * Get the current mid/bid/ask for a pair (for position calculations).
  * C-001: Uses centralized cache. Falls back to direct fetch then simulated.
  */
 export async function getCurrentMidPrice(pair: string): Promise<{ mid: number; simulated: boolean } | null> {
@@ -196,7 +190,8 @@ export async function getCurrentMidPrice(pair: string): Promise<{ mid: number; s
       const res = await fetchWithTimeout(`${FINNHUB_BASE}/quote?symbol=${symbol}&token=${apiKey}`);
       if (res.ok) {
         const data = await res.json();
-        if (data.c && data.c > 0) {
+        // RB-001: allow c=0 (market closed)
+        if (data.c != null) {
           return { mid: data.c, simulated: false };
         }
       }
@@ -215,6 +210,27 @@ export async function getCurrentMidPrice(pair: string): Promise<{ mid: number; s
   const meanRevert = (base.price - s.price) * 0.05;
   s.price = s.price + change + meanRevert;
   return { mid: s.price, simulated: true };
+}
+
+/** Get current bid or ask for a pair (RD-001: spread-aware pricing) */
+export async function getCurrentBidAsk(pair: string, direction: 'BUY' | 'SELL'): Promise<{ price: number; simulated: boolean } | null> {
+  const cached = getCachedQuote(pair as ForexPair);
+  if (cached) {
+    // BUY → ask, SELL → bid
+    const price = direction === 'BUY' ? cached.quote.ask : cached.quote.bid;
+    return { price, simulated: cached.simulated };
+  }
+
+  // Direct fetch fallback
+  const mid = await getCurrentMidPrice(pair);
+  if (!mid) return null;
+
+  const pipSize = (pair as ForexPair === 'USDJPY' || pair as ForexPair === 'XAUUSD') ? 0.01 : 0.0001;
+  const spread = FINEX_CONFIG.spreadPip * pipSize;
+  const price = direction === 'BUY'
+    ? mid.mid + spread / 2  // ask
+    : mid.mid - spread / 2;  // bid
+  return { price, simulated: mid.simulated };
 }
 
 /** Check if any cached data is simulated */

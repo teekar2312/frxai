@@ -27,7 +27,7 @@ model TradingPosition {
   strategy      String?
   marketCondition String?
   aiConfidence  Float?
-  leverage      Int      @default(500)
+  leverage      Int      @default(100)
   commission    Float    @default(1)
   openedAt      DateTime @default(now())
   closedAt      DateTime?

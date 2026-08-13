@@ -6,6 +6,8 @@ import {
   toFinnhubResolution,
 } from '@/lib/trading-types';
 import { refreshAllQuotes, getCachedQuote, isAnySimulated, getCacheAge } from '@/lib/price-cache';
+import { fetchWithTimeout } from '@/lib/fetch-utils';
+import { generateSimulatedCandles } from '@/lib/sim-candles';
 import { logApiError } from '@/lib/safe-log';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 
@@ -13,68 +15,6 @@ const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 
 interface FinnhubCandle {
   t: number[]; o: number[]; h: number[]; l: number[]; c: number[]; v: number[]; s: string;
-}
-
-// FNH-015: AbortController timeout for candle fetches
-async function fetchWithTimeout(url: string, timeoutMs = 8000, retries = 2): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const attempt = (tryNum: number) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      fetch(url, { signal: controller.signal })
-        .then((res) => {
-          clearTimeout(timer);
-          if (res.status === 429 && tryNum < retries) {
-            setTimeout(() => attempt(tryNum + 1), 1000 * (tryNum + 1));
-            return;
-          }
-          resolve(res);
-        })
-        .catch((err) => {
-          clearTimeout(timer);
-          if (tryNum < retries) {
-            setTimeout(() => attempt(tryNum + 1), 500 * (tryNum + 1));
-            return;
-          }
-          reject(err);
-        });
-    };
-    attempt(0);
-  });
-}
-
-// FNH-011: Simulated candles with time-weighted volume
-function generateSimulatedCandles(pair: ForexPair, count: number): CandleData[] {
-  const base = SIMULATED_BASES[pair];
-  const candles: CandleData[] = [];
-  let price = base.price * (1 - base.volatility * 2);
-  const now = Math.floor(Date.now() / 1000);
-  const interval = 300;
-
-  for (let i = 0; i < count; i++) {
-    const open = price;
-    const change1 = (Math.random() - 0.5) * base.volatility;
-    const change2 = (Math.random() - 0.5) * base.volatility;
-    const change3 = (Math.random() - 0.5) * base.volatility * 0.5;
-    const close = open + change1 + change2 + change3;
-    const high = Math.max(open, close) + Math.random() * base.volatility * 0.5;
-    const low = Math.min(open, close) - Math.random() * base.volatility * 0.5;
-    // FNH-018: Time-weighted volume (higher during London/NY sessions)
-    const hour = new Date((now - (count - i) * interval) * 1000).getUTCHours();
-    const sessionMultiplier = (hour >= 7 && hour <= 17) ? 1.5 : 0.6;
-    const volume = Math.floor((Math.random() * 3000 + 500) * sessionMultiplier);
-
-    candles.push({
-      time: (now - (count - i) * interval) * 1000,
-      open: parseFloat(open.toFixed(5)),
-      high: parseFloat(high.toFixed(5)),
-      low: parseFloat(low.toFixed(5)),
-      close: parseFloat(close.toFixed(5)),
-      volume,
-    });
-    price = close;
-  }
-  return candles;
 }
 
 function normalizeCandles(raw: FinnhubCandle): CandleData[] {
@@ -114,9 +54,11 @@ export async function GET(request: NextRequest) {
         return NextResponse.json({ error: 'Invalid symbol' }, { status: 400 });
       }
 
+      const intervalSeconds = RESOLUTION_TO_SECONDS[resolutionParam] || 300;
+
       // Return simulated candles if no API key (FNH-007: consistent fallback)
       if (!apiKey) {
-        const candles = generateSimulatedCandles(symbolParam, count);
+        const candles = generateSimulatedCandles(symbolParam, count, intervalSeconds);
         return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles, simulated: true });
       }
 
@@ -130,18 +72,18 @@ export async function GET(request: NextRequest) {
       try {
         const res = await fetchWithTimeout(url);
         if (!res.ok) {
-          const candles = generateSimulatedCandles(symbolParam, count);
+          const candles = generateSimulatedCandles(symbolParam, count, intervalSeconds);
           return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles, simulated: true, fallback: true });
         }
         const data: FinnhubCandle = await res.json();
         const candles = normalizeCandles(data);
         if (candles.length === 0) {
-          const simCandles = generateSimulatedCandles(symbolParam, count);
+          const simCandles = generateSimulatedCandles(symbolParam, count, intervalSeconds);
           return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: simCandles.length, candles: simCandles, simulated: true, fallback: true });
         }
         return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles });
       } catch {
-        const candles = generateSimulatedCandles(symbolParam, count);
+        const candles = generateSimulatedCandles(symbolParam, count, intervalSeconds);
         return NextResponse.json({ pair: symbolParam, resolution: resolutionParam, count: candles.length, candles, simulated: true, fallback: true });
       }
     }
@@ -149,13 +91,23 @@ export async function GET(request: NextRequest) {
     // Default: fetch all forex quotes via centralized cache (C-001)
     const { quotes, simulated } = await refreshAllQuotes();
 
-    return NextResponse.json({
-      timestamp: Date.now(),
-      quotes,
-      simulated,
-      cacheAgeMs: getCacheAge(),
-      anySimulated: isAnySimulated(),
-    });
+    // RB-003: Add Cache-Control header (quotes don't change faster than ~1s)
+    return new NextResponse(
+      JSON.stringify({
+        timestamp: Date.now(),
+        quotes,
+        simulated,
+        cacheAgeMs: getCacheAge(),
+        anySimulated: isAnySimulated(),
+      }),
+      {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'public, max-age=2, s-maxage=2',
+        },
+      },
+    );
   } catch (error) {
     logApiError('Finnhub', error);
     // Force simulated fallback

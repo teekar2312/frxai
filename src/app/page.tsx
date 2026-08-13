@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/sheet';
 import { FOREX_PAIRS, type QuoteData } from '@/lib/trading-types';
 import { useTradingStore } from '@/lib/trading-store';
+import { safeLog } from '@/lib/safe-log';
 import { SidebarContent } from '@/components/trading/Sidebar';
 import { DashboardPanel } from '@/components/trading/DashboardPanel';
 import { AiAnalysisPanel } from '@/components/trading/AiAnalysisPanel';
@@ -92,7 +93,7 @@ export default function TradingDashboard() {
           return;
         }
         // MT5 prices failed — falling back to Finnhub (P-03)
-        console.warn('MT5 prices unavailable, falling back to Finnhub');
+        safeLog({ level: 'warn', route: 'Page', message: 'MT5 prices unavailable, falling back to Finnhub' });
         setPriceSourceWarning(true);
         setTimeout(() => setPriceSourceWarning(false), 10000);
       }

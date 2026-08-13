@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair, StrategyName, CandleData, BacktestConfig, BacktestResult } from '@/lib/trading-types';
-import { PAIR_PIP_VALUES, FINEX_CONFIG, PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, toFinnhubResolution, SIMULATED_BASES } from '@/lib/trading-types';
+import { PAIR_PIP_VALUES, FINEX_CONFIG, PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, toFinnhubResolution } from '@/lib/trading-types';
+import { fetchWithTimeout } from '@/lib/fetch-utils';
+import { generateSimulatedCandles } from '@/lib/sim-candles';
 import {
   sma, ema, rsi, stochastic, macd, atr, bollingerBands,
   supertrend, parabolicSAR, pivotPoints, williamsR, cci,
@@ -34,55 +36,6 @@ function getResolutionSeconds(resolution: string): number {
   return RESOLUTION_TO_SECONDS[resolution] || 300;
 }
 
-// FNH-008: Retry logic with AbortController timeout
-async function fetchWithRetry(url: string, timeoutMs = 8000, retries = 2): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const attempt = (tryNum: number) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      fetch(url, { signal: controller.signal })
-        .then((res) => {
-          clearTimeout(timer);
-          if (res.status === 429 && tryNum < retries) {
-            setTimeout(() => attempt(tryNum + 1), 1000 * (tryNum + 1));
-            return;
-          }
-          resolve(res);
-        })
-        .catch((err) => {
-          clearTimeout(timer);
-          if (tryNum < retries) {
-            setTimeout(() => attempt(tryNum + 1), 500 * (tryNum + 1));
-            return;
-          }
-          reject(err);
-        });
-    };
-    attempt(0);
-  });
-}
-
-// FNH-018: Simulated candles with time-weighted volume for backtest fallback
-function generateSimulatedCandles(pair: ForexPair, count: number): CandleData[] {
-  const base = SIMULATED_BASES[pair];
-  const candles: CandleData[] = [];
-  let price = base.price * (1 - base.volatility * 2);
-  const interval = 3600; // H1 default
-  const now = Math.floor(Date.now() / 1000);
-
-  for (let i = 0; i < count; i++) {
-    const open = price;
-    const change = (Math.random() - 0.5) * base.volatility * 2;
-    const close = open + change;
-    const high = Math.max(open, close) + Math.random() * base.volatility;
-    const low = Math.min(open, close) - Math.random() * base.volatility;
-    const volume = Math.floor(Math.random() * 3000 + 500);
-    candles.push({ time: (now - (count - i) * interval) * 1000, open: parseFloat(open.toFixed(5)), high: parseFloat(high.toFixed(5)), low: parseFloat(low.toFixed(5)), close: parseFloat(close.toFixed(5)), volume });
-    price = close;
-  }
-  return candles;
-}
-
 async function fetchHistoricalCandles(
   pair: ForexPair,
   resolution: string,
@@ -91,7 +44,7 @@ async function fetchHistoricalCandles(
 ): Promise<CandleData[]> {
   const apiKey = process.env.FINNHUB_API_KEY;
   // FNH-007: Consistent fallback to simulated data
-  if (!apiKey) return generateSimulatedCandles(pair, 500);
+  if (!apiKey) return generateSimulatedCandles(pair, 500, getResolutionSeconds(resolution));
 
   // FNH-002: Use shared symbol mapping
   const finnhubSymbol = PAIR_TO_FINNHUB_SYMBOL[pair] || `OANDA:${pair.slice(0, 3)}_${pair.slice(3)}`;
@@ -114,7 +67,7 @@ async function fetchHistoricalCandles(
     const url = `https://finnhub.io/api/v1/stock/candle?symbol=${finnhubSymbol}&resolution=${finnhubResolution}&from=${batchFrom}&to=${batchTo}&token=${apiKey}`;
 
     try {
-      const res = await fetchWithRetry(url);
+      const res = await fetchWithTimeout(url);
       if (!res.ok) continue;
       const data = await res.json();
       if (data.s !== 'ok' || !data.t) continue;
@@ -135,7 +88,7 @@ async function fetchHistoricalCandles(
   const unique = allCandles.filter((c, i, arr) => i === 0 || c.time !== arr[i - 1].time);
 
   // FNH-007: Fallback to simulated if insufficient real data
-  if (unique.length < 50) return generateSimulatedCandles(pair, Math.max(500, 100));
+  if (unique.length < 50) return generateSimulatedCandles(pair, Math.max(500, 100), getResolutionSeconds(resolution));
   return unique;
 }
 

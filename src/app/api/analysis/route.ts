@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import type { ForexPair, AiAnalysisResult, MarketCondition, StrategyName, IndicatorValue } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
-import { logApiError } from '@/lib/safe-log';
+import { logApiError, safeLog } from '@/lib/safe-log';
 
 const VALID_PAIRS: ForexPair[] = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
 const VALID_CONDITIONS: MarketCondition[] = ['trending', 'range_bound', 'high_volatility', 'low_volatility'];
@@ -90,27 +90,25 @@ export async function POST(request: NextRequest) {
       news?: Array<{ title: string; description: string; impact: string; sentiment: string }>;
     };
 
-    // C-003: Fetch news server-side from DB instead of trusting client data
-    let news = body.news as Array<{ title: string; description: string; impact: string; sentiment: string }> | undefined;
-    if (!news || news.length === 0) {
-      try {
-        const recentNews = await db.newsItem.findMany({
-          where: { pair: pair, publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
-          orderBy: { publishedAt: 'desc' },
-          take: 10,
-          select: { title: true, description: true, impact: true, sentiment: true },
-        });
-        if (recentNews.length > 0) {
-          news = recentNews.map(n => ({
-            title: n.title,
-            description: (n.description || '').slice(0, 150),
-            impact: n.impact || 'low',
-            sentiment: n.sentiment || 'neutral',
-          }));
-        }
-      } catch {
-        // Non-critical — continue without news
+    // RD-002: Always fetch news server-side from DB — ignore client-sent news
+    let news: Array<{ title: string; description: string; impact: string; sentiment: string }> | undefined;
+    try {
+      const recentNews = await db.newsItem.findMany({
+        where: { pair: pair, publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        orderBy: { publishedAt: 'desc' },
+        take: 10,
+        select: { title: true, description: true, impact: true, sentiment: true },
+      });
+      if (recentNews.length > 0) {
+        news = recentNews.map(n => ({
+          title: n.title,
+          description: (n.description || '').slice(0, 150),
+          impact: n.impact || 'low',
+          sentiment: n.sentiment || 'neutral',
+        }));
       }
+    } catch {
+      // Non-critical — continue without news
     }
 
     if (!pair || !VALID_PAIRS.includes(pair)) {
@@ -205,7 +203,7 @@ export async function POST(request: NextRequest) {
         },
       });
     } catch (dbErr) {
-      console.warn('[Analysis] DB save failed:', dbErr);
+      safeLog({ level: 'warn', route: 'Analysis', message: 'DB save failed', error: dbErr instanceof Error ? dbErr.message : String(dbErr) });
     }
 
     try {

@@ -5,7 +5,8 @@ import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types'
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { getCurrentMidPriceLegacy as getCurrentMidPrice } from '@/lib/price-fetcher';
-import { logApiError } from '@/lib/safe-log';
+import { getCurrentBidAsk } from '@/lib/price-cache';
+import { logApiError, safeLog } from '@/lib/safe-log';
 
 // GET - Fetch positions (supports ?status=open|closed|cancelled filter)
 export async function GET(request: NextRequest) {
@@ -348,10 +349,15 @@ export async function PUT(request: NextRequest) {
     }
 
     if (action === 'close') {
+      // RD-001: Use spread-aware pricing for close
       let closePrice = currentPrice || 0;
       if (!closePrice || closePrice === 0) {
-        const mid = await getCurrentMidPrice(existing.pair);
-        if (mid) closePrice = mid;
+        const bidAsk = await getCurrentBidAsk(existing.pair, existing.direction as 'BUY' | 'SELL');
+        if (bidAsk) closePrice = bidAsk.price;
+        else {
+          const mid = await getCurrentMidPrice(existing.pair);
+          if (mid) closePrice = mid;
+        }
       }
       if (!closePrice || closePrice === 0) {
         return NextResponse.json(
@@ -394,7 +400,7 @@ export async function PUT(request: NextRequest) {
       }
 
       // Email notification simulation
-      console.log(`[EMAIL NOTIFY] Position closed: ${existing.pair} ${existing.direction}, PnL: $${pnl.toFixed(2)}`);
+      safeLog({ level: 'info', route: 'Positions', message: `[EMAIL NOTIFY] Position closed: ${existing.pair} ${existing.direction}, PnL: $${pnl.toFixed(2)}` });
 
       // F-03: Check margin call / stop-out after closing position
       await checkMarginCall();

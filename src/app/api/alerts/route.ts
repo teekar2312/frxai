@@ -4,14 +4,17 @@ import type { ForexPair } from '@/lib/trading-types';
 import { FOREX_PAIRS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
-import { logApiError } from '@/lib/safe-log';
-import { getCachedQuote } from '@/lib/price-cache';
+import { logApiError, safeLog } from '@/lib/safe-log';
+import { getCachedQuote, getCurrentMidPrice } from '@/lib/price-cache';
 
 // FNH-002/FNH-010/C-001: Use centralized price cache instead of direct Finnhub calls
+// RD-004: Falls back to getCurrentMidPrice when cache expired
 async function getCurrentPrice(pair: string): Promise<number | null> {
   const cached = getCachedQuote(pair as ForexPair);
   if (cached) return cached.quote.mid;
-  return null;
+  // Cache expired — try direct fetch
+  const result = await getCurrentMidPrice(pair);
+  return result?.mid ?? null;
 }
 
 function checkAlertCondition(
@@ -106,7 +109,7 @@ export async function GET() {
 
           // Simulate email notification
           if (alert.emailNotify) {
-            console.log(`[EMAIL NOTIFY] Price Alert: ${alert.pair} ${alert.condition} ${alert.targetPrice} - Current: ${price}. Note: ${alert.note || 'No note'}`);
+            safeLog({ level: 'info', route: 'Alerts', message: `[EMAIL NOTIFY] Price Alert: ${alert.pair} ${alert.condition} ${alert.targetPrice} - Current: ${price}. Note: ${alert.note || 'No note'}` });
           }
         } else {
           // M-8: Only update price for non-triggered alerts

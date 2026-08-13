@@ -201,6 +201,66 @@ export const FINEX_CONFIG = {
   stopOutLevel: 20,
 };
 
+// ============================================================
+// MT5 Integration Types
+// ============================================================
+
+export type Mt5ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+
+export type TradingMode = 'simulation' | 'mt5_live';
+
+export interface Mt5AccountInfo {
+  login: number;
+  name: string;
+  server: string;
+  balance: number;
+  equity: number;
+  margin: number;
+  freeMargin: number;
+  marginLevel: number;
+  leverage: number;
+  currency: string;
+  profit: number;
+  openPositions: number;
+}
+
+export interface Mt5Position {
+  ticket: number;
+  pair: string;
+  direction: 'BUY' | 'SELL';
+  lotSize: number;
+  entryPrice: number;
+  currentPrice: number;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  pnl: number;
+  pnlPips: number;
+  commission: number;
+  swap: number;
+  comment: string;
+  openTime: string;
+}
+
+export interface Mt5OrderResult {
+  success: boolean;
+  ticket?: number;
+  error?: string;
+  errorCode?: number;
+}
+
+export interface Mt5ConnectionConfig {
+  host: string;
+  port: number;
+  enabled: boolean;
+}
+
+export const MT5_BRIDGE_PORT = 3004;
+export const MT5_DEFAULT_CONFIG: Mt5ConnectionConfig = {
+  host: 'localhost',
+  port: MT5_BRIDGE_PORT,
+  enabled: false,
+};
+
 export const TRADING_SESSIONS: TradingSession[] = [
   {
     name: 'Sydney',

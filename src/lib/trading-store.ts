@@ -1,5 +1,8 @@
 import { create } from 'zustand';
-import type { ForexPair, QuoteData, NewsArticle, AiAnalysisResult, TradingSignal, MarketCondition } from './trading-types';
+import type {
+  ForexPair, QuoteData, NewsArticle, AiAnalysisResult, TradingSignal, MarketCondition,
+  Mt5ConnectionStatus, TradingMode, Mt5AccountInfo, Mt5Position,
+} from './trading-types';
 
 interface TradingStore {
   // Active tab
@@ -58,6 +61,16 @@ interface TradingStore {
   // Today's risk used
   todayRiskUsed: number;
   setTodayRiskUsed: (risk: number) => void;
+
+  // MT5 Integration
+  tradingMode: TradingMode;
+  setTradingMode: (mode: TradingMode) => void;
+  mt5ConnectionStatus: Mt5ConnectionStatus;
+  setMt5ConnectionStatus: (status: Mt5ConnectionStatus) => void;
+  mt5AccountInfo: Mt5AccountInfo | null;
+  setMt5AccountInfo: (info: Mt5AccountInfo | null) => void;
+  mt5Positions: Mt5Position[];
+  setMt5Positions: (positions: Mt5Position[]) => void;
 }
 
 export const useTradingStore = create<TradingStore>((set) => ({
@@ -130,4 +143,14 @@ export const useTradingStore = create<TradingStore>((set) => ({
 
   todayRiskUsed: 0,
   setTodayRiskUsed: (risk) => set({ todayRiskUsed: risk }),
+
+  // MT5 Integration
+  tradingMode: 'simulation' as TradingMode,
+  setTradingMode: (mode) => set({ tradingMode: mode }),
+  mt5ConnectionStatus: 'disconnected' as Mt5ConnectionStatus,
+  setMt5ConnectionStatus: (status) => set({ mt5ConnectionStatus: status }),
+  mt5AccountInfo: null,
+  setMt5AccountInfo: (info) => set({ mt5AccountInfo: info }),
+  mt5Positions: [],
+  setMt5Positions: (positions) => set({ mt5Positions: positions }),
 }));

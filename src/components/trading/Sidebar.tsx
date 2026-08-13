@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { TrendingUp, ChevronRight } from 'lucide-react';
+import { TrendingUp, ChevronRight, Cable } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useTradingStore } from '@/lib/trading-store';
 import { NAV_ITEMS } from './shared';
@@ -12,6 +12,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     accountBalance,
     dailyPnl,
     openPositionsCount,
+    tradingMode, mt5ConnectionStatus,
   } = useTradingStore();
 
   return (
@@ -32,6 +33,14 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       {/* Account summary in sidebar */}
       <div className="p-3 border-b border-zinc-700/50">
         <div className="bg-zinc-800/80 rounded-lg p-3 space-y-2">
+          {tradingMode === 'mt5_live' && (
+            <div className="flex items-center gap-2 mb-1">
+              <Cable className={`w-3 h-3 ${mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/50'}`} />
+              <span className={`text-[10px] font-medium ${mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/70'}`}>
+                MT5 {mt5ConnectionStatus === 'connected' ? 'LIVE' : 'Standby'}
+              </span>
+            </div>
+          )}
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Balance</span>
             <span className="text-white font-mono font-medium">${accountBalance.toLocaleString()}</span>

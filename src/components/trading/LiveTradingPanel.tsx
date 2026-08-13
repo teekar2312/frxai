@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Plus, Square, LineChart } from 'lucide-react';
+import { Plus, Square, LineChart, Cable } from 'lucide-react';
 import { AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -30,8 +30,10 @@ import { type Position, type EquityPoint, fmtPrice } from './shared';
 export function LiveTradingPanel() {
   const {
     accountBalance, isAutoTrading, toggleAutoTrading,
+    tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
   } = useTradingStore();
 
+  const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
   const [positions, setPositions] = useState<Position[]>([]);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [newTradeDialog, setNewTradeDialog] = useState(false);
@@ -79,26 +81,50 @@ export function LiveTradingPanel() {
   // Open new trade
   const handleOpenTrade = async () => {
     try {
-      const res = await fetch('/api/positions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pair: newTrade.pair,
-          direction: newTrade.direction,
-          lotSize: newTrade.lotSize,
-          stopLoss: newTrade.stopLoss || null,
-          takeProfit: newTrade.takeProfit || null,
-          strategy: newTrade.strategy,
-          trailingStop: trailingStopEnabled,
-        }),
-      });
-      if (res.ok) {
-        toast.success(`${newTrade.direction} ${PAIR_DISPLAY[newTrade.pair]} @ ${newTrade.lotSize} lots`);
-        setNewTradeDialog(false);
-        refreshPositions();
+      if (isMt5Live) {
+        // Route through MT5
+        const res = await fetch('/api/mt5/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pair: newTrade.pair,
+            direction: newTrade.direction,
+            lotSize: newTrade.lotSize,
+            stopLoss: newTrade.stopLoss || undefined,
+            takeProfit: newTrade.takeProfit || undefined,
+            comment: `FRXAI-${newTrade.strategy}`,
+          }),
+        });
+        const data = res.ok ? await res.json() : await res.json();
+        if (res.ok && data.success) {
+          toast.success(`MT5 ${newTrade.direction} ${PAIR_DISPLAY[newTrade.pair]} @ ${newTrade.lotSize} lots (Ticket #${data.ticket})`);
+          setNewTradeDialog(false);
+        } else {
+          toast.error(data.error || 'MT5 order failed');
+        }
       } else {
-        const data = await res.json();
-        toast.error(data.error || 'Failed to open trade');
+        // Simulation mode - local
+        const res = await fetch('/api/positions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pair: newTrade.pair,
+            direction: newTrade.direction,
+            lotSize: newTrade.lotSize,
+            stopLoss: newTrade.stopLoss || null,
+            takeProfit: newTrade.takeProfit || null,
+            strategy: newTrade.strategy,
+            trailingStop: trailingStopEnabled,
+          }),
+        });
+        if (res.ok) {
+          toast.success(`${newTrade.direction} ${PAIR_DISPLAY[newTrade.pair]} @ ${newTrade.lotSize} lots`);
+          setNewTradeDialog(false);
+          refreshPositions();
+        } else {
+          const data = await res.json();
+          toast.error(data.error || 'Failed to open trade');
+        }
       }
     } catch {
       toast.error('Network error opening trade');
@@ -124,20 +150,35 @@ export function LiveTradingPanel() {
 
   const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
   const marginUsed = positions.reduce((sum, p) => sum + (p.lotSize * 200), 0);
-  const equity = accountBalance + totalPnl;
-  const freeMargin = equity - marginUsed;
+  const displayBalance = isMt5Live && mt5AccountInfo ? mt5AccountInfo.balance : accountBalance;
+  const displayEquity = isMt5Live && mt5AccountInfo ? mt5AccountInfo.equity : (accountBalance + totalPnl);
+  const displayMargin = isMt5Live && mt5AccountInfo ? mt5AccountInfo.margin : marginUsed;
+  const displayFreeMargin = isMt5Live && mt5AccountInfo ? mt5AccountInfo.freeMargin : (displayEquity - marginUsed);
+  const displayPnl = isMt5Live && mt5AccountInfo ? mt5AccountInfo.profit : totalPnl;
+  const displayPositions = isMt5Live ? mt5Positions.length : positions.length;
 
   return (
     <div className="space-y-4">
+      {/* MT5 Live mode banner */}
+      {isMt5Live && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 flex items-center gap-3">
+          <Cable className="w-5 h-5 text-amber-400 shrink-0" />
+          <div>
+            <p className="text-xs font-medium text-amber-400">MT5 Live Mode Active</p>
+            <p className="text-[10px] text-amber-400/70">Orders are executed on MetaTrader 5. Account #{mt5AccountInfo?.login ?? '...'}</p>
+          </div>
+        </div>
+      )}
+
       {/* Account summary */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         {[
-          { label: 'Balance', value: `$${accountBalance.toLocaleString()}`, color: 'text-white' },
-          { label: 'Equity', value: `$${equity.toFixed(2)}`, color: 'text-white' },
-          { label: 'Margin Used', value: `$${marginUsed.toFixed(2)}`, color: 'text-amber-400' },
-          { label: 'Free Margin', value: `$${freeMargin.toFixed(2)}`, color: 'text-emerald-400' },
-          { label: 'Daily P&L', value: `${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}`, color: totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400' },
-          { label: 'Open Trades', value: String(positions.length), color: 'text-white' },
+          { label: 'Balance', value: `$${displayBalance.toLocaleString()}`, color: 'text-white' },
+          { label: 'Equity', value: `$${displayEquity.toFixed(2)}`, color: 'text-white' },
+          { label: 'Margin Used', value: `$${displayMargin.toFixed(2)}`, color: 'text-amber-400' },
+          { label: 'Free Margin', value: `$${displayFreeMargin.toFixed(2)}`, color: displayFreeMargin > 0 ? 'text-emerald-400' : 'text-rose-400' },
+          { label: 'Daily P&L', value: `${displayPnl >= 0 ? '+' : ''}${displayPnl.toFixed(2)}`, color: displayPnl >= 0 ? 'text-emerald-400' : 'text-rose-400' },
+          { label: 'Open Trades', value: String(displayPositions), color: 'text-white' },
         ].map((item) => (
           <Card key={item.label} className="bg-zinc-900 border-zinc-800 p-3">
             <p className="text-[10px] text-zinc-500 mb-1">{item.label}</p>
@@ -243,57 +284,119 @@ export function LiveTradingPanel() {
       {/* Open positions table */}
       <Card className="bg-zinc-900 border-zinc-800 p-4">
         <CardHeader className="p-0 pb-3">
-          <CardTitle className="text-sm text-white">Open Positions</CardTitle>
+          <CardTitle className="text-sm text-white">
+            Open Positions
+            {isMt5Live && (
+              <Badge className="text-[10px] bg-amber-500/20 text-amber-400 ml-2">MT5 LIVE</Badge>
+            )}
+          </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {positions.length === 0 ? (
-            <p className="text-xs text-zinc-500 text-center py-8">No open positions</p>
-          ) : (
-            <div className="overflow-x-auto max-h-96 overflow-y-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-zinc-800 hover:bg-transparent">
-                    <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500">Direction</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500">Lots</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500">Entry</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500">SL</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500">TP</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500">Trailing</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500 text-right">P&L</TableHead>
-                    <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {positions.map((pos) => (
-                    <TableRow key={pos.id} className="border-zinc-800/50">
-                      <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[pos.pair]}</TableCell>
-                      <TableCell>
-                        <Badge className={`text-[10px] ${pos.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                          {pos.direction}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-xs text-zinc-300 font-mono">{pos.lotSize}</TableCell>
-                      <TableCell className="text-xs text-zinc-300 font-mono">{fmtPrice(pos.pair, pos.entryPrice)}</TableCell>
-                      <TableCell className="text-xs text-rose-400 font-mono">{pos.stopLoss ? fmtPrice(pos.pair, pos.stopLoss) : '-'}</TableCell>
-                      <TableCell className="text-xs text-emerald-400 font-mono">{pos.takeProfit ? fmtPrice(pos.pair, pos.takeProfit) : '-'}</TableCell>
-                      <TableCell>
-                        {pos.trailingStop ? <Badge className="text-[10px] bg-amber-500/20 text-amber-400">ON</Badge> : <span className="text-xs text-zinc-500">-</span>}
-                      </TableCell>
-                      <TableCell className={`text-xs font-mono text-right ${(pos.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                        {(pos.pnl || 0) >= 0 ? '+' : ''}{(pos.pnl || 0).toFixed(2)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
-                          onClick={() => handleClosePosition(pos.id)}>
-                          <Square className="w-3 h-3" />
-                        </Button>
-                      </TableCell>
+          {isMt5Live ? (
+            mt5Positions.length === 0 ? (
+              <p className="text-xs text-zinc-500 text-center py-8">No open positions on MT5</p>
+            ) : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-zinc-800 hover:bg-transparent">
+                      <TableHead className="text-[10px] text-zinc-500">Ticket</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Direction</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Lots</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Entry</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">SL</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">TP</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500 text-right">P&L</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {mt5Positions.map((pos) => (
+                      <TableRow key={pos.ticket} className="border-zinc-800/50">
+                        <TableCell className="text-xs text-zinc-400 font-mono">#{pos.ticket}</TableCell>
+                        <TableCell className="text-xs text-zinc-200 font-mono">{pos.pair}</TableCell>
+                        <TableCell>
+                          <Badge className={`text-[10px] ${pos.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                            {pos.direction}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-zinc-300 font-mono">{pos.lotSize}</TableCell>
+                        <TableCell className="text-xs text-zinc-300 font-mono">{pos.entryPrice}</TableCell>
+                        <TableCell className="text-xs text-rose-400 font-mono">{pos.stopLoss ?? '-'}</TableCell>
+                        <TableCell className="text-xs text-emerald-400 font-mono">{pos.takeProfit ?? '-'}</TableCell>
+                        <TableCell className={`text-xs font-mono text-right ${pos.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {pos.pnl >= 0 ? '+' : ''}{pos.pnl.toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                            onClick={async () => {
+                              try {
+                                const res = await fetch(`/api/mt5/orders?ticket=${pos.ticket}`, { method: 'DELETE' });
+                                const data = await res.json();
+                                if (data.success) toast.success(`Closed ticket #${pos.ticket}`);
+                                else toast.error(data.error || 'Failed to close');
+                              } catch { toast.error('Network error'); }
+                            }}>
+                            <Square className="w-3 h-3" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )
+          ) : (
+            positions.length === 0 ? (
+              <p className="text-xs text-zinc-500 text-center py-8">No open positions</p>
+            ) : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-zinc-800 hover:bg-transparent">
+                      <TableHead className="text-[10px] text-zinc-500">Pair</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Direction</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Lots</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Entry</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">SL</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">TP</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Trailing</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500 text-right">P&L</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {positions.map((pos) => (
+                      <TableRow key={pos.id} className="border-zinc-800/50">
+                        <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[pos.pair]}</TableCell>
+                        <TableCell>
+                          <Badge className={`text-[10px] ${pos.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                            {pos.direction}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-zinc-300 font-mono">{pos.lotSize}</TableCell>
+                        <TableCell className="text-xs text-zinc-300 font-mono">{fmtPrice(pos.pair, pos.entryPrice)}</TableCell>
+                        <TableCell className="text-xs text-rose-400 font-mono">{pos.stopLoss ? fmtPrice(pos.pair, pos.stopLoss) : '-'}</TableCell>
+                        <TableCell className="text-xs text-emerald-400 font-mono">{pos.takeProfit ? fmtPrice(pos.pair, pos.takeProfit) : '-'}</TableCell>
+                        <TableCell>
+                          {pos.trailingStop ? <Badge className="text-[10px] bg-amber-500/20 text-amber-400">ON</Badge> : <span className="text-xs text-zinc-500">-</span>}
+                        </TableCell>
+                        <TableCell className={`text-xs font-mono text-right ${(pos.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                          {(pos.pnl || 0) >= 0 ? '+' : ''}{(pos.pnl || 0).toFixed(2)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                            onClick={() => handleClosePosition(pos.id)}>
+                            <Square className="w-3 h-3" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )
           )}
         </CardContent>
       </Card>

@@ -1,0 +1,8 @@
+{
+  "name": "mt5-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun index.ts"
+  }
+}

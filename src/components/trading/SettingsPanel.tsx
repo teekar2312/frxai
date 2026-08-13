@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Settings, RefreshCw } from 'lucide-react';
+import { Settings, RefreshCw, Cable } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -10,8 +10,11 @@ import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { type TradingConfig } from './shared';
+import { Mt5ConnectionPanel } from './Mt5ConnectionPanel';
+import { useTradingStore } from '@/lib/trading-store';
 
 export function SettingsPanel() {
+  const { tradingMode } = useTradingStore();
   const [config, setConfig] = useState<TradingConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
@@ -102,11 +105,21 @@ export function SettingsPanel() {
 
   return (
     <div className="space-y-4">
-      {/* Trading config form */}
+      {/* MT5 Integration */}
+      <Mt5ConnectionPanel />
+
+      {/* Mode indicator on config card */}
       <Card className="bg-zinc-900 border-zinc-800 p-4">
         <CardHeader className="p-0 pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-sm text-white">Trading Configuration</CardTitle>
+            <CardTitle className="text-sm text-white flex items-center gap-2">
+              <Settings className="w-4 h-4" /> Trading Configuration
+              {tradingMode === 'mt5_live' && (
+                <span className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full">
+                  MT5 LIVE - Some settings controlled by broker
+                </span>
+              )}
+            </CardTitle>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={handleResetConfig} className="border-zinc-700 text-zinc-300 h-8 text-xs">
                 Reset Defaults

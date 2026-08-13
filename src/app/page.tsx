@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
-import { Menu, TrendingUp, Wifi, WifiOff, Globe, CircleDot } from 'lucide-react';
+import { Menu, TrendingUp, Wifi, WifiOff, Globe, CircleDot, Cable } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -23,7 +23,7 @@ import { ActivityLogPanel } from '@/components/trading/ActivityLogPanel';
 import { SettingsPanel } from '@/components/trading/SettingsPanel';
 
 export default function TradingDashboard() {
-  const { activeTab, setQuote, setNews, isAutoTrading } = useTradingStore();
+  const { activeTab, setQuote, setNews, isAutoTrading, tradingMode, mt5ConnectionStatus } = useTradingStore();
   const [connected, setConnected] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
@@ -120,6 +120,14 @@ export default function TradingDashboard() {
                 Auto: {isAutoTrading ? 'ON' : 'OFF'}
               </span>
             </div>
+            {tradingMode === 'mt5_live' && (
+              <div className="flex items-center gap-1.5">
+                <Cable className={`w-3 h-3 ${mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/50'}`} />
+                <span className={mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/70'}>
+                  MT5 {mt5ConnectionStatus === 'connected' ? 'LIVE' : '...'}
+                </span>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-1.5">
@@ -179,6 +187,13 @@ export default function TradingDashboard() {
               <div className="flex items-center gap-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
                 <span>{connected ? 'Connected' : 'Disconnected'}</span>
+                {tradingMode === 'mt5_live' && (
+                  <>
+                    <Separator orientation="vertical" className="h-3 bg-zinc-700" />
+                    <div className={`w-1.5 h-1.5 rounded-full ${mt5ConnectionStatus === 'connected' ? 'bg-amber-400' : 'bg-amber-400/40'}`} />
+                    <span>MT5 {mt5ConnectionStatus === 'connected' ? 'Live' : 'Standby'}</span>
+                  </>
+                )}
               </div>
             </footer>
           </main>

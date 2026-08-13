@@ -37,7 +37,7 @@ export async function GET() {
   } catch (error) {
     console.error('[Config GET] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch config', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to fetch config' },
       { status: 500 }
     );
   }
@@ -62,6 +62,18 @@ export async function PUT(request: NextRequest) {
       ...numericFields,
       'autoTrading', 'autoTrailingStop', 'avoidNewsTrading',
     ]);
+
+    // M-7: Handle config reset
+    if (body.reset === true) {
+      await db.tradingConfig.deleteMany({});
+      const resetConfig = await db.tradingConfig.create({ data: { id: 'default', ...DEFAULT_CONFIG } });
+      try {
+        await db.activityLog.create({
+          data: { level: 'info', category: 'system', message: 'Trading config reset to defaults' },
+        });
+      } catch { /* non-critical */ }
+      return NextResponse.json({ config: resetConfig });
+    }
 
     for (const [key, value] of Object.entries(body)) {
       if (value === undefined) continue;
@@ -140,16 +152,11 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    // Get or create config (atomic upsert)
-    const config = await db.tradingConfig.upsert({
+    // H-3: Atomic upsert — single operation instead of separate upsert+update (TOCTOU fix)
+    const updated = await db.tradingConfig.upsert({
       where: { id: 'default' },
-      update: {},
-      create: { id: 'default', ...DEFAULT_CONFIG },
-    });
-
-    const updated = await db.tradingConfig.update({
-      where: { id: config.id },
-      data: updateData,
+      update: updateData,
+      create: { id: 'default', ...DEFAULT_CONFIG, ...updateData },
     });
 
     // Log config change
@@ -171,7 +178,7 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('[Config PUT] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to update config', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to update config' },
       { status: 500 }
     );
   }

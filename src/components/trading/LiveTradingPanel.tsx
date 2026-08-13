@@ -183,7 +183,9 @@ export function LiveTradingPanel() {
   };
 
   const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
-  const marginUsed = positions.reduce((sum, p) => sum + (p.lotSize * 200), 0);
+  const CONTRACT_SIZE = 100000; // Standard lot size in units
+  const leverage = 500; // Default leverage; in production read from config
+  const marginUsed = positions.reduce((sum, p) => sum + (p.lotSize * CONTRACT_SIZE / leverage), 0);
   const displayBalance = isMt5Live && mt5AccountInfo ? mt5AccountInfo.balance : accountBalance;
   const displayEquity = isMt5Live && mt5AccountInfo ? mt5AccountInfo.equity : (accountBalance + totalPnl);
   const displayMargin = isMt5Live && mt5AccountInfo ? mt5AccountInfo.margin : marginUsed;

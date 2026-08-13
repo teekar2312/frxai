@@ -75,6 +75,7 @@ export function TradingSignalsPanel() {
   // Generate signals for all pairs
   const handleGenerateSignals = async () => {
     setSignalsLoading(true);
+    executedSignalIds.current.clear();
     setAutoTradeResults({});
     try {
       const allSignals: TradingSignal[] = [];
@@ -145,9 +146,10 @@ export function TradingSignalsPanel() {
   // Execute confirmed auto-trading
   const handleAutoTradeConfirm = async () => {
     if (!pendingAutoSignals) return;
+    const signalsToExecute = pendingAutoSignals;
     setAutoTradeConfirmed(true);
     setPendingAutoSignals(null);
-    await autoExecuteSignals(pendingAutoSignals);
+    await autoExecuteSignals(signalsToExecute);
     setAutoTradeConfirmed(false);
   };
 
@@ -163,6 +165,11 @@ export function TradingSignalsPanel() {
     for (let i = 0; i < eligible.length; i++) {
       const signal = eligible[i];
       executedSignalIds.current.add(signal.id);
+      // M-13: Prevent unbounded growth
+      if (executedSignalIds.current.size > 500) {
+        const arr = [...executedSignalIds.current];
+        executedSignalIds.current = new Set(arr.slice(-200));
+      }
 
       try {
         const result = await executeSignal(signal, isMt5Live);

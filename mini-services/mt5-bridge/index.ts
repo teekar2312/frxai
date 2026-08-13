@@ -239,7 +239,8 @@ function handleEAMessage(raw: string) {
 
     case "price": {
       const p = data as { pair: string; bid: number; ask: number; timestamp: number };
-      if (p?.pair) {
+      const KNOWN_PAIRS = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
+      if (p?.pair && KNOWN_PAIRS.includes(p.pair)) {
         prices[p.pair] = { bid: p.bid, ask: p.ask, timestamp: p.timestamp };
       }
       break;
@@ -452,8 +453,9 @@ async function handleRequest(req: Request): Promise<Response> {
         prices: { pair: string; bid: number; ask: number; timestamp: number }[];
       };
       if (body.prices && Array.isArray(body.prices)) {
+        const KNOWN_PAIRS = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
         for (const p of body.prices) {
-          if (p.pair) {
+          if (p.pair && KNOWN_PAIRS.includes(p.pair)) {
             prices[p.pair] = { bid: p.bid, ask: p.ask, timestamp: p.timestamp || Date.now() };
           }
         }

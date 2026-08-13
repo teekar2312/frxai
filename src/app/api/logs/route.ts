@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
       // Ignore - can't log if logging is broken
     }
     return NextResponse.json(
-      { error: 'Failed to fetch logs', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to fetch logs' },
       { status: 500 }
     );
   }
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Logs POST] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to create log', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to create log' },
       { status: 500 }
     );
   }
@@ -113,6 +113,13 @@ export async function DELETE(request: NextRequest) {
     const clearAll = searchParams.get('all') === 'true';
 
     if (clearAll) {
+      const confirmed = searchParams.get('confirm') === 'true';
+      if (!confirmed) {
+        return NextResponse.json(
+          { error: 'Add confirm=true query parameter to confirm deletion of all logs' },
+          { status: 400 }
+        );
+      }
       const count = await db.activityLog.count();
       await db.activityLog.deleteMany({});
       return NextResponse.json({ success: true, deletedCount: count });
@@ -164,7 +171,7 @@ export async function DELETE(request: NextRequest) {
   } catch (error) {
     console.error('[Logs DELETE] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to delete logs', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to delete logs' },
       { status: 500 }
     );
   }

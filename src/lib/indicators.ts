@@ -510,6 +510,7 @@ export function schaffTrendCycle(data: number[], fastPeriod: number = 23, slowPe
 // ==================== VOLUME PROFILE (simplified) ====================
 
 export function volumeProfile(candles: OHLCV[], bins: number = 24): { price: number; volume: number; buyVol: number; sellVol: number }[] {
+  if (!candles || candles.length === 0) return [];
   const allPrices = candles.flatMap(c => [c.high, c.low]);
   const minPrice = Math.min(...allPrices);
   const maxPrice = Math.max(...allPrices);

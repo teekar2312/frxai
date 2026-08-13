@@ -37,6 +37,7 @@ model TradingPosition {
   @@index([status])
   @@index([pair])
   @@index([createdAt])
+  @@index([status, closedAt])
 }
 
 model PriceAlert {
@@ -120,19 +121,6 @@ model BacktestResult {
 
   @@index([pair])
   @@index([createdAt])
-}
-
-model DailyPerformance {
-  id            String   @id @default(cuid())
-  date          DateTime
-  startingBalance Float
-  endingBalance   Float
-  dailyPnl       Float
-  dailyPnlPct    Float
-  tradesTaken    Int      @default(0)
-  winRate        Float?
-  riskUsed       Float?
-  createdAt      DateTime @default(now())
 }
 
 model NewsItem {

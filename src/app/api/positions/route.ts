@@ -7,8 +7,16 @@ import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types'
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
+    // H-4: Validate status query param
     const status = searchParams.get('status');
-    const where = status ? { status: status as 'open' | 'closed' | 'cancelled' } : {};
+    const VALID_STATUSES = ['open', 'closed', 'cancelled'] as const;
+    let where: Record<string, string> = {};
+    if (status) {
+      if (!VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) {
+        return NextResponse.json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` }, { status: 400 });
+      }
+      where.status = status;
+    }
     const positions = await db.tradingPosition.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -18,7 +26,7 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     console.error('[Positions GET] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch positions', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to fetch positions' },
       { status: 500 }
     );
   }
@@ -220,7 +228,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Positions POST] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to create position', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to create position' },
       { status: 500 }
     );
   }
@@ -382,7 +390,7 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('[Positions PUT] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to update position', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to update position' },
       { status: 500 }
     );
   }
@@ -435,7 +443,7 @@ export async function DELETE(request: NextRequest) {
   } catch (error) {
     console.error('[Positions DELETE] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to cancel position', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to cancel position' },
       { status: 500 }
     );
   }

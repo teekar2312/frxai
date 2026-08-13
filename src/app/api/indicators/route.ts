@@ -47,8 +47,15 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Too many candles (max 5000)' }, { status: 400 });
     }
 
-    // IND-01: Validate candle structure
-    for (let i = 0; i < Math.min(candles.length, 10); i++) {
+    // M-4: Validate candle structure (first 10, last 5, and sampled middle)
+    const indicesToValidate = new Set<number>();
+    for (let i = 0; i < Math.min(candles.length, 10); i++) indicesToValidate.add(i);
+    for (let i = Math.max(0, candles.length - 5); i < candles.length; i++) indicesToValidate.add(i);
+    if (candles.length > 20) {
+      const step = Math.floor(candles.length / 5);
+      for (let s = 1; s < 5; s++) indicesToValidate.add(Math.min(s * step, candles.length - 1));
+    }
+    for (const i of indicesToValidate) {
       const c = candles[i];
       if (typeof c.time !== 'number' || typeof c.open !== 'number' || typeof c.high !== 'number' || typeof c.low !== 'number' || typeof c.close !== 'number' || typeof c.volume !== 'number' || !isFinite(c.open) || !isFinite(c.high) || !isFinite(c.low) || !isFinite(c.close) || c.high < c.low) {
         return NextResponse.json({ error: `Invalid candle data at index ${i}` }, { status: 400 });
@@ -296,7 +303,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Indicators API] Error:', error);
     return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

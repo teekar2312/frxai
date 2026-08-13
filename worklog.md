@@ -289,3 +289,76 @@ Stage Summary:
 - Prisma query logging now only active in development
 - MT5 bridge response body properly checked for success flag
 - Zero lint errors, db:push successful
+---
+Task ID: 2-b
+Agent: API Validation Fixer
+Task: Fix H-3, H-4, H-5, H-6, H-9, H-10, H-12, M-3, M-4, M-5, M-7
+
+Work Log:
+- **H-3**: Fixed TOCTOU race condition in config/route.ts PUT handler. Replaced separate upsert+update with single atomic upsert that includes updateData in both update and create branches.
+- **H-4**: Added status query param validation in positions/route.ts GET handler. Status must be one of: open, closed, cancelled. Returns 400 for invalid values instead of passing raw input to Prisma.
+- **H-5**: Added condition field validation in alerts/route.ts PUT handler. Condition must be one of: above, below, crosses_above, crosses_below. Returns 400 for invalid values.
+- **H-6**: Added resolution parameter validation in finnhub/route.ts candle endpoint. Resolution must be one of 12 valid Finnhub values (1, 5, M1, M2, M5, M15, M30, 60, H1, H4, D1, W1). Returns 400 for invalid values.
+- **H-9**: Added ticket numeric string validation in mt5/orders/route.ts DELETE handler. Ticket must match /^\d+$/. Returns 400 for non-numeric tickets.
+- **H-10**: Added ticket numeric string validation in mt5/orders/route.ts PATCH handler. Same regex check as H-9.
+- **H-12**: Added pair filter validation in news/route.ts GET handler. Dynamically imports FOREX_PAIRS from trading-types and validates pairFilter against the allowlist. Returns 400 for invalid pairs.
+- **M-3**: Added pair, strategy, and timeframe validation in backtest/route.ts POST handler. Pair validated against FOREX_PAIRS, strategy against 7 valid strategies, timeframe against 8 valid timeframes. All return 400 for invalid values.
+- **M-4**: Replaced first-10-only candle validation in indicators/route.ts with sampled validation: validates first 10, last 5, and 4 evenly-spaced middle candles. Covers edge and interior of candle array without O(n) cost.
+- **M-5**: Added upper bound (max 10000) for candle count in market-condition/route.ts POST handler. Returns 400 for oversized requests.
+- **M-7**: Implemented config reset functionality in config/route.ts PUT handler. When body.reset === true, deletes all config records and creates fresh default config. Logs reset event to activityLog. Returns early with reset config.
+- ESLint passes clean with zero errors after all edits.
+
+Stage Summary:
+- 8 files modified: config/route.ts, positions/route.ts, alerts/route.ts, finnhub/route.ts, mt5/orders/route.ts, news/route.ts, backtest/route.ts, indicators/route.ts, market-condition/route.ts
+- All 11 security audit findings resolved: H-3 (TOCTOU), H-4 (status param), H-5 (condition field), H-6 (resolution param), H-9 (ticket DELETE), H-10 (ticket PATCH), H-12 (pair filter), M-3 (backtest params), M-4 (candle validation), M-5 (candle upper bound), M-7 (config reset)
+- All query/body parameters now validated against strict allowlists before reaching Prisma or external APIs
+- Zero lint errors
+---
+Task ID: 2-c
+Agent: Error Leakage & Misc Fixer
+Task: Fix H-2, M-6, C-2, L-5, M-15
+
+Work Log:
+- **H-2**: Removed `, details: error instanceof Error ? error.message : 'Unknown'` from all error responses across 10 files: config/route.ts (2), positions/route.ts (4), alerts/route.ts (4), backtest/route.ts (3), indicators/route.ts (1), analysis/route.ts (1), logs/route.ts (3), market-condition/route.ts (1). Total 19 error response sites cleaned. Generic error messages retained; console.error still logs full details server-side.
+- **M-6**: Changed `recommendation: recommendation.toLowerCase()` to `recommendation: recommendation` in analysis/route.ts line 162. AI recommendations now stored in original case (BUY/SELL/HOLD/AVOID) instead of lowercase.
+- **C-2**: Removed hardcoded fallback `'frxai-bridge-key-2024'` from mt5-config.ts. MT5_BRIDGE_API_KEY now falls back to empty string with explanatory comment. Missing key correctly causes 401 from bridge.
+- **L-5**: Added `confirm=true` query parameter requirement to logs/route.ts DELETE handler when `all=true` is set. Returns 400 with descriptive error if confirm is missing, preventing accidental full log deletion.
+- **M-15**: Changed `ignoreBuildErrors: true` to `false` and `reactStrictMode: false` to `true` in next.config.ts.
+- Ran `bun run lint` — zero errors, clean pass.
+
+Stage Summary:
+- 11 files modified: config, positions, alerts, backtest, indicators, analysis, logs, market-condition API routes + mt5-config.ts + next.config.ts
+- H-2: 19 error response sites no longer leak internal error details to clients
+- M-6: Recommendation case preserved (BUY/SELL/HOLD/AVOID) in DB storage
+- C-2: Hardcoded MT5 bridge API key removed; must be set via environment
+- L-5: Destructive log deletion now requires explicit confirm=true parameter
+- M-15: TypeScript build errors and React strict mode enabled
+- Zero lint errors
+---
+Task ID: 2-d
+Agent: Frontend & Schema Fixer
+Task: Fix M-2, M-10, M-11, M-12, M-13, M-16, L-4, L-7
+
+Work Log:
+- **M-2**: Added `@@index([status, closedAt])` composite index to TradingPosition model in prisma/schema.prisma for daily risk query optimization. Ran db:push successfully.
+- **M-10**: Deleted the entire unused `model DailyPerformance { ... }` block (12 lines) from prisma/schema.prisma. Ran db:push to apply.
+- **M-11**: Fixed ActivityLogPanel duplicate fetch logic. Removed inline duplicate `load` function inside useEffect. Wrapped `loadLogs` with `useCallback` (deps: logPage, logFilter). Replaced useEffect body to call stable `loadLogs` via `setTimeout(loadLogs, 0)` + `setInterval(loadLogs, 15000)`. Added `useCallback` to React import.
+- **M-12**: Fixed stale closure in TradingSignalsPanel `handleAutoTradeConfirm`. Captured `pendingAutoSignals` into local `signalsToExecute` variable before calling `setPendingAutoSignals(null)`, ensuring the correct value is passed to `autoExecuteSignals`.
+- **M-13**: Fixed unbounded growth of `executedSignalIds` ref in TradingSignalsPanel. Added `executedSignalIds.current.clear()` at the start of `handleGenerateSignals`. Added size limit check (max 500) in `autoExecuteSignals` loop that trims to last 200 entries when exceeded.
+- **M-16**: Fixed hardcoded margin multiplier (200) in LiveTradingPanel. Replaced with proper formula: `lotSize * CONTRACT_SIZE / leverage` where CONTRACT_SIZE=100000 (standard lot) and leverage=500.
+- **L-4**: Added early return guard `if (!candles || candles.length === 0) return [];` at the top of `volumeProfile` function in indicators.ts to prevent crash on empty candle arrays.
+- **L-7**: Fixed bridge prices object unbounded growth in mt5-bridge/index.ts. Added `KNOWN_PAIRS` allowlist (EURUSD, USDJPY, GBPUSD, XAUUSD) validation in both the WebSocket price handler and the HTTP /ea/prices endpoint. Unknown pairs are silently skipped.
+- Ran `bun run db:push` — schema applied successfully, Prisma Client regenerated.
+- Ran `bun run lint` — zero errors, clean pass.
+
+Stage Summary:
+- 6 files modified: prisma/schema.prisma, ActivityLogPanel.tsx, TradingSignalsPanel.tsx, LiveTradingPanel.tsx, indicators.ts, mt5-bridge/index.ts
+- M-2: New composite index [status, closedAt] on TradingPosition for efficient daily risk queries
+- M-10: Dead DailyPerformance model removed from schema and DB
+- M-11: Duplicate fetch logic eliminated; loadLogs wrapped in useCallback for stable reference
+- M-12: Stale closure bug fixed; signals captured before state nullification
+- M-13: executedSignalIds bounded to max 500 entries with auto-trim to 200
+- M-16: Margin calculation now uses proper lotSize × contractSize / leverage formula
+- L-4: volumeProfile no longer crashes on empty/null candle input
+- L-7: Bridge prices map restricted to 4 known pairs, preventing memory growth from unknown pairs
+- Zero lint errors, db:push successful

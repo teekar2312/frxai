@@ -159,7 +159,7 @@ export async function POST(request: NextRequest) {
           pair,
           marketCondition,
           confidence,
-          recommendation: recommendation.toLowerCase(),
+          recommendation: recommendation,
           reasoning: analysisResult.reasoning,
           strategyUsed: bestStrategy,
           indicatorsUsed: JSON.stringify(analysisResult.indicators),
@@ -197,7 +197,7 @@ export async function POST(request: NextRequest) {
       });
     } catch { /* ignore */ }
     return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

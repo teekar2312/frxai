@@ -109,6 +109,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'ticket query parameter is required' }, { status: 400 });
     }
 
+    // H-9: Validate ticket is a numeric string
+    if (!/^\d+$/.test(ticket)) {
+      return NextResponse.json({ error: 'ticket must be a numeric string' }, { status: 400 });
+    }
+
     const res = await fetch(`${MT5_BRIDGE_URL}/api/orders/${ticket}`, {
       method: 'DELETE',
       headers: BRIDGE_HEADERS,
@@ -178,6 +183,11 @@ export async function PATCH(request: NextRequest) {
   try {
     if (!ticket) {
       return NextResponse.json({ error: 'ticket is required' }, { status: 400 });
+    }
+
+    // H-10: Validate ticket is a numeric string
+    if (typeof ticket !== 'string' || !/^\d+$/.test(ticket)) {
+      return NextResponse.json({ error: 'ticket must be a numeric string' }, { status: 400 });
     }
 
     const modifyData: Record<string, unknown> = {};

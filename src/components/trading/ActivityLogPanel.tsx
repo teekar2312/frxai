@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
 import { RefreshCw, Trash2 } from 'lucide-react';
@@ -22,7 +22,7 @@ export function ActivityLogPanel() {
   const [logFilter, setLogFilter] = useState<{ level: string; category: string }>({ level: 'all', category: 'all' });
 
   // Fetch logs
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       const params = new URLSearchParams({ page: String(logPage), limit: '30' });
       if (logFilter.level !== 'all') params.set('level', logFilter.level);
@@ -36,28 +36,13 @@ export function ActivityLogPanel() {
     } catch {
       // silent
     }
-  };
+  }, [logPage, logFilter]);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const params = new URLSearchParams({ page: String(logPage), limit: '30' });
-        if (logFilter.level !== 'all') params.set('level', logFilter.level);
-        if (logFilter.category !== 'all') params.set('category', logFilter.category);
-        const res = await fetch(`/api/logs?${params}`);
-        if (res.ok) {
-          const data = await res.json();
-          setLogs(data.logs || []);
-          setLogTotalPages(data.pagination?.totalPages || 1);
-        }
-      } catch {
-        // silent
-      }
-    };
-    load();
-    const interval = setInterval(load, 15000);
-    return () => clearInterval(interval);
-  }, [logPage, logFilter]);
+    const id = setTimeout(loadLogs, 0);
+    const interval = setInterval(loadLogs, 15000);
+    return () => { clearTimeout(id); clearInterval(interval); };
+  }, [logPage, logFilter, loadLogs]);
 
   // Clear logs
   const handleClearLogs = async () => {

@@ -135,7 +135,7 @@ export async function GET() {
   } catch (error) {
     console.error('[Alerts GET] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch alerts', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to fetch alerts' },
       { status: 500 }
     );
   }
@@ -208,7 +208,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Alerts POST] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to create alert', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to create alert' },
       { status: 500 }
     );
   }
@@ -240,7 +240,14 @@ export async function PUT(request: NextRequest) {
     const updateData: Record<string, unknown> = {};
     if (isActive !== undefined) updateData.isActive = isActive;
     if (targetPrice !== undefined) updateData.targetPrice = targetPrice;
-    if (condition !== undefined) updateData.condition = condition;
+    // H-5: Validate condition field
+    if (condition !== undefined) {
+      const VALID_CONDITIONS = ['above', 'below', 'crosses_above', 'crosses_below'];
+      if (!VALID_CONDITIONS.includes(condition)) {
+        return NextResponse.json({ error: `condition must be one of: ${VALID_CONDITIONS.join(', ')}` }, { status: 400 });
+      }
+      updateData.condition = condition;
+    }
     if (note !== undefined) updateData.note = note;
     if (emailNotify !== undefined) updateData.emailNotify = emailNotify;
     if (resetTriggered) {
@@ -258,7 +265,7 @@ export async function PUT(request: NextRequest) {
   } catch (error) {
     console.error('[Alerts PUT] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to update alert', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to update alert' },
       { status: 500 }
     );
   }
@@ -298,7 +305,7 @@ export async function DELETE(request: NextRequest) {
   } catch (error) {
     console.error('[Alerts DELETE] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to delete alert', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to delete alert' },
       { status: 500 }
     );
   }

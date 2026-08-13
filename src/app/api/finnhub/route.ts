@@ -158,6 +158,11 @@ export async function GET(request: NextRequest) {
     if (type === 'candles') {
       const symbolParam = searchParams.get('symbol') as ForexPair | null;
       const resolution = searchParams.get('resolution') || 'M5';
+      // H-6: Validate resolution parameter
+      const VALID_RESOLUTIONS = ['1', '5', 'M1', 'M2', 'M5', 'M15', 'M30', '60', 'H1', 'H4', 'D1', 'W1'];
+      if (!VALID_RESOLUTIONS.includes(resolution)) {
+        return NextResponse.json({ error: `Invalid resolution. Must be one of: ${VALID_RESOLUTIONS.join(', ')}` }, { status: 400 });
+      }
       const count = Math.min(Math.max(1, parseInt(searchParams.get('count') || '100', 10)), 5000);
 
       if (!symbolParam || !PAIR_TO_SYMBOL[symbolParam]) {

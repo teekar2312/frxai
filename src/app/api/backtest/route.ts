@@ -450,6 +450,20 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const config = body as BacktestConfig;
 
+    // M-3: Validate pair, strategy, and timeframe against allowed lists
+    const { FOREX_PAIRS } = await import('@/lib/trading-types');
+    if (!FOREX_PAIRS.includes(config.pair)) {
+      return NextResponse.json({ error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` }, { status: 400 });
+    }
+    const VALID_STRATEGIES: string[] = ['MA_RIBBON', 'MOMENTUM_SCALPING', 'PIVOT_POINT', 'EMA_CROSSOVER', 'RMI_TREND_SYNC', 'LINEAR_REGRESSION', 'EMA_RSI_FILTER'];
+    if (!VALID_STRATEGIES.includes(config.strategy)) {
+      return NextResponse.json({ error: `Invalid strategy. Must be one of: ${VALID_STRATEGIES.join(', ')}` }, { status: 400 });
+    }
+    const VALID_TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
+    if (!VALID_TIMEFRAMES.includes(config.timeframe)) {
+      return NextResponse.json({ error: `Invalid timeframe. Must be one of: ${VALID_TIMEFRAMES.join(', ')}` }, { status: 400 });
+    }
+
     if (!config.pair || !config.strategy || !config.timeframe || !config.startDate || !config.endDate) {
       return NextResponse.json(
         { error: 'pair, strategy, timeframe, startDate, and endDate are required' },
@@ -558,7 +572,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Backtest API] Error:', error);
     return NextResponse.json(
-      { error: 'Backtest failed', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Backtest failed' },
       { status: 500 }
     );
   }
@@ -575,7 +589,7 @@ export async function GET() {
   } catch (error) {
     console.error('[Backtest GET] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch backtest results', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to fetch backtest results' },
       { status: 500 }
     );
   }
@@ -594,7 +608,7 @@ export async function DELETE(request: NextRequest) {
   } catch (error) {
     console.error('[Backtest DELETE] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to delete backtest result', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to delete backtest result' },
       { status: 500 }
     );
   }

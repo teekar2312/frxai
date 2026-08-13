@@ -123,6 +123,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const pairFilter = searchParams.get('pair') as ForexPair | null;
 
+    // H-12: Validate pair filter against allowed list
+    const { FOREX_PAIRS } = await import('@/lib/trading-types');
+    if (pairFilter && !FOREX_PAIRS.includes(pairFilter as ForexPair)) {
+      return NextResponse.json({ error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` }, { status: 400 });
+    }
+
     // Return simulated news if no API key
     if (!apiKey) {
       let news = [...SIMULATED_NEWS];

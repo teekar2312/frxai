@@ -15,6 +15,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // M-5: Upper bound on candle count
+    if (candles.length > 10000) {
+      return NextResponse.json({ error: 'Too many candles (max 10000)' }, { status: 400 });
+    }
+
     const ohlcv: OHLCV[] = candles.map((c) => ({
       time: c.time,
       open: c.open,
@@ -35,7 +40,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('[Market Condition API] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to detect market condition', details: error instanceof Error ? error.message : 'Unknown' },
+      { error: 'Failed to detect market condition' },
       { status: 500 }
     );
   }

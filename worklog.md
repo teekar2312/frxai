@@ -436,3 +436,190 @@ Stage Summary:
 - File created: SECURITY.md
 - DB schema pushed with new unique constraint on NewsItem
 - Zero lint errors
+---
+Task ID: 1
+Agent: Main Orchestrator (Deep Audit)
+Task: Comprehensive FINEX Indonesia Integration Audit
+
+Work Log:
+- Read full worklog.md to understand project history (6 previous task phases)
+- Launched 4 parallel audit agents covering: Regulatory Compliance, API/MT5/Data Integration, UI/UX Brand Consistency, Security Compliance
+- Verified all findings against actual source files
+- Cross-referenced brand name usage across 10 source files
+- Checked MT5 bridge configuration, API auth, Caddyfile, Prisma schema, all 11 API routes
+
+Stage Summary:
+- Total findings across 4 audit dimensions: **105 findings**
+- CRITICAL: 10 | HIGH: 21 | MEDIUM: 31 | LOW: 22 | INFO: 21
+- Detailed report below:
+
+================================================================
+FINEX INDONESIA INTEGRATION — DEEP AUDIT REPORT
+================================================================
+
+DIMENSI 1: KEPATUHAN REGULASI INDONESIA (13 Temuan)
+------------------------------------------------------
+| ID        | Severity  | Temuan                                                          |
+|-----------|-----------|------------------------------------------------------------------|
+| REG-001   | CRITICAL  | Tidak ada nomor registrasi BAPPEBTI ditampilkan                  |
+| REG-002   | CRITICAL  | Footer menampilkan "FINEX Indonesia" tanpa bukti regulasi          |
+| REG-003   | CRITICAL  | Tidak ada Pernyataan Risiko (Risk Disclosure)                     |
+| REG-004   | CRITICAL  | Tidak ada halaman legal (Syarat/Ketentuan, Privasi, Risiko, About) |
+| REG-005   | CRITICAL  | Leverage default 1:500 melebihi batas BAPPEBTI (max 1:100 retail)   |
+| REG-006   | HIGH      | HTML lang="en" — seluruh UI dalam bahasa Inggris, tidak ada i18n    |
+| REG-007   | HIGH      | Semua nilai moneter hanya USD, tidak ada dukungan IDR             |
+| REG-008   | HIGH      | Tidak ada pengungkapan pemisahan dana klien (dana klien terpisah)  |
+| REG-009   | MEDIUM    | Tidak ada fitur pelaporan pajak PPh / SPT Tahunan                 |
+| REG-010   | MEDIUM    | Jam WIB + brand "FINEX Indonesia" tanpa kepatuhan regulasi = menyesatkan |
+| REG-011   | MEDIUM    | Footer sidebar hanya "© 2024 FINEX Indonesia" tanpa info legal      |
+| REG-012   | LOW       | robots.txt mengizinkan semua crawler pada semua path              |
+| REG-013   | LOW       | Sinyal AI tanpa disclaimer tentang keterbatasan AI               |
+
+DIMENSI 2: INTEGRASI API / MT5 / DATA (32 Temuan)
+---------------------------------------------------
+| ID     | Severity  | File                           | Temuan                                                  |
+|--------|-----------|--------------------------------|----------------------------------------------------------|
+| F-01   | CRITICAL  | positions/route.ts             | Posisi sizing & max-posisi check menggunakan sumber BERBEDA |
+| F-02   | HIGH      | positions/route.ts             | Spread cost TIDAK dikurangkan dari PnL simulasi           |
+| F-03   | HIGH      | positions/route.ts             | Tidak ada logika margin call / stop-out                   |
+| O-01   | CRITICAL  | mt5/orders/route.ts            | MT5 orders TIDAK validasi arah SL/TP                     |
+| O-02   | HIGH      | mt5/orders/route.ts            | MT5 lot validasi menggunakan FINEX_CONFIG tapi tidak cek maxOpenPositions |
+| M-01   | HIGH      | mt5-bridge/index.ts             | Bridge menduplikasi batas lot sebagai hardcoded constants  |
+| M-02   | HIGH      | mt5-bridge/index.ts             | Reconnection pasif (deteksi saja), tidak ada reconnection aktif |
+| M-05   | HIGH      | mt5-bridge/index.ts             | API key bridge hardcoded fallback vs Next.js empty fallback |
+| P-01   | HIGH      | finnhub/route.ts               | Spread dibuat sintetis, bukan dari data pasar nyata        |
+| P-02   | MEDIUM    | mt5/prices/route.ts            | Harga MT5 diproses tanpa validasi apapun                  |
+| P-03   | MEDIUM    | page.tsx                       | Fallback MT5 ke Finnhub tanpa notifikasi ke user          |
+| F-04   | MEDIUM    | risk/route.ts                  | R:R ratio hardcoded 1.5, bukan dari config DB             |
+| F-05   | MEDIUM    | risk/route.ts                  | marginCallLevel/stopOutLevel dari FINEX_CONFIG, bukan DB  |
+| F-06   | MEDIUM    | RiskManagementPanel.tsx        | Spec menampilkan FINEX_CONFIG constants, tidak cross-check DB |
+| O-03   | HIGH      | positions/route.ts             | Commission dihitung saat open tapi spread TIDAK diterapkan  |
+| O-04   | MEDIUM    | mt5/orders/route.ts            | Tidak ada validasi pair pada MT5 orders                   |
+| D-01   | MEDIUM    | prisma/schema.prisma           | TradingConfig kehilangan kolom minLot dan maxLotPerOrder  |
+| D-02   | MEDIUM    | prisma/schema.prisma           | TradingConfig id default=cuid() bisa menyebabkan duplikat   |
+| R-01   | HIGH      | risk/route.ts                  | Hardcoded R:R ratio 1.5                                   |
+| R-03   | MEDIUM    | risk/route.ts                  | Kalkulasi margin mungkin salah untuk JPY/XAU pairs        |
+| R-04   | LOW       | risk/route.ts                  | Risk API tidak memiliki rate limiting                     |
+| C-01   | MEDIUM    | config/route.ts                | Validasi maxOpenPositions memungkinkan 200 posisi         |
+| P-04   | LOW       | page.tsx                       | High/Low dari client-side, bukan dari MT5 server           |
+| P-05   | LOW       | price-fetcher.ts               | Duplikasi SIMULATED_BASES                                 |
+| F-07   | LOW       | config/route.ts                | minLot/maxLotPerOrder tidak ada di TradingConfig           |
+| F-08   | LOW       | LiveTradingPanel.tsx           | Hardcoded leverage=500 di komponen                        |
+| M-03   | MEDIUM    | FRXAI_EA.mq5                   | Bridge URL hardcoded localhost:3004                       |
+| M-04   | MEDIUM    | FRXAI_EA.mq5                   | EA tidak validasi terhadap FINEX_CONFIG limits             |
+| M-06   | LOW       | mt5-bridge/index.ts            | CORS hanya localhost:3000                                 |
+| D-03   | LOW       | prisma/schema.prisma           | TradingPosition.commission default=1 bukan per-lot         |
+| D-04   | LOW       | prisma/schema.prisma           | Leverage disimpan saat entry (benar)                      |
+| C-02   | LOW       | config/route.ts                | Validasi leverage [100,200,300,500] sudah sesuai           |
+| C-03   | LOW       | config/route.ts                | Cross-field validation marginCall > stopOut sudah benar   |
+
+DIMENSI 3: KONSISTENSI UI/UX BRAND (42 Temuan)
+----------------------------------------------
+| ID     | Severity  | Temuan                                                       |
+|--------|-----------|---------------------------------------------------------------|
+| 1-A    | CRITICAL  | Sidebar menampilkan "FX Pro Trading" bukan "FINEX Indonesia"  |
+| 1-B    | CRITICAL  | Status bar menampilkan "FX Pro Trading v1.0"                  |
+| 1-C    | CRITICAL  | Mobile header menampilkan "FX Pro Trading"                    |
+| 1-G    | HIGH      | Page title: "FX Pro Trading - AI-Powered Forex Dashboard"     |
+| 1-D    | HIGH      | Sidebar footer "© 2024 FINEX Indonesia" konflik dengan header |
+| 1-E    | HIGH      | Main footer "FINEX Indonesia" konflik dengan brand di atasnya  |
+| 1-H    | LOW       | Keywords meta mencampur "FX Pro" dan "FINEX Indonesia"       |
+| 1-F    | MEDIUM    | Hanya RiskManagementPanel yang menggunakan brand "FINEX"      |
+| 3-C    | CRITICAL  | Favicon menggunakan logo ZAI CDN, bukan FINEX Indonesia        |
+| 3-A    | HIGH      | Logo hanya ikon TrendingUp generik, bukan logo FINEX           |
+| 3-B    | HIGH      | Mobile header juga hanya ikon TrendingUp generik               |
+| 3-D    | MEDIUM    | Tidak ada wordmark/logo resmi FINEX Indonesia                  |
+| 2-D    | LOW       | Info log badge menggunakan blue-400 (satu-satunya warna biru)  |
+| 5-B    | MEDIUM    | Seluruh UI bahasa Inggris, tidak ada Bahasa Indonesia           |
+| 5-E    | LOW       | Tahun copyright hardcoded "2024"                              |
+| 8-A    | HIGH      | Tidak ada global error boundary (error.tsx)                    |
+| 6-A    | HIGH      | Nol atribut aria-* di semua 12 komponen trading                |
+| 6-B    | HIGH      | Tombol close posisi tanpa aria-label                          |
+| 6-C    | HIGH      | Tombol hapus alert tanpa aria-label                           |
+| 6-D    | MEDIUM    | Tabel data tidak memiliki caption/aria-label                   |
+| 6-E    | MEDIUM    | Chart Recharts tanpa deskripsi aksesibel                      |
+| 6-F    | MEDIUM    | Ukuran teks kecil + zinc-500 mungkin di bawah rasio WCAG AA    |
+| 6-G    | LOW       | Nav button aktif tanpa aria-current="page"                    |
+| 7-D    | MEDIUM    | Backtesting grid 8 kolom di lg mungkin terlalu sempit          |
+| 7-E    | LOW       | Tabel horizontal scroll tanpa indikator visual di mobile        |
+| 8-E    | MEDIUM    | PriceAlertsPanel tidak ada loading state awal                  |
+| 8-F    | MEDIUM    | ActivityLogPanel tidak ada loading state awal                   |
+| 8-G    | MEDIUM    | RiskManagementPanel & LiveTradingPanel tidak ada loading awal   |
+| 8-H    | LOW       | Semua polling catch silently tanpa feedback ke user            |
+| 8-I    | LOW       | Tidak ada exponential backoff untuk fetch gagal                |
+| 1-I    | MEDIUM    | Order comment menggunakan "FRXAI" bukan identitas FINEX        |
+| (15 item bertanda GOOD/INFO tidak termasuk sebagai temuan)       |
+
+DIMENSI 4: KEAMANAN (20 Temuan)
+--------------------------------
+| ID        | Severity  | Temuan                                                        |
+|-----------|-----------|---------------------------------------------------------------|
+| S-1E-01   | CRITICAL  | Auth dimatikan ketika API_SECRET_KEY tidak diset               |
+| S-1E-02   | HIGH      | Tidak ada autentikasi halaman / login                         |
+| S-1E-03   | HIGH      | Semua endpoint GET tidak terautentikasi                       |
+| S-2E-01   | HIGH      | API key bridge hardcoded fallback                             |
+| S-4E-01   | HIGH      | Tidak ada manajemen sesi (no NextAuth, no JWT, no cookies)    |
+| S-6E-01   | HIGH      | Banyak endpoint mutating tanpa rate limiting                  |
+| S-10E-01  | HIGH      | Tidak ada HTTPS, tidak ada security headers di Caddyfile      |
+| S-2E-02   | MEDIUM    | .env hanya DATABASE_URL, tidak ada API keys                   |
+| S-3E-01   | MEDIUM    | Tidak ada enkripsi data at-rest                               |
+| S-6E-02   | MEDIUM    | IP spoofable via X-Forwarded-For                             |
+| S-8E-01   | MEDIUM    | 6 route masih menggunakan console.error() mentah             |
+| S-9E-01   | MEDIUM    | Tidak ada CSRF token (mitigasi implicit via API key)          |
+| S-10E-02  | MEDIUM    | XTransformPort SSRF tidak dibatasi ke port tertentu           |
+| S-7E-02   | LOW       | Indicators route tidak validasi field pair                    |
+| S-7E-03   | LOW       | Risk route tidak cek Content-Type                            |
+| S-2E-03   | LOW       | .gitignore benar (informasi positif)                           |
+| S-5E-01   | INFO      | CORS bridge sudah di-restrict ke localhost                    |
+| S-5E-02   | INFO      | Tidak ada app-level CORS (same-origin OK)                    |
+| S-7E-01   | INFO      | Input validation sudah baik di sebagian besar route           |
+| S-8E-02   | INFO      | Error response ke client sudah generik                        |
+
+RINGKASAN EKSEKUTIF
+====================
+Total Temuan: 105
+  CRITICAL: 10 (9 unik setelah deduplikasi)
+  HIGH: 21
+  MEDIUM: 31
+  LOW: 22
+  INFO: 21 (positif, tidak perlu perbaikan)
+
+TOP 10 PRIORITAS PERBAIKAN (URGENT):
+-------------------------------------
+1. [REG-001~004] KEPUSTAKAAN HUKUM: Tidak ada BAPPEBTI, risk disclosure, halaman legal
+2. [1-A~1-G] KONSISTENSI BRAND: "FX Pro Trading" vs "FINEX Indonesia" di 7+ lokasi
+3. [3-C] FAVICON: Menggunakan logo ZAI CDN, bukan FINEX Indonesia
+4. [REG-005] LEVERAGE: Default 1:500 melanggar batas BAPPEBTI (max 1:100 retail)
+5. [F-03] MARGIN CALL: Logika margin call/stop-out TIDAK ADA meskipun FINEX_CONFIG mendefinisikannya
+6. [F-02/O-03] SPREAD COST: PnL simulasi overstate karena tidak menghitung spread
+7. [S-1E-01] AUTH BYPASS: Auth dimatikan ketika env var tidak diset
+8. [S-1E-02/04] LOGIN: Tidak ada halaman login / autentikasi user
+9. [S-10E-01] HTTPS: Tidak ada TLS atau security headers di Caddyfile
+10. [O-01] MT5 SL/TP: Tidak ada validasi arah stop-loss/take-profit
+
+KESIMPULAN INTEGRASI FINEX INDONESIA
+=====================================
+Status: BELUM TERINTEGRASI DENGAN BENAR
+
+Aspek yang SUDAH benar:
+✅ WIB (Jakarta) timezone clock ditampilkan
+✅ FINEX_CONFIG mendefinisikan spesifikasi broker (leverage, spread, commission, dll)
+✅ Footer menampilkan "© 2024 FINEX Indonesia"
+✅ Risk Management Panel menampilkan "FINEX Indonesia Specifications"
+✅ Metadata mengandung "FINEX Indonesia" sebagai author
+✅ FINEX_CONFIG digunakan untuk validasi lot size di beberapa endpoint
+✅ Warna brand emerald green konsisten
+✅ Dark theme zinc konsisten
+
+Aspek yang BELUM benar (KRITIS):
+❌ Brand name tidak konsisten — "FX Pro Trading" dominan di UI, "FINEX Indonesia" hanya di footer
+❌ Tidak ada satu pun kepatuhan regulasi Indonesia (BAPPEBTI, OJK)
+❌ Tidak ada halaman legal dalam Bahasa Indonesia
+❌ Tidak ada risk disclosure statement
+❌ Leverage 1:500 melanggar regulasi
+❌ Tidak ada dukungan IDR
+❌ Favicon menggunakan logo pihak ketiga
+❌ Tidak ada autentikasi user / halaman login
+❌ Logika margin call / stop-out tidak ada
+❌ PnL simulasi tidak akurat (tidak menghitung spread)
+❌ Logo hanya ikon generik, bukan logo resmi FINEX

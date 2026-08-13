@@ -103,14 +103,15 @@ export const NAV_ITEMS = [
 ] as const;
 
 // Strategy descriptions for reference
+// FIX STRATEGY-008: Corrected strategy descriptions to match actual implementations
 export const STRATEGY_DESCS: Record<StrategyName, string> = {
-  MA_RIBBON: 'Uses multiple moving averages (5/10/20/50 EMA) to identify trend direction and momentum. Best in trending markets.',
-  MOMENTUM_SCALPING: 'Combines RSI, Stochastic, and MACD for quick scalping entries. Best during high-volume sessions.',
-  PIVOT_POINT: 'Uses daily pivot points with support/resistance levels. Works well in range-bound markets.',
-  EMA_CROSSOVER: 'Fast EMA (9) / Slow EMA (21) crossover with RSI confirmation. Good for swing trading.',
-  RMI_TREND_SYNC: 'Relative Momentum Index synced with Supertrend and EMA. Filters noise in volatile markets.',
-  LINEAR_REGRESSION: 'Linear regression channel with Bollinger Bands for mean reversion. Best in ranging markets.',
-  EMA_RSI_FILTER: 'EMA trend detection filtered by RSI overbought/oversold zones. Reduces false signals.',
+  MA_RIBBON: 'Uses multiple moving averages (5/9/21/50 EMA) to identify trend direction and momentum. Best in trending markets.',
+  MOMENTUM_SCALPING: 'Combines RSI, Momentum, and MACD histogram for quick scalping entries. Best during high-volume sessions.',
+  PIVOT_POINT: 'Uses daily pivot points with support/resistance levels (R1-R3, S1-S3). Works well in range-bound markets.',
+  EMA_CROSSOVER: 'Fast EMA (9) / Slow EMA (21) crossover with trend continuation detection. Good for swing trading.',
+  RMI_TREND_SYNC: 'Schaff Trend Cycle (STC) synced with Supertrend direction for noise-filtered entries in volatile markets.',
+  LINEAR_REGRESSION: 'Linear regression channel with 2σ bands for mean reversion at channel boundaries. Best in ranging markets.',
+  EMA_RSI_FILTER: 'EMA trend detection (9/21) filtered by RSI (40-70 buy zone, 30-60 sell zone). Reduces false signals.',
 };
 
 // ============================================================

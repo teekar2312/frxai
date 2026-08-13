@@ -60,7 +60,7 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise
 }
 
 export function TradingSignalsPanel() {
-  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus, mt5Positions } = useTradingStore();
+  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus, mt5Positions, selectedTimeframe } = useTradingStore();
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   const [signalFilter, setSignalFilter] = useState<{ pair: string; strategy: string; direction: string }>({ pair: 'all', strategy: 'all', direction: 'all' });
@@ -79,21 +79,33 @@ export function TradingSignalsPanel() {
     executedSignalIds.current.clear();
     setAutoTradeResults({});
     try {
+      // FIX MKT-ANALYSIS-002: Properly request signal generation from analysis API
       const allSignals: TradingSignal[] = [];
       for (const pair of FOREX_PAIRS) {
-        const res = await fetch('/api/analysis', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pair, currentPrice: quotes[pair]?.mid || 0, quote: quotes[pair], generateSignals: true }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.analysis) {
-            setAiAnalysis(pair, data.analysis as AiAnalysisResult);
+        try {
+          const res = await fetch('/api/analysis', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              pair,
+              currentPrice: quotes[pair]?.mid || 0,
+              quote: quotes[pair],
+              generateSignals: true,
+              timeframe: selectedTimeframe,
+            }),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.analysis) {
+              setAiAnalysis(pair, data.analysis as AiAnalysisResult);
+            }
+            // Signals are now returned by the API when generateSignals=true
+            if (data.signals && Array.isArray(data.signals)) {
+              allSignals.push(...(data.signals as TradingSignal[]));
+            }
           }
-          if (data.signals) {
-            allSignals.push(...(data.signals as TradingSignal[]));
-          }
+        } catch {
+          // Continue with other pairs even if one fails
         }
       }
       setSignals(allSignals);

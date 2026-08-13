@@ -30,8 +30,8 @@ function determineSignal(value: number, thresholds: { oversold: number; overboug
 }
 
 export async function POST(request: NextRequest) {
-  // S-6E-01: Rate limiting
-  const rateCheck = checkRateLimit(clientIp(request), 'analysis');
+  // FIX MKT-ANALYSIS-007: Use dedicated indicators rate limit bucket
+  const rateCheck = checkRateLimit(clientIp(request), 'indicators');
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
@@ -285,7 +285,8 @@ export async function POST(request: NextRequest) {
         upper: safeLast(lrc.upper),
         middle: safeLast(lrc.middle),
         lower: safeLast(lrc.lower),
-        slope: safeLast(lrc.middle) && safeLast(lrc.middle) && lrc.middle.length > 1
+        // FIX MKT-ANALYSIS-009: Removed duplicate condition
+        slope: lrc.middle.length > 1
           ? parseFloat(((lrc.middle[lrc.middle.length - 1] - (lrc.middle[lrc.middle.length - 2] || 0)).toFixed(8)))
           : null,
       },

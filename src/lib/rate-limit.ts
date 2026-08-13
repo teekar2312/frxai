@@ -31,6 +31,8 @@ const DEFAULT_CONFIGS: Record<string, RateLimitConfig> = {
   trade: { maxRequests: 10, windowMs: 60_000 },
   // AI analysis: 5 req/min
   analysis: { maxRequests: 5, windowMs: 60_000 },
+  // FIX MKT-ANALYSIS-007: Separate rate limit bucket for indicators
+  indicators: { maxRequests: 10, windowMs: 60_000 },
   // General API: 60 req/min
   general: { maxRequests: 60, windowMs: 60_000 },
   // FNH-001: Finnhub quotes: 12 req/min (conserves 60/min Finnhub free tier)

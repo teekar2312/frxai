@@ -110,6 +110,7 @@ export function rsi(data: number[], period: number = 14): number[] {
   return [NaN, ...result];
 }
 
+// FIX IND-004: Stochastic %D — compute SMA on full array (passing NaN through) to avoid tail misalignment
 export function stochastic(candles: OHLCV[], kPeriod: number = 14, dPeriod: number = 3): { k: number[]; d: number[] } {
   const kValues: number[] = [];
   for (let i = 0; i < candles.length; i++) {
@@ -120,13 +121,15 @@ export function stochastic(candles: OHLCV[], kPeriod: number = 14, dPeriod: numb
     const range = highest - lowest;
     kValues.push(range === 0 ? 50 : ((candles[i].close - lowest) / range) * 100);
   }
-  const dValues = sma(kValues.filter(v => !isNaN(v)), dPeriod);
+  // Compute %D as SMA of %K, handling NaN correctly by using only valid values per window
   const dPadded: number[] = [];
-  let dIdx = 0;
   for (let i = 0; i < kValues.length; i++) {
-    if (isNaN(kValues[i])) { dPadded.push(NaN); }
-    else if (dIdx < dValues.length) { dPadded.push(dValues[dIdx++]); }
-    else { dPadded.push(NaN); }
+    if (i < kPeriod - 1 + dPeriod - 1) { dPadded.push(NaN); continue; }
+    const window: number[] = [];
+    for (let j = i - dPeriod + 1; j <= i; j++) {
+      if (!isNaN(kValues[j])) window.push(kValues[j]!);
+    }
+    dPadded.push(window.length > 0 ? window.reduce((a, b) => a + b, 0) / window.length : NaN);
   }
   return { k: kValues, d: dPadded };
 }
@@ -489,7 +492,9 @@ export function schaffTrendCycle(data: number[], fastPeriod: number = 23, slowPe
   const emaFast = ema(data, fastPeriod);
   const emaSlow = ema(data, slowPeriod);
   const macdVals = emaFast.map((v, i) => (isNaN(v) || isNaN(emaSlow[i])) ? NaN : v - emaSlow[i]!);
+  // FIX IND-014: Guard against empty validMacd array
   const validMacd = macdVals.filter(v => !isNaN(v)) as number[];
+  if (validMacd.length === 0) return data.map(() => NaN);
   const minMacd = Math.min(...validMacd);
   const maxMacd = Math.max(...validMacd);
   const range = maxMacd - minMacd;
@@ -573,7 +578,9 @@ export function detectMarketCondition(candles: OHLCV[]): 'trending' | 'range_bou
 
 // ==================== PIVOT POINTS ====================
 
+// FIX IND-014: Add edge case guard for empty candles
 export function pivotPoints(candles: OHLCV[]): { pp: number; r1: number; r2: number; r3: number; s1: number; s2: number; s3: number } {
+  if (!candles || candles.length === 0) return { pp: 0, r1: 0, r2: 0, r3: 0, s1: 0, s2: 0, s3: 0 };
   const last = candles[candles.length - 1];
   const pp = (last.high + last.low + last.close) / 3;
   return {

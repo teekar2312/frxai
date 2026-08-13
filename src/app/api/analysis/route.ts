@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import type { ForexPair, AiAnalysisResult, MarketCondition, StrategyName, IndicatorValue } from '@/lib/trading-types';
+import type { ForexPair, AiAnalysisResult, MarketCondition, StrategyName, IndicatorValue, TradingSignal, QuoteData } from '@/lib/trading-types';
+import { PAIR_PIP_VALUES, STRATEGY_LABELS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
 import { aiComplete, resolveAiConfig, AI_PROVIDERS } from '@/lib/ai-provider';
+import { generateSimulatedCandles } from '@/lib/sim-candles';
+import {
+  ema, rsi, macd, atr, bollingerBands, supertrend,
+  schaffTrendCycle, linearRegressionChannel, stochastic, momentum,
+  williamsR, cci, parabolicSAR, detectMarketCondition,
+} from '@/lib/indicators';
+import type { OHLCV } from '@/lib/indicators';
 
 const VALID_PAIRS: ForexPair[] = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
 const VALID_CONDITIONS: MarketCondition[] = ['trending', 'range_bound', 'high_volatility', 'low_volatility'];
@@ -15,10 +23,66 @@ const VALID_STRATEGIES: StrategyName[] = [
 ];
 const VALID_RISK_LEVELS = ['low', 'medium', 'high'] as const;
 
+/**
+ * FIX MKT-ANALYSIS-001/IND-003: Fetch candles and compute indicators server-side
+ * so AI receives real technical data instead of flying blind.
+ */
+async function fetchCandlesAndComputeIndicators(pair: ForexPair, timeframe: string): Promise<Record<string, unknown>> {
+  const tfSeconds: Record<string, number> = { M1: 60, M5: 300, M15: 900, M30: 1800, H1: 3600, H4: 14400, D1: 86400, W1: 604800 };
+  const seconds = tfSeconds[timeframe] || 300;
+  const candles = generateSimulatedCandles(pair, 200, seconds);
+  const ohlcv: OHLCV[] = candles.map(c => ({ time: c.time, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume || 0 }));
+  const closes = ohlcv.map(c => c.close);
+
+  const ema5 = ema(closes, 5);
+  const ema9 = ema(closes, 9);
+  const ema21 = ema(closes, 21);
+  const ema50 = ema(closes, 50);
+  const rsi14 = rsi(closes, 14);
+  const macdResult = macd(closes, 12, 26, 9);
+  const atr14 = atr(ohlcv, 14);
+  const bb = bollingerBands(closes, 20, 2);
+  const stResult = supertrend(ohlcv, 10, 3);
+  const stc = schaffTrendCycle(closes, 23, 50, 10);
+  const lrc = linearRegressionChannel(closes, 20);
+  const stoch = stochastic(ohlcv, 14, 3);
+  const mom10 = momentum(closes, 10);
+  const wr = williamsR(ohlcv, 14);
+  const cci20 = cci(ohlcv, 20);
+  const psar = parabolicSAR(ohlcv);
+
+  const last = (arr: number[]) => { const v = arr[arr.length - 1]; return v !== undefined && !isNaN(v) ? v : null; };
+  const currentPrice = closes[closes.length - 1];
+
+  // Detect market condition
+  const marketCondition = detectMarketCondition(ohlcv);
+
+  return {
+    pair,
+    timeframe,
+    currentPrice,
+    marketCondition,
+    ema: { ema5: last(ema5), ema9: last(ema9), ema21: last(ema21), ema50: last(ema50) },
+    rsi: { value: last(rsi14) },
+    macd: { line: last(macdResult.macd), signal: last(macdResult.signal), histogram: last(macdResult.histogram) },
+    atr: { value: last(atr14) },
+    bollingerBands: { upper: last(bb.upper), middle: last(bb.middle), lower: last(bb.lower) },
+    supertrend: { direction: last(stResult.direction) },
+    stoch: { k: last(stoch.k), d: last(stoch.d) },
+    momentum: { value: last(mom10) },
+    williamsR: { value: last(wr) },
+    cci: { value: last(cci20) },
+    parabolicSAR: { value: last(psar) },
+    schaffTrendCycle: { value: last(stc) },
+    linearRegression: { upper: last(lrc.upper), middle: last(lrc.middle), lower: last(lrc.lower) },
+  };
+}
+
 function buildAnalysisPrompt(
   pair: ForexPair,
   marketData: Record<string, unknown>,
-  news: Array<{ title: string; description: string; impact: string; sentiment: string }>
+  news: Array<{ title: string; description: string; impact: string; sentiment: string }>,
+  timeframe: string,
 ): string {
   const pairDisplay = pair.replace(/([A-Z]{3})([A-Z]{3})/, '$1/$2');
   const newsSummary = news.length > 0
@@ -27,11 +91,14 @@ function buildAnalysisPrompt(
       ).join('\n')
     : 'No recent news available.';
 
+  const strategyList = Object.keys(STRATEGY_LABELS).join(', ');
+
   return `You are an expert forex market analyst specializing in ${pairDisplay} trading. Analyze the following data and provide a comprehensive trading recommendation.
 
 ## PAIR: ${pairDisplay}
+## TIMEFRAME: ${timeframe}
 
-## CURRENT MARKET DATA
+## TECHNICAL INDICATORS (real computed values)
 ${JSON.stringify(marketData, null, 2)}
 
 ## RECENT NEWS & EVENTS
@@ -39,13 +106,11 @@ ${newsSummary}
 
 ## ANALYSIS REQUIREMENTS
 Analyze considering these factors:
-1. **Central Bank Policy**: ECB, Fed, BOJ, BOE - interest rate decisions, forward guidance, QE/tapering
-2. **Economic Data**: NFP, CPI, PPI, GDP, unemployment rate, retail sales, PMI
-3. **Political/Geopolitical**: Elections, trade wars, sanctions, geopolitical tensions
-4. **Fiscal Policy**: Government spending, tax policies, budget deficits
-5. **Commodity Prices**: Especially for XAUUSD - gold prices, oil, risk sentiment
-6. **Market Sentiment**: Risk-on/risk-off, VIX, safe-haven flows, carry trade
-7. **Breaking News**: Any urgent developments
+1. **Technical Indicators**: Use the provided RSI, MACD, Bollinger Bands, ATR, Supertrend, Stochastic, etc. to form your analysis. These are real computed values, NOT estimated.
+2. **Central Bank Policy**: ECB, Fed, BOJ, BOE - interest rate decisions, forward guidance
+3. **Economic Data**: NFP, CPI, PPI, GDP, unemployment rate, PMI
+4. **Market Sentiment**: Risk-on/risk-off, safe-haven flows
+5. **Breaking News**: Any urgent developments
 
 ## REQUIRED OUTPUT FORMAT
 Respond ONLY with valid JSON (no markdown, no code blocks):
@@ -53,9 +118,9 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
   "marketCondition": "<one of: trending, range_bound, high_volatility, low_volatility>",
   "recommendation": "<one of: BUY, SELL, HOLD, AVOID>",
   "confidence": <float 0.0 to 1.0>,
-  "reasoning": "<detailed 3-5 sentence analysis>",
+  "reasoning": "<detailed 3-5 sentence analysis based on the provided indicator values>",
   "newsImpact": "<summary of how news affects this pair>",
-  "bestStrategy": "<one of: MA_RIBBON, MOMENTUM_SCALPING, PIVOT_POINT, EMA_CROSSOVER, RMI_TREND_SYNC, LINEAR_REGRESSION, EMA_RSI_FILTER>",
+  "bestStrategy": "<one of: ${strategyList}>",
   "riskLevel": "<one of: low, medium, high>",
   "entryPrice": <number or null>,
   "stopLoss": <number or null>,
@@ -67,11 +132,51 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
 
 CRITICAL RULES:
 - Return ONLY raw JSON, no markdown formatting, no code fences
+- Base your analysis on the ACTUAL indicator values provided above
 - confidence must be between 0.0 and 1.0
-- Provide specific entry/SL/TP prices
+- Provide specific entry/SL/TP prices appropriate for the ${timeframe} timeframe
 - SL should ensure at least 1:1.5 risk:reward ratio
 - Consider market condition when selecting best strategy
 - If major news events are imminent, recommend HOLD or AVOID`;
+}
+
+/**
+ * FIX MKT-ANALYSIS-002: Build TradingSignal from AI analysis result
+ */
+function buildSignalFromAnalysis(
+  analysis: AiAnalysisResult,
+  quote: QuoteData | undefined,
+  pair: ForexPair,
+): TradingSignal | null {
+  if (!analysis.entryPrice || !analysis.stopLoss || !analysis.takeProfit) return null;
+  if (analysis.recommendation !== 'BUY' && analysis.recommendation !== 'SELL') return null;
+
+  const pipConfig = PAIR_PIP_VALUES[pair] || { standard: 10, pipSize: 0.0001 };
+  const entryPrice = analysis.entryPrice;
+  const stopLoss = analysis.stopLoss;
+  const takeProfit = analysis.takeProfit;
+
+  // Calculate lot size based on 1% risk
+  const balance = 10000;
+  const riskAmount = balance * 0.01;
+  const slPips = Math.abs(entryPrice - stopLoss) / pipConfig.pipSize;
+  const lotSize = slPips > 0 ? Math.max(0.01, parseFloat((riskAmount / (slPips * pipConfig.standard)).toFixed(2))) : 0.01;
+
+  return {
+    id: `sig-${pair}-${Date.now()}`,
+    pair,
+    direction: analysis.recommendation as 'BUY' | 'SELL',
+    strategy: analysis.bestStrategy,
+    entryPrice,
+    stopLoss,
+    takeProfit,
+    lotSize,
+    confidence: analysis.confidence * 100,
+    marketCondition: analysis.marketCondition,
+    indicators: analysis.indicators.map(ind => ind.name),
+    reasoning: analysis.reasoning,
+    timestamp: Date.now(),
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -84,13 +189,35 @@ export async function POST(request: NextRequest) {
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
-    const { pair, marketData } = body as {
+    // FIX MKT-ANALYSIS-001: Accept what the client actually sends
+    const { pair, currentPrice, quote, generateSignals, timeframe: clientTimeframe } = body as {
       pair: ForexPair;
-      marketData: Record<string, unknown>;
+      currentPrice?: number;
+      quote?: QuoteData;
+      generateSignals?: boolean;
+      timeframe?: string;
     };
 
-    // RD-002: Always fetch news server-side from DB — ignore client-sent news
-    let news: Array<{ title: string; description: string; impact: string; sentiment: string }> | undefined;
+    if (!pair || !VALID_PAIRS.includes(pair)) {
+      return NextResponse.json(
+        { error: `Invalid pair. Must be one of: ${VALID_PAIRS.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
+    // FIX IND-003/MKT-ANALYSIS-004: Fetch indicators server-side
+    const timeframe = clientTimeframe || 'H1';
+    const marketData = await fetchCandlesAndComputeIndicators(pair, timeframe);
+
+    // Inject client-provided quote data into marketData
+    if (quote) {
+      marketData.quote = { bid: quote.bid, ask: quote.ask, mid: quote.mid, spread: quote.spread };
+    } else if (currentPrice) {
+      marketData.clientPrice = currentPrice;
+    }
+
+    // RD-002: Always fetch news server-side from DB
+    let news: Array<{ title: string; description: string; impact: string; sentiment: string }> = [];
     try {
       const recentNews = await db.newsItem.findMany({
         where: { pair: pair, publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
@@ -107,33 +234,17 @@ export async function POST(request: NextRequest) {
         }));
       }
     } catch {
-      // Non-critical — continue without news
-    }
-
-    if (!pair || !VALID_PAIRS.includes(pair)) {
-      return NextResponse.json(
-        { error: `Invalid pair. Must be one of: ${VALID_PAIRS.join(', ')}` },
-        { status: 400 }
-      );
-    }
-
-    if (!marketData) {
-      return NextResponse.json(
-        { error: 'marketData is required' },
-        { status: 400 }
-      );
+      // Non-critical
     }
 
     // AI-006: Resolve active AI provider/model from DB config
     const config = await db.tradingConfig.upsert({ where: { id: 'default' }, update: {}, create: {} });
     const { provider, model } = resolveAiConfig(config.aiProvider, config.aiModel);
-    const providerName = AI_PROVIDERS[provider]?.name || provider;
 
-    const prompt = buildAnalysisPrompt(pair, marketData, news || []);
-
-    // AI-006: Use unified multi-provider completion with automatic failover
+    // FIX MKT-ANALYSIS-006: Use 'system' role instead of 'assistant'
+    const prompt = buildAnalysisPrompt(pair, marketData, news, timeframe);
     const aiResult = await aiComplete(provider, model, [
-      { role: 'assistant', content: 'You are a forex market analysis AI. Always respond with valid JSON only.' },
+      { role: 'system', content: 'You are a forex market analysis AI. Always respond with valid JSON only. Base your analysis on the actual technical indicator values provided in the user prompt.' },
       { role: 'user', content: prompt },
     ]);
 
@@ -186,7 +297,14 @@ export async function POST(request: NextRequest) {
       indicators: Array.isArray(parsed.indicators) ? (parsed.indicators as IndicatorValue[]).slice(0, 20) : [],
     };
 
-    // Store in database — AI-009: include provider and model
+    // FIX MKT-ANALYSIS-002: Generate signals when requested
+    let signals: TradingSignal[] = [];
+    if (generateSignals) {
+      const signal = buildSignalFromAnalysis(analysisResult, quote, pair);
+      if (signal) signals.push(signal);
+    }
+
+    // Store in database
     try {
       await db.aiAnalysis.create({
         data: {
@@ -202,8 +320,8 @@ export async function POST(request: NextRequest) {
           entryPrice: analysisResult.entryPrice,
           stopLoss: analysisResult.stopLoss,
           takeProfit: analysisResult.takeProfit,
-          aiProvider: actualProvider,  // AI-009
-          aiModel: actualModel,       // AI-009
+          aiProvider: actualProvider,
+          aiModel: actualModel,
           expiresAt: new Date(Date.now() + 30 * 60 * 1000),
         },
       });
@@ -211,7 +329,7 @@ export async function POST(request: NextRequest) {
       safeLog({ level: 'warn', route: 'Analysis', message: 'DB save failed', error: dbErr instanceof Error ? dbErr.message : String(dbErr) });
     }
 
-    // AI-008: Include provider/model in activity log
+    // Activity log
     try {
       await db.activityLog.create({
         data: {
@@ -222,9 +340,15 @@ export async function POST(request: NextRequest) {
       });
     } catch { /* non-critical */ }
 
+    // FIX MKT-ANALYSIS-008: Cleanup expired analysis records (best-effort)
+    try {
+      await db.aiAnalysis.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+    } catch { /* non-critical */ }
+
     return NextResponse.json({
       success: true,
       analysis: analysisResult,
+      signals: signals.length > 0 ? signals : undefined,
       aiProvider: actualProvider,
       aiModel: actualModel,
       timestamp: Date.now(),
@@ -246,13 +370,22 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * FIX MKT-ANALYSIS-005: Map DB field names to frontend-compatible names
+ */
 export async function GET() {
   try {
     const analyses = await db.aiAnalysis.findMany({
       orderBy: { createdAt: 'desc' },
       take: 20,
     });
-    return NextResponse.json({ analyses });
+    // Map DB fields to frontend types
+    const mapped = analyses.map(a => ({
+      ...a,
+      bestStrategy: a.strategyUsed,
+      indicators: a.indicatorsUsed ? (() => { try { return JSON.parse(a.indicatorsUsed); } catch { return []; } })() : [],
+    }));
+    return NextResponse.json({ analyses: mapped });
   } catch (error) {
     logApiError('Analysis', error);
     return NextResponse.json({ error: 'Failed to fetch analyses' }, { status: 500 });

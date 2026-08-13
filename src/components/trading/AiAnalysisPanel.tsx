@@ -20,8 +20,8 @@ import { fmtPrice } from './shared';
 
 export function AiAnalysisPanel() {
   const {
-    selectedPair, setSelectedPair,
-    quotes, aiAnalysis, setAiAnalysis,
+    selectedPair, setSelectedPair, selectedTimeframe,
+    quotes, aiAnalysis, setAiAnalysis, setMarketCondition,
   } = useTradingStore();
 
   const [analysisHistory, setAnalysisHistory] = useState<AiAnalysisResult[]>([]);
@@ -55,12 +55,19 @@ export function AiAnalysisPanel() {
       const res = await fetch('/api/analysis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pair: selectedPair, currentPrice: quote?.mid || 0, quote }),
+        // FIX MKT-ANALYSIS-011: Send timeframe for calibrated analysis
+        // FIX MKT-ANALYSIS-001: Server now builds marketData internally
+        body: JSON.stringify({ pair: selectedPair, currentPrice: quote?.mid || 0, quote, timeframe: selectedTimeframe }),
       });
       if (res.ok) {
         const data = await res.json();
         if (data.analysis) {
-          setAiAnalysis(selectedPair, data.analysis as AiAnalysisResult);
+          const result = data.analysis as AiAnalysisResult;
+          setAiAnalysis(selectedPair, result);
+          // FIX MKT-ANALYSIS-003: Update market condition in store
+          if (result.marketCondition) {
+            setMarketCondition(selectedPair, result.marketCondition);
+          }
           // AI-010: Track which provider/model was used
           setLastProvider(data.aiProvider || 'zai');
           setLastModel(data.aiModel || 'default');
@@ -209,7 +216,7 @@ export function AiAnalysisPanel() {
                   <div className="flex flex-wrap gap-1.5">
                     {currentAnalysis.indicators.map((ind) => (
                       <Badge key={ind.name} variant="outline" className={`text-[10px] border-zinc-700 ${ind.signal === 'bullish' ? 'text-emerald-400' : ind.signal === 'bearish' ? 'text-rose-400' : 'text-zinc-400'}`}>
-                        {ind.name}: {ind.signal} ({ind.value.toFixed(2)})
+                        {ind.name}: {ind.signal} ({ind.value != null ? ind.value.toFixed(2) : 'N/A'})
                       </Badge>
                     ))}
                   </div>

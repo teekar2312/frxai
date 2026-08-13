@@ -4,10 +4,10 @@ import type { ForexPair, StrategyName, CandleData, BacktestConfig, BacktestResul
 import { PAIR_PIP_VALUES, FINEX_CONFIG, PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, toFinnhubResolution } from '@/lib/trading-types';
 import { fetchWithTimeout } from '@/lib/fetch-utils';
 import { generateSimulatedCandles } from '@/lib/sim-candles';
+// FIX IND-005: Only import what's actually used
 import {
-  sma, ema, rsi, stochastic, macd, atr, bollingerBands,
-  supertrend, parabolicSAR, pivotPoints, williamsR, cci,
-  hma, tsi, linearRegressionChannel, schaffTrendCycle, mfi,
+  ema, rsi, macd, atr, pivotPoints,
+  supertrend, linearRegressionChannel, schaffTrendCycle,
 } from '@/lib/indicators';
 import type { OHLCV } from '@/lib/indicators';
 import { requireAuthForMutation } from '@/lib/api-auth';
@@ -152,14 +152,16 @@ function generateSignal(
       return { direction: null, strength: 0 };
     }
 
+    // FIX STRATEGY-003/IND-001: Use single pivot point object (not array)
     case 'PIVOT_POINT': {
-      const pp = indicators.pivotPoints as { pp: number; r1: number; r2: number; s1: number; s2: number }[];
-      if (!pp || pp.length === 0) return { direction: null, strength: 0 };
-      const latestPp = pp[pp.length - 1];
-      if (close > latestPp.r1) return { direction: 'BUY', strength: (close - latestPp.pp) / close };
-      if (close < latestPp.s1) return { direction: 'SELL', strength: (latestPp.pp - close) / close };
-      if (close > latestPp.pp) return { direction: 'BUY', strength: 0.3 };
-      if (close < latestPp.pp) return { direction: 'SELL', strength: 0.3 };
+      const pp = indicators.pivotPoints as { pp: number; r1: number; r2: number; r3: number; s1: number; s2: number; s3: number } | undefined;
+      if (!pp) return { direction: null, strength: 0 };
+      if (close > pp.r1) return { direction: 'BUY', strength: (close - pp.pp) / close };
+      if (close < pp.s1) return { direction: 'SELL', strength: (pp.pp - close) / close };
+      if (close > pp.r2) return { direction: 'BUY', strength: (close - pp.r1) / close * 0.7 };
+      if (close < pp.s2) return { direction: 'SELL', strength: (pp.s1 - close) / close * 0.7 };
+      if (close > pp.pp) return { direction: 'BUY', strength: 0.3 };
+      if (close < pp.pp) return { direction: 'SELL', strength: 0.3 };
       return { direction: null, strength: 0 };
     }
 
@@ -210,10 +212,11 @@ function generateSignal(
 
 function precomputeIndicators(candles: OHLCV[]): Record<string, unknown> {
   const closes = candles.map((c) => c.close);
+  const lrc = linearRegressionChannel(closes, 20);
   return {
     ema5: ema(closes, 5),
     ema9: ema(closes, 9),
-    ema13: ema(closes, 13),
+    // FIX STRATEGY-013: Removed unused ema13
     ema21: ema(closes, 21),
     ema50: ema(closes, 50),
     rsi: rsi(closes, 14),
@@ -221,10 +224,12 @@ function precomputeIndicators(candles: OHLCV[]): Record<string, unknown> {
     macdHistogram: macd(closes, 12, 26, 9).histogram,
     stc: schaffTrendCycle(closes, 23, 50, 10),
     supertrendDirection: supertrend(candles, 10, 3).direction,
-    lrcUpper: linearRegressionChannel(closes, 20).upper,
-    lrcMiddle: linearRegressionChannel(closes, 20).middle,
-    lrcLower: linearRegressionChannel(closes, 20).lower,
+    lrcUpper: lrc.upper,
+    lrcMiddle: lrc.middle,
+    lrcLower: lrc.lower,
     atr: atr(candles, 14),
+    // FIX STRATEGY-003/IND-001: Compute pivot points for PIVOT_POINT strategy
+    pivotPoints: candles.length > 0 ? pivotPoints(candles) : undefined,
   };
 }
 
@@ -241,7 +246,8 @@ function runBacktestSimulation(
   let openTrade: BacktestTrade | null = null;
   let tradeId = 0;
   const minLookback = 60; // Minimum candles before trading starts
-  const maxOpenPositions = 1; // Simplified: one position at a time
+  // FIX STRATEGY-006: Use config value instead of hardcoded 1
+  const maxOpenPositions = config.maxPositions || 1;
 
   for (let i = minLookback; i < candles.length; i++) {
     const candle = candles[i];
@@ -300,7 +306,8 @@ function runBacktestSimulation(
         if (isNaN(atrVal) || atrVal === 0) continue;
 
         const slPips = Math.max(config.stopLossPips, Math.round(atrVal / pipConfig.pipSize * 1.5));
-        const tpPips = Math.round(slPips * 1.5);
+        // FIX STRATEGY-005: Use user's takeProfitPips config instead of hardcoded 1.5x
+        const tpPips = config.takeProfitPips || Math.round(slPips * 1.5);
         const riskAmount = balance * (config.riskPerTrade / 100);
         const lotSize = Math.max(
           FINEX_CONFIG.minLot,
@@ -463,7 +470,8 @@ export async function POST(request: NextRequest) {
     if (!VALID_STRATEGIES.includes(config.strategy)) {
       return NextResponse.json({ error: `Invalid strategy. Must be one of: ${VALID_STRATEGIES.join(', ')}` }, { status: 400 });
     }
-    const VALID_TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
+    // FIX STRATEGY-007: Added M2 to match TIMEFRAMES constant
+    const VALID_TIMEFRAMES = ['M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
     if (!VALID_TIMEFRAMES.includes(config.timeframe)) {
       return NextResponse.json({ error: `Invalid timeframe. Must be one of: ${VALID_TIMEFRAMES.join(', ')}` }, { status: 400 });
     }
@@ -571,7 +579,11 @@ export async function POST(request: NextRequest) {
       result: { ...stats, id: dbResult.id },
       trades,
       candlesUsed: candles.length,
-      equityCurve,
+      // FIX STRATEGY-004: Format equity curve as {time, equity} objects for chart rendering
+      equityCurve: equityCurve.map((eq, i) => ({
+        time: candles[i]?.time ? new Date(candles[i].time).toISOString().slice(0, 10) : String(i),
+        equity: parseFloat(eq.toFixed(2)),
+      })),
     });
   } catch (error) {
     logApiError('Backtest', error);

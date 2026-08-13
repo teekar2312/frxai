@@ -1566,3 +1566,56 @@ Stage Summary:
 - 3 files changed, 1 new file created
 - ESLint + TypeScript clean (0 errors)
 - Browser verified: all interactions work (dropdown, chips, pills, cross-tab persistence)
+
+---
+Task ID: DEEP-AUDIT-ANALYSIS
+Agent: Main Orchestrator
+Task: Deep audit of market analysis, strategy, and indicator integrations. Find and fix all issues.
+
+Work Log:
+- Launched 3 parallel audit agents: Market Analysis, Strategy, Indicators
+- Market Analysis audit: 15 issues found (3 CRITICAL, 4 HIGH, 4 MEDIUM, 4 LOW)
+- Strategy audit: 17 issues found (4 CRITICAL, 5 HIGH, 5 MEDIUM, 3 LOW)  
+- Indicators audit: 17 issues found (3 CRITICAL, 3 HIGH, 6 MEDIUM, 5 LOW)
+- Deduplicated to ~25 unique issues across all 3 audits
+- Fixed all CRITICAL (6) and HIGH (8) issues = 14 fixes total
+
+Stage Summary:
+CRITICAL FIXES:
+1. MKT-ANALYSIS-001: Client sent {pair, currentPrice, quote} but API expected {pair, marketData}. Now API builds marketData server-side by computing indicators internally.
+2. MKT-ANALYSIS-002: Signal generation was non-functional (no endpoint, no signals returned). Added signal generation to analysis API when generateSignals=true.
+3. MKT-ANALYSIS-003: marketConditions in store never updated. AiAnalysisPanel now calls setMarketCondition() after successful analysis.
+4. STRATEGY-003/IND-001: PIVOT_POINT strategy broken - pivotPoints never computed in precomputeIndicators(). Added computation and fixed type mismatch (array→single object).
+5. STRATEGY-004: Equity curve returned as number[] but BacktestingPanel expected {time, equity}[]. Fixed format.
+6. IND-003: AI analysis received zero indicator data. Now server fetches and computes 16+ indicators server-side before sending to AI.
+
+HIGH FIXES:
+7. MKT-ANALYSIS-005: Analysis history showed 'undefined' for strategy names. GET handler now maps DB fields (strategyUsed→bestStrategy, indicatorsUsed→indicators).
+8. MKT-ANALYSIS-006: AI system message used 'assistant' role instead of 'system'. Fixed to 'system'.
+9. MKT-ANALYSIS-007: Indicators and analysis shared same rate limit bucket (5 req/min). Added separate 'indicators' bucket (10 req/min).
+10. STRATEGY-005: takeProfitPips silently ignored in backtest. Now uses config.takeProfitPips.
+11. STRATEGY-006: maxPositions hardcoded to 1. Now uses config.maxPositions.
+12. STRATEGY-007: M2 timeframe in UI but rejected by API. Added M2 to VALID_TIMEFRAMES.
+13. STRATEGY-008: Strategy descriptions inaccurate vs implementations. Fixed all 4 incorrect descriptions.
+14. IND-004: Stochastic %D misaligned at tail end. Rewrote using per-window SMA.
+15. IND-005: 9 unused indicator imports in backtest route. Removed all.
+
+OTHER FIXES:
+16. MKT-ANALYSIS-008: Expired analysis records never cleaned. Added cleanup on POST.
+17. MKT-ANALYSIS-009: Duplicate condition in linear regression slope. Removed.
+18. MKT-ANALYSIS-011: Analysis prompt didn't specify timeframe. Now included.
+19. STRATEGY-013: ema13 computed but unused. Removed from precomputeIndicators.
+20. IND-014: pivotPoints/schaffTrendCycle crash on empty input. Added edge case guards.
+21. IND-017: AiAnalysisPanel indicator badge crash on null value. Added null-check.
+
+Files Modified:
+- src/app/api/analysis/route.ts (major rewrite)
+- src/app/api/backtest/route.ts (6 fixes)
+- src/app/api/indicators/route.ts (2 fixes)
+- src/lib/indicators.ts (3 fixes)
+- src/lib/rate-limit.ts (1 fix)
+- src/components/trading/AiAnalysisPanel.tsx (4 fixes)
+- src/components/trading/TradingSignalsPanel.tsx (2 fixes)
+- src/components/trading/shared.ts (7 description fixes)
+
+Verification: ESLint 0 errors, TypeScript 0 errors in src/, browser verification passed all panels render correctly.

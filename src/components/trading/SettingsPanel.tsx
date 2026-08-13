@@ -22,6 +22,7 @@ interface AiProviderInfo {
   name: string;
   models: { id: string; name: string }[];
   isAvailable: boolean;
+  apiKeyEnvVar?: string;
 }
 
 export function SettingsPanel() {

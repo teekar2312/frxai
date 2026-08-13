@@ -85,6 +85,7 @@ export const VALID_AI_PROVIDER_IDS = Object.keys(AI_PROVIDERS) as AiProviderId[]
 export function isProviderAvailable(providerId: AiProviderId): boolean {
   const provider = AI_PROVIDERS[providerId];
   if (providerId === 'zai') return true; // ZAI uses .z-ai-config file
+  if (providerId === 'lokal_ai') return true; // Lokal AI (Ollama) doesn't require an API key
   if (!provider.apiKeyEnvVar) return true;
   return !!process.env[provider.apiKeyEnvVar];
 }
@@ -182,7 +183,10 @@ export async function aiComplete(
   }
 
   // OpenAI-compatible path (Groq, OpenAI, together, Tinyfish, Lokal AI)
-  const apiKey = process.env[provider.apiKeyEnvVar];
+  // Lokal AI (Ollama) doesn't require an API key
+  const apiKey = providerId === 'lokal_ai'
+    ? (process.env[provider.apiKeyEnvVar] || 'ollama')
+    : process.env[provider.apiKeyEnvVar];
   if (!apiKey) {
     throw new Error(`API key not configured for ${provider.name}. Set ${provider.apiKeyEnvVar} in .env`);
   }

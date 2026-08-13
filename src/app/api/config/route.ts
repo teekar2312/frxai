@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { FINEX_CONFIG, VALID_AI_PROVIDER_IDS } from '@/lib/trading-types';
+import { FINEX_CONFIG } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { logApiError } from '@/lib/safe-log';
-import { AI_PROVIDERS, getModelsForProvider } from '@/lib/ai-provider';
+import { AI_PROVIDERS, getModelsForProvider, VALID_AI_PROVIDER_IDS } from '@/lib/ai-provider';
 
 const DEFAULT_CONFIG = {
   id: 'default',

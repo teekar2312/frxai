@@ -8,6 +8,7 @@ export async function GET() {
       id: p.id,
       name: p.name,
       models: p.models,
+      apiKeyEnvVar: p.apiKeyEnvVar,
       isAvailable: isProviderAvailable(p.id),
     }));
 

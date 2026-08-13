@@ -27,6 +27,7 @@ export default function TradingDashboard() {
   const [connected, setConnected] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
+  const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   // Jakarta timezone clock
   useEffect(() => {
@@ -40,9 +41,45 @@ export default function TradingDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch prices every 5 seconds
+  // Fetch prices every 5 seconds — uses MT5 prices when in MT5 live mode (#4)
   const fetchPrices = useCallback(async () => {
     try {
+      if (isMt5Live) {
+        // Use MT5 live prices from bridge
+        const res = await fetch('/api/mt5/prices');
+        if (res.ok) {
+          const mt5Prices = await res.json() as Record<string, { bid: number; ask: number; timestamp: number }>;
+          FOREX_PAIRS.forEach((pair) => {
+            const p = mt5Prices[pair];
+            if (p && p.bid > 0 && p.ask > 0) {
+              const mid = (p.bid + p.ask) / 2;
+              const spread = p.ask - p.bid;
+              // Convert spread to pips based on pair
+              const pipSize = pair === 'USDJPY' || pair === 'XAUUSD' ? 0.01 : 0.0001;
+              const spreadPips = spread / pipSize;
+              // Get previous quote for change calculation
+              const prev = useTradingStore.getState().quotes[pair];
+              const change = prev ? mid - prev.mid : 0;
+              const changePercent = prev?.mid ? (change / prev.mid) * 100 : 0;
+              setQuote(pair, {
+                pair,
+                bid: p.bid,
+                ask: p.ask,
+                mid,
+                spread: spreadPips,
+                change,
+                changePercent,
+                high: prev?.high ?? mid,
+                low: prev?.low ?? mid,
+                timestamp: p.timestamp,
+              });
+            }
+          });
+          setConnected(true);
+          return;
+        }
+        // If MT5 prices fail, fall back to Finnhub
+      }
       const res = await fetch('/api/finnhub');
       if (!res.ok) throw new Error('Failed to fetch prices');
       const data = await res.json();
@@ -55,7 +92,7 @@ export default function TradingDashboard() {
     } catch {
       setConnected(false);
     }
-  }, [setQuote]);
+  }, [setQuote, isMt5Live]);
 
   useEffect(() => {
     fetchPrices();

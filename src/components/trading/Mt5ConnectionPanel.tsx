@@ -14,7 +14,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { useTradingStore } from '@/lib/trading-store';
-import type { Mt5AccountInfo, Mt5Position, Mt5ConnectionStatus } from '@/lib/trading-types';
+import type { Mt5AccountInfo, Mt5Position } from '@/lib/trading-types';
 import { fmtPrice } from './shared';
 
 export function Mt5ConnectionPanel() {
@@ -42,17 +42,17 @@ export function Mt5ConnectionPanel() {
         setUptime(data.uptime ?? 0);
 
         if (data.eaConnected) {
-          setMt5ConnectionStatus('connected' as Mt5ConnectionStatus);
+          setMt5ConnectionStatus('connected');
         } else if (data.bridgeReachable) {
-          setMt5ConnectionStatus('disconnected' as Mt5ConnectionStatus);
+          setMt5ConnectionStatus('disconnected');
         } else {
-          setMt5ConnectionStatus('disconnected' as Mt5ConnectionStatus);
+          setMt5ConnectionStatus('disconnected');
         }
       }
     } catch {
       setBridgeReachable(false);
       setEaConnected(false);
-      setMt5ConnectionStatus('disconnected' as Mt5ConnectionStatus);
+      setMt5ConnectionStatus('disconnected');
     } finally {
       setChecking(false);
     }
@@ -88,7 +88,7 @@ export function Mt5ConnectionPanel() {
 
   // Enable MT5 mode
   const handleEnableMt5 = async () => {
-    setMt5ConnectionStatus('connecting' as Mt5ConnectionStatus);
+    setMt5ConnectionStatus('connecting');
     setTradingMode('mt5_live');
     try {
       const res = await fetch('/api/mt5/connection', {
@@ -100,23 +100,23 @@ export function Mt5ConnectionPanel() {
       if (data?.bridgeReachable) {
         toast.info('Bridge is running. Start the MT5 EA to connect.');
         setBridgeReachable(true);
-        setMt5ConnectionStatus('disconnected' as Mt5ConnectionStatus);
+        setMt5ConnectionStatus('disconnected');
       } else {
         toast.error('MT5 bridge is not running. Start it first.');
         setTradingMode('simulation');
-        setMt5ConnectionStatus('disconnected' as Mt5ConnectionStatus);
+        setMt5ConnectionStatus('disconnected');
       }
     } catch {
       toast.error('Cannot reach MT5 bridge service.');
       setTradingMode('simulation');
-      setMt5ConnectionStatus('error' as Mt5ConnectionStatus);
+      setMt5ConnectionStatus('error');
     }
   };
 
   // Disable MT5 mode
   const handleDisableMt5 = () => {
     setTradingMode('simulation');
-    setMt5ConnectionStatus('disconnected' as Mt5ConnectionStatus);
+    setMt5ConnectionStatus('disconnected');
     setMt5AccountInfo(null);
     setMt5Positions([]);
     toast.success('Switched to Simulation mode');

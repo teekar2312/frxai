@@ -12,7 +12,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     accountBalance,
     dailyPnl,
     openPositionsCount,
-    tradingMode, mt5ConnectionStatus,
+    tradingMode, mt5ConnectionStatus, mt5AccountInfo,
   } = useTradingStore();
 
   return (
@@ -43,7 +43,11 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           )}
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Balance</span>
-            <span className="text-white font-mono font-medium">${accountBalance.toLocaleString()}</span>
+            <span className="text-white font-mono font-medium">
+              {tradingMode === 'mt5_live' && mt5AccountInfo
+                ? `${mt5AccountInfo.currency} ${mt5AccountInfo.balance.toLocaleString()}`
+                : `$${accountBalance.toLocaleString()}`}
+            </span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Daily P&L</span>

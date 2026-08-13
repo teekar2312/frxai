@@ -1,5 +1,8 @@
 // MT5 Bridge - Bridges Next.js app to MT5 Terminal via Expert Advisor (EA)
 // Port: 3004
+// Supports two EA connection modes:
+//   1. WebSocket (ws://localhost:3004/ws) - real-time bidirectional
+//   2. HTTP Polling (POST /ea/sync, GET /ea/commands) - for MQL5 WebRequest
 
 import type { ServerWebSocket } from "bun";
 
@@ -37,19 +40,37 @@ interface Mt5Position {
   openTime: string;
 }
 
+interface PendingCommand {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+  createdAt: number;
+  timeoutAt: number;
+  resolve?: (value: unknown) => void;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+// ─── Configuration ────────────────────────────────────────────────────────────
+
+const MIN_LOT = 0.01;
+const MAX_LOT = 50;
+const COMMAND_TIMEOUT_MS = 15_000;
+const STALE_EA_TIMEOUT_MS = 30_000;
+
 // ─── State ───────────────────────────────────────────────────────────────────
 
 let mt5Connected = false;
+let eaConnectionMethod: "ws" | "http" | null = null;
 let mt5Ws: ServerWebSocket | null = null;
 let accountInfo: Mt5AccountInfo | null = null;
 let positions: Mt5Position[] = [];
 let prices: Record<string, { bid: number; ask: number; timestamp: number }> = {};
-let pendingRequests: Map<
-  string,
-  { resolve: (value: unknown) => void; timer: ReturnType<typeof setTimeout> }
-> = new Map();
+let pendingRequests: Map<string, { resolve: (value: unknown) => void; timer: ReturnType<typeof setTimeout> }> = new Map();
+let commandQueue: PendingCommand[] = [];
 let startTime = Date.now();
 let lastPing: number | null = null;
+let lastHttpSync: number | null = null;
+let lastEaDisconnectNotifiedAt = 0;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +91,21 @@ function generateRequestId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function validateLotSize(lotSize: number): { valid: boolean; error?: string } {
+  if (typeof lotSize !== "number" || isNaN(lotSize)) {
+    return { valid: false, error: "lotSize must be a valid number" };
+  }
+  if (lotSize < MIN_LOT) {
+    return { valid: false, error: `lotSize must be >= ${MIN_LOT}` };
+  }
+  if (lotSize > MAX_LOT) {
+    return { valid: false, error: `lotSize must be <= ${MAX_LOT}` };
+  }
+  return { valid: true };
+}
+
+// ─── EA Communication (WebSocket) ────────────────────────────────────────────
+
 function sendToEA(message: Record<string, unknown>): boolean {
   if (!mt5Ws || mt5Ws.readyState !== WebSocket.OPEN) return false;
   try {
@@ -80,10 +116,7 @@ function sendToEA(message: Record<string, unknown>): boolean {
   }
 }
 
-function sendAndWait(
-  message: Record<string, unknown>,
-  timeoutMs = 10_000
-): Promise<unknown> {
+function sendAndWait(message: Record<string, unknown>, timeoutMs = 10_000): Promise<unknown> {
   return new Promise((resolve) => {
     const requestId = generateRequestId();
     const timer = setTimeout(() => {
@@ -100,6 +133,80 @@ function sendAndWait(
       resolve({ success: false, error: "MT5 not connected" });
     }
   });
+}
+
+// ─── EA Communication (HTTP Polling) ─────────────────────────────────────────
+
+function enqueueCommand(type: string, data: Record<string, unknown>): Promise<unknown> {
+  return new Promise((resolve) => {
+    const id = generateRequestId();
+    const timer = setTimeout(() => {
+      // Remove from queue if still there
+      commandQueue = commandQueue.filter((c) => c.id !== id);
+      resolve({ success: false, error: "EA command timed out (no response)" });
+    }, COMMAND_TIMEOUT_MS);
+
+    commandQueue.push({
+      id,
+      type,
+      data,
+      createdAt: Date.now(),
+      timeoutAt: Date.now() + COMMAND_TIMEOUT_MS,
+      resolve,
+      timer,
+    });
+
+    console.log(`[MT5-Bridge] Command queued for HTTP EA: ${type} (id=${id})`);
+  });
+}
+
+function sendCommandToEA(type: string, data: Record<string, unknown>): Promise<unknown> {
+  if (eaConnectionMethod === "http") {
+    return enqueueCommand(type, data);
+  }
+  return sendAndWait({ type, data });
+}
+
+// ─── Connection Management ───────────────────────────────────────────────────
+
+function markEaConnected(method: "ws" | "http") {
+  if (!mt5Connected) {
+    console.log(`[MT5-Bridge] EA connected via ${method.toUpperCase()}`);
+  }
+  mt5Connected = true;
+  eaConnectionMethod = method;
+  lastPing = Date.now();
+}
+
+function markEaDisconnected(reason: string) {
+  if (mt5Connected) {
+    console.log(`[MT5-Bridge] EA disconnected: ${reason}`);
+  }
+  mt5Ws = null;
+  mt5Connected = false;
+  eaConnectionMethod = null;
+  lastPing = null;
+  lastHttpSync = null;
+
+  // Reject all pending requests
+  for (const [, pending] of pendingRequests) {
+    clearTimeout(pending.timer);
+    pending.resolve({ success: false, error: `EA disconnected: ${reason}` });
+  }
+  pendingRequests.clear();
+
+  // Reject all queued commands
+  for (const cmd of commandQueue) {
+    if (cmd.timer) clearTimeout(cmd.timer);
+    if (cmd.resolve) cmd.resolve({ success: false, error: `EA disconnected: ${reason}` });
+  }
+  commandQueue = [];
+
+  // Notify (rate-limited, max once per 5s)
+  const now = Date.now();
+  if (now - lastEaDisconnectNotifiedAt > 5000) {
+    lastEaDisconnectNotifiedAt = now;
+  }
 }
 
 // ─── WebSocket Message Handler ───────────────────────────────────────────────
@@ -119,9 +226,7 @@ function handleEAMessage(raw: string) {
   switch (type) {
     case "account":
       accountInfo = data as unknown as Mt5AccountInfo;
-      console.log(
-        `[MT5-Bridge] Account updated: #${accountInfo.login} (${accountInfo.name}) balance=${accountInfo.balance}`
-      );
+      console.log(`[MT5-Bridge] Account updated: #${accountInfo.login} (${accountInfo.name}) balance=${accountInfo.balance}`);
       break;
 
     case "positions":
@@ -156,9 +261,7 @@ function handleEAMessage(raw: string) {
           errorCode: r.errorCode,
         });
       }
-      console.log(
-        `[MT5-Bridge] Order result: ${r.success ? "OK" : "FAIL"} ticket=${r.ticket ?? "N/A"} error=${r.error ?? "none"}`
-      );
+      console.log(`[MT5-Bridge] Order result: ${r.success ? "OK" : "FAIL"} ticket=${r.ticket ?? "N/A"} error=${r.error ?? "none"}`);
       break;
     }
 
@@ -175,7 +278,6 @@ function handleEAMessage(raw: string) {
 // ─── HTTP Route Handling ─────────────────────────────────────────────────────
 
 function parseTicket(url: string): string | null {
-  // URL pattern: /api/orders/:ticket
   const match = url.match(/^\/api\/orders\/(\d+)$/);
   return match ? match[1] : null;
 }
@@ -195,8 +297,11 @@ async function handleRequest(req: Request): Promise<Response> {
     return json({
       connected: true,
       eaConnected: mt5Connected,
+      eaMethod: eaConnectionMethod,
       uptime: Math.floor((Date.now() - startTime) / 1000),
       lastPing,
+      lastHttpSync,
+      queuedCommands: commandQueue.length,
     });
   }
 
@@ -231,8 +336,15 @@ async function handleRequest(req: Request): Promise<Response> {
       takeProfit?: number;
       comment?: string;
     };
+
+    // Validate lot size (#13)
+    const lotValidation = validateLotSize(body.lotSize);
+    if (!lotValidation.valid) {
+      return json({ success: false, error: lotValidation.error }, 400);
+    }
+
     console.log(`[MT5-Bridge] Place order: ${body.direction} ${body.pair} x${body.lotSize}`);
-    const result = await sendAndWait({ type: "send_order", data: body });
+    const result = await sendCommandToEA("send_order", body as Record<string, unknown>);
     return json(result);
   }
 
@@ -246,10 +358,7 @@ async function handleRequest(req: Request): Promise<Response> {
       return json({ success: false, error: "MT5 not connected" }, 503);
     }
     console.log(`[MT5-Bridge] Close order: #${ticket}`);
-    const result = await sendAndWait({
-      type: "close_order",
-      data: { ticket: Number(ticket) },
-    });
+    const result = await sendCommandToEA("close_order", { ticket: Number(ticket) });
     return json(result);
   }
 
@@ -267,16 +376,144 @@ async function handleRequest(req: Request): Promise<Response> {
       takeProfit?: number;
     };
     console.log(`[MT5-Bridge] Modify order: #${ticket} SL=${body.stopLoss} TP=${body.takeProfit}`);
-    const result = await sendAndWait({
-      type: "modify_order",
-      data: { ticket: Number(ticket), stopLoss: body.stopLoss, takeProfit: body.takeProfit },
+    const result = await sendCommandToEA("modify_order", {
+      ticket: Number(ticket),
+      stopLoss: body.stopLoss,
+      takeProfit: body.takeProfit,
     });
     return json(result);
+  }
+
+  // ── EA HTTP Polling Endpoints ──────────────────────────────────────────
+
+  // POST /ea/sync - EA pushes account info + positions + prices
+  if (method === "POST" && path === "/ea/sync") {
+    try {
+      const body = (await req.json()) as {
+        account?: Mt5AccountInfo;
+        positions?: Mt5Position[];
+      };
+
+      if (body.account) {
+        accountInfo = body.account;
+        console.log(`[MT5-Bridge] [HTTP] Account synced: #${accountInfo.login} (${accountInfo.name}) balance=${accountInfo.balance}`);
+      }
+      if (body.positions) {
+        positions = body.positions;
+        console.log(`[MT5-Bridge] [HTTP] Positions synced: ${positions.length} open`);
+      }
+
+      lastHttpSync = Date.now();
+      markEaConnected("http");
+
+      return json({ success: true, queuedCommands: commandQueue.length });
+    } catch {
+      return json({ success: false, error: "Invalid JSON" }, 400);
+    }
+  }
+
+  // POST /ea/prices - EA pushes price updates
+  if (method === "POST" && path === "/ea/prices") {
+    try {
+      const body = (await req.json()) as {
+        prices: { pair: string; bid: number; ask: number; timestamp: number }[];
+      };
+      if (body.prices && Array.isArray(body.prices)) {
+        for (const p of body.prices) {
+          if (p.pair) {
+            prices[p.pair] = { bid: p.bid, ask: p.ask, timestamp: p.timestamp || Date.now() };
+          }
+        }
+      }
+      lastHttpSync = Date.now();
+      return json({ success: true });
+    } catch {
+      return json({ success: false, error: "Invalid JSON" }, 400);
+    }
+  }
+
+  // GET /ea/commands - EA polls for pending commands
+  if (method === "GET" && path === "/ea/commands") {
+    // Clean up expired commands
+    const now = Date.now();
+    const expired = commandQueue.filter((c) => now > c.timeoutAt);
+    for (const cmd of expired) {
+      if (cmd.timer) clearTimeout(cmd.timer);
+      if (cmd.resolve) cmd.resolve({ success: false, error: "Command expired before EA polled" });
+    }
+    commandQueue = commandQueue.filter((c) => now <= c.timeoutAt);
+
+    // Return pending commands and clear from queue
+    const commands = commandQueue.map((c) => ({
+      id: c.id,
+      type: c.type,
+      data: c.data,
+    }));
+    commandQueue = [];
+
+    return json({ commands });
+  }
+
+  // POST /ea/result - EA sends command execution result
+  if (method === "POST" && path === "/ea/result") {
+    try {
+      const body = (await req.json()) as {
+        requestId: string;
+        success: boolean;
+        ticket?: number;
+        error?: string;
+        errorCode?: number;
+      };
+
+      if (body.requestId && pendingRequests.has(body.requestId)) {
+        const pending = pendingRequests.get(body.requestId)!;
+        clearTimeout(pending.timer);
+        pendingRequests.delete(body.requestId);
+        pending.resolve({
+          success: body.success,
+          ticket: body.ticket,
+          error: body.error,
+          errorCode: body.errorCode,
+        });
+      } else {
+        // Check command queue for matching resolve
+        const cmd = commandQueue.find((c) => c.id === body.requestId);
+        if (cmd?.resolve) {
+          if (cmd.timer) clearTimeout(cmd.timer);
+          cmd.resolve({
+            success: body.success,
+            ticket: body.ticket,
+            error: body.error,
+            errorCode: body.errorCode,
+          });
+          commandQueue = commandQueue.filter((c) => c.id !== body.requestId);
+        }
+      }
+
+      console.log(`[MT5-Bridge] [HTTP] Order result: ${body.success ? "OK" : "FAIL"} ticket=${body.ticket ?? "N/A"}`);
+      return json({ success: true });
+    } catch {
+      return json({ success: false, error: "Invalid JSON" }, 400);
+    }
   }
 
   // ── 404 ──────────────────────────────────────────────────────────────────
   return json({ error: "Not found" }, 404);
 }
+
+// ─── Stale EA Detection Timer ───────────────────────────────────────────────
+
+setInterval(() => {
+  if (!mt5Connected) return;
+
+  const now = Date.now();
+  if (eaConnectionMethod === "http" && lastHttpSync) {
+    if (now - lastHttpSync > STALE_EA_TIMEOUT_MS) {
+      console.log(`[MT5-Bridge] HTTP EA stale (no sync for ${STALE_EA_TIMEOUT_MS / 1000}s)`);
+      markEaDisconnected("HTTP EA stale (no sync received)");
+    }
+  }
+}, 5000);
 
 // ─── Server ───────────────────────────────────────────────────────────────────
 
@@ -288,7 +525,6 @@ Bun.serve({
   port: PORT,
 
   fetch(req, server) {
-    // Upgrade to WebSocket for /ws
     const url = new URL(req.url);
     if (url.pathname === "/ws") {
       if (server.upgrade(req)) {
@@ -302,11 +538,11 @@ Bun.serve({
   websocket: {
     open(ws: ServerWebSocket) {
       if (mt5Ws && mt5Ws.readyState === 1) {
-        console.log("[MT5-Bridge] Closing existing EA connection (new one connecting)");
+        console.log("[MT5-Bridge] Closing existing WS EA connection (new one connecting)");
         mt5Ws.close();
       }
       mt5Ws = ws;
-      mt5Connected = true;
+      markEaConnected("ws");
       console.log("[MT5-Bridge] EA connected via WebSocket");
 
       // Request initial state sync
@@ -320,16 +556,7 @@ Bun.serve({
 
     close(ws: ServerWebSocket) {
       if (ws === mt5Ws) {
-        mt5Ws = null;
-        mt5Connected = false;
-        console.log("[MT5-Bridge] EA disconnected");
-
-        // Reject all pending requests
-        for (const [, pending] of pendingRequests) {
-          clearTimeout(pending.timer);
-          pending.resolve({ success: false, error: "EA disconnected" });
-        }
-        pendingRequests.clear();
+        markEaDisconnected("WebSocket closed");
       }
     },
 
@@ -341,3 +568,4 @@ Bun.serve({
 
 console.log(`[MT5-Bridge] HTTP + WebSocket server running on http://localhost:${PORT}`);
 console.log(`[MT5-Bridge] WebSocket endpoint: ws://localhost:${PORT}/ws`);
+console.log(`[MT5-Bridge] EA HTTP polling: POST /ea/sync, GET /ea/commands, POST /ea/result`);

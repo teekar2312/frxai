@@ -21,6 +21,11 @@ import {
   DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import {
   type ForexPair, type TradingDirection, type StrategyName,
   FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS,
 } from '@/lib/trading-types';
@@ -46,6 +51,15 @@ export function LiveTradingPanel() {
     strategy: 'EMA_CROSSOVER' as StrategyName,
   });
   const [trailingStopEnabled, setTrailingStopEnabled] = useState(false);
+  const [confirmOrder, setConfirmOrder] = useState<{
+    pair: ForexPair;
+    direction: TradingDirection;
+    lotSize: number;
+    stopLoss: number;
+    takeProfit: number;
+    strategy: StrategyName;
+    trailingStop: boolean;
+  } | null>(null);
 
   // Fetch positions (for polling)
   useEffect(() => {
@@ -78,30 +92,41 @@ export function LiveTradingPanel() {
     }
   };
 
+  // Execute MT5 order (called after confirmation)
+  const executeMt5Order = async (order: typeof confirmOrder) => {
+    if (!order) return;
+    try {
+      const res = await fetch('/api/mt5/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pair: order.pair,
+          direction: order.direction,
+          lotSize: order.lotSize,
+          stopLoss: order.stopLoss || undefined,
+          takeProfit: order.takeProfit || undefined,
+          comment: `FRXAI-${order.strategy}`,
+        }),
+      });
+      const data = res.ok ? await res.json() : await res.json();
+      if (res.ok && data.success) {
+        toast.success(`MT5 ${order.direction} ${PAIR_DISPLAY[order.pair]} @ ${order.lotSize} lots (Ticket #${data.ticket})`);
+        setNewTradeDialog(false);
+      } else {
+        toast.error(data.error || 'MT5 order failed');
+      }
+    } catch {
+      toast.error('Network error sending MT5 order');
+    }
+  };
+
   // Open new trade
   const handleOpenTrade = async () => {
     try {
       if (isMt5Live) {
-        // Route through MT5
-        const res = await fetch('/api/mt5/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            pair: newTrade.pair,
-            direction: newTrade.direction,
-            lotSize: newTrade.lotSize,
-            stopLoss: newTrade.stopLoss || undefined,
-            takeProfit: newTrade.takeProfit || undefined,
-            comment: `FRXAI-${newTrade.strategy}`,
-          }),
-        });
-        const data = res.ok ? await res.json() : await res.json();
-        if (res.ok && data.success) {
-          toast.success(`MT5 ${newTrade.direction} ${PAIR_DISPLAY[newTrade.pair]} @ ${newTrade.lotSize} lots (Ticket #${data.ticket})`);
-          setNewTradeDialog(false);
-        } else {
-          toast.error(data.error || 'MT5 order failed');
-        }
+        // Show confirmation dialog for MT5 live orders
+        setConfirmOrder({ ...newTrade, trailingStop: trailingStopEnabled });
+        return;
       } else {
         // Simulation mode - local
         const res = await fetch('/api/positions', {
@@ -427,6 +452,58 @@ export function LiveTradingPanel() {
           </div>
         </CardContent>
       </Card>
+
+      {/* MT5 Order Confirmation Dialog */}
+      <AlertDialog open={confirmOrder !== null} onOpenChange={(open) => { if (!open) setConfirmOrder(null); }}>
+        <AlertDialogContent className="bg-zinc-900 border-zinc-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white">Confirm MT5 Order</AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              This order will be sent to MetaTrader 5 and executed with real funds. Please verify the details below.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {confirmOrder && (
+            <div className="bg-zinc-800/50 rounded-lg p-3 space-y-2 my-2">
+              <div className="flex justify-between text-xs">
+                <span className="text-zinc-400">Pair</span>
+                <span className="text-white font-mono">{PAIR_DISPLAY[confirmOrder.pair]}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-zinc-400">Direction</span>
+                <Badge className={`text-[10px] ${confirmOrder.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                  {confirmOrder.direction}
+                </Badge>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-zinc-400">Lot Size</span>
+                <span className="text-white font-mono">{confirmOrder.lotSize}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-zinc-400">Stop Loss</span>
+                <span className="text-rose-400 font-mono">{confirmOrder.stopLoss || 'None'}</span>
+              </div>
+              <div className="flex justify-between text-xs">
+                <span className="text-zinc-400">Take Profit</span>
+                <span className="text-emerald-400 font-mono">{confirmOrder.takeProfit || 'None'}</span>
+              </div>
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-zinc-700 text-zinc-300 hover:bg-zinc-800">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmOrder) {
+                  executeMt5Order(confirmOrder);
+                  setConfirmOrder(null);
+                }
+              }}
+              className={confirmOrder?.direction === 'BUY' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}
+            >
+              Confirm {confirmOrder?.direction}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

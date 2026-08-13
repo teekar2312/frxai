@@ -139,3 +139,51 @@ Stage Summary:
 - Full MT5 integration architecture: Bridge (port 3004) ← EA (WebSocket) | Next.js (API routes) ← Bridge (HTTP)
 - Mode switching: Simulation (local SQLite) ↔ MT5 Live (orders via bridge → EA → MT5 Terminal)
 - Push failed: no SSH/HTTPS credentials in sandbox environment. User must push manually.
+
+---
+Task ID: 4-a
+Agent: Frontend Fixes Agent
+Task: Apply audit fixes #5, #6, #11, #12 to frontend components
+
+Work Log:
+- FIX #5 — DashboardPanel.tsx: Added computed MT5-aware display values (displayPositions, displayOpenCount, displayPnl, displayBalance). Mapped mt5Positions to Position[] format for unified rendering. Added MT5 badge in Open Positions card header. Replaced all raw `positions`, `dailyPnl`, `accountBalance`, `openPositionsCount` references with display variants.
+- FIX #6 — Sidebar.tsx: Added `mt5AccountInfo` to store destructuring. Changed balance display to show MT5 account currency + balance when in mt5_live mode with account info, otherwise falls back to default `$` + accountBalance.
+- FIX #11 — Mt5ConnectionPanel.tsx: Removed all 9 redundant `as Mt5ConnectionStatus` type casts from setMt5ConnectionStatus() calls. Removed unused `Mt5ConnectionStatus` from import statement.
+- FIX #12 — LiveTradingPanel.tsx: Added AlertDialog imports. Added `confirmOrder` state to track pending MT5 orders. Extracted MT5 order execution into `executeMt5Order` function. Modified `handleOpenTrade` to set confirmOrder (showing dialog) instead of executing immediately when isMt5Live. Added AlertDialog component at end showing pair, direction, lot size, SL, TP with Confirm/Cancel buttons.
+- ESLint passes clean with zero errors after all edits.
+
+Stage Summary:
+- 4 files modified: DashboardPanel.tsx, Sidebar.tsx, Mt5ConnectionPanel.tsx, LiveTradingPanel.tsx
+- Dashboard now fully MT5-aware with correct positions, P&L, balance, and badge indicators
+- Sidebar shows MT5 account currency/balance in live mode
+- Removed 9 redundant type casts, 1 unused import
+- MT5 live orders require confirmation dialog before execution for safety
+
+---
+Task ID: 4-b
+Agent: API Fixes Agent
+Task: Apply audit fixes #7, #8, #14 to API routes
+
+Work Log:
+- FIX #7 — Activity logging for MT5 operations in src/app/api/mt5/orders/route.ts:
+  - Added `import { db } from '@/lib/db'`
+  - POST handler: logs success (info) or bridge failure (warn) with message like "MT5 Order: BUY EURUSD x0.01 (Ticket #12345)". Also logs catch-block exceptions.
+  - DELETE handler: logs success (info) or failure (warn) with message like "MT5 Close: Ticket #12345". Also logs catch-block exceptions.
+  - PATCH handler: logs success (info) or failure (warn) with message like "MT5 Modify: Ticket #12345 SL=1.0800 TP=1.1000". Also logs catch-block exceptions.
+  - All logs use category 'mt5_trading' and include relevant metadata (ticket, direction, lotSize, stopLoss, takeProfit, responseStatus).
+  - All logging wrapped in try/catch (non-critical) to never break the API response.
+- FIX #8 — Lot size validation in MT5 orders API:
+  - Added MIN_LOT=0.01 and MAX_LOT=50 constants.
+  - After presence validation, added range check: if lotSize < MIN_LOT or lotSize > MAX_LOT, return 400 with descriptive error.
+- FIX #14 — Make entryPrice optional in simulation positions route (src/app/api/positions/route.ts):
+  - Changed type annotation from `entryPrice: number` to `entryPrice?: number`.
+  - Changed initial validation from `if (!pair || !direction || !entryPrice)` to `if (!pair || !direction)`.
+  - Added Finnhub fallback: if entryPrice is missing or 0, fetches `http://localhost:3000/api/finnhub` and extracts `data.quotes[pair].mid`.
+  - If still no entryPrice after Finnhub attempt, returns 400 with clear error message.
+- ESLint passes clean with zero errors after all edits.
+
+Stage Summary:
+- 2 files modified: src/app/api/mt5/orders/route.ts, src/app/api/positions/route.ts
+- MT5 operations (POST/DELETE/PATCH) now log to activityLog table with category 'mt5_trading'
+- MT5 lot size validated to 0.01–50 range with 400 response
+- Simulation positions can now be opened without entryPrice; falls back to Finnhub mid price

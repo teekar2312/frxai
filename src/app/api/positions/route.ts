@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
       pair: ForexPair;
       direction: 'BUY' | 'SELL';
       lotSize?: number;
-      entryPrice: number;
+      entryPrice?: number;
       stopLoss?: number;
       takeProfit?: number;
       strategy?: string;
@@ -48,9 +48,32 @@ export async function POST(request: NextRequest) {
       riskAmount?: number;
     };
 
-    if (!pair || !direction || !entryPrice) {
+    if (!pair || !direction) {
       return NextResponse.json(
-        { error: 'pair, direction, and entryPrice are required' },
+        { error: 'pair and direction are required' },
+        { status: 400 }
+      );
+    }
+
+    // Try to get entryPrice from Finnhub if not provided
+    if (!entryPrice || entryPrice === 0) {
+      try {
+        const finnhubRes = await fetch('http://localhost:3000/api/finnhub');
+        if (finnhubRes.ok) {
+          const finnhubData = await finnhubRes.json();
+          const quote = finnhubData.quotes?.[pair as string];
+          if (quote?.mid) {
+            entryPrice = quote.mid;
+          }
+        }
+      } catch {
+        // Finnhub fetch failed, will check below
+      }
+    }
+
+    if (!entryPrice || entryPrice === 0) {
+      return NextResponse.json(
+        { error: 'entryPrice is required (could not determine current price from market data)' },
         { status: 400 }
       );
     }

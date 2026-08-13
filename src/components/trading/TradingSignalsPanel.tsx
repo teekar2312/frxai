@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
-import { Zap, RefreshCw, ArrowUpCircle, ArrowDownCircle } from 'lucide-react';
+import { Zap, RefreshCw, ArrowUpCircle, ArrowDownCircle, Play, CheckCircle2, XCircle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -16,15 +16,57 @@ import {
 import { useTradingStore } from '@/lib/trading-store';
 import { fmtPrice, STRATEGY_DESCS } from './shared';
 
+const AUTO_TRADE_CONFIDENCE_THRESHOLD = 60; // minimum confidence %
+
+async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise<{ success: boolean; error?: string; ticket?: number }> {
+  if (isMt5Live) {
+    const res = await fetch('/api/mt5/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pair: signal.pair,
+        direction: signal.direction,
+        lotSize: signal.lotSize,
+        stopLoss: signal.stopLoss,
+        takeProfit: signal.takeProfit,
+        comment: `FRXAI-AUTO-${signal.strategy}`,
+      }),
+    });
+    const data = await res.json();
+    return { success: data.success, error: data.error, ticket: data.ticket };
+  } else {
+    const res = await fetch('/api/positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pair: signal.pair,
+        direction: signal.direction,
+        lotSize: signal.lotSize,
+        stopLoss: signal.stopLoss,
+        takeProfit: signal.takeProfit,
+        strategy: signal.strategy,
+      }),
+    });
+    if (res.ok) return { success: true };
+    const data = await res.json();
+    return { success: false, error: data.error };
+  }
+}
+
 export function TradingSignalsPanel() {
-  const { quotes, signals, setSignals, setAiAnalysis } = useTradingStore();
+  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus } = useTradingStore();
+  const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   const [signalFilter, setSignalFilter] = useState<{ pair: string; strategy: string; direction: string }>({ pair: 'all', strategy: 'all', direction: 'all' });
   const [signalsLoading, setSignalsLoading] = useState(false);
+  const [autoTradeResults, setAutoTradeResults] = useState<Record<number, { success: boolean; ticket?: number; error?: string }>>({});
+  const [autoTrading, setAutoTrading] = useState(false);
+  const executedSignalIds = useRef(new Set<string>());
 
   // Generate signals for all pairs
   const handleGenerateSignals = async () => {
     setSignalsLoading(true);
+    setAutoTradeResults({});
     try {
       const allSignals: TradingSignal[] = [];
       for (const pair of FOREX_PAIRS) {
@@ -45,10 +87,69 @@ export function TradingSignalsPanel() {
       }
       setSignals(allSignals);
       toast.success(`Generated ${allSignals.length} signals across all pairs`);
+
+      // #2 Auto-trading: auto-execute qualifying signals
+      if (isAutoTrading && allSignals.length > 0) {
+        await autoExecuteSignals(allSignals);
+      }
     } catch {
       toast.error('Failed to generate signals');
     } finally {
       setSignalsLoading(false);
+    }
+  };
+
+  // Auto-execute signals when auto-trading is ON (#2 HIGH)
+  const autoExecuteSignals = async (newSignals: TradingSignal[]) => {
+    const eligible = newSignals.filter(
+      (s) => s.confidence >= AUTO_TRADE_CONFIDENCE_THRESHOLD && !executedSignalIds.current.has(s.id)
+    );
+
+    if (eligible.length === 0) {
+      if (newSignals.length > 0) {
+        toast.info(`No signals above ${AUTO_TRADE_CONFIDENCE_THRESHOLD}% confidence threshold for auto-trading`);
+      }
+      return;
+    }
+
+    setAutoTrading(true);
+    toast.info(`Auto-trading: executing ${eligible.length} signal(s)...`);
+
+    const results: Record<number, { success: boolean; ticket?: number; error?: string }> = {};
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < eligible.length; i++) {
+      const signal = eligible[i];
+      executedSignalIds.current.add(signal.id);
+
+      try {
+        const result = await executeSignal(signal, isMt5Live);
+        results[i] = result;
+        if (result.success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+      } catch {
+        results[i] = { success: false, error: 'Network error' };
+        failCount++;
+      }
+
+      // Small delay between orders to avoid rate limiting
+      if (i < eligible.length - 1) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+
+    setAutoTradeResults(results);
+    setAutoTrading(false);
+
+    const mode = isMt5Live ? 'MT5' : 'Simulation';
+    if (failCount === 0) {
+      toast.success(`Auto-trading (${mode}): ${successCount}/${eligible.length} orders executed`);
+    } else {
+      toast.warning(`Auto-trading (${mode}): ${successCount} OK, ${failCount} failed`);
     }
   };
 
@@ -67,12 +168,20 @@ export function TradingSignalsPanel() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
         <Button
           onClick={handleGenerateSignals}
-          disabled={signalsLoading}
+          disabled={signalsLoading || autoTrading}
           className="bg-emerald-600 hover:bg-emerald-700 text-white"
         >
-          {signalsLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+          {signalsLoading || autoTrading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
           Generate Signals
         </Button>
+        {isAutoTrading && (
+          <Badge className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-1">
+            <Play className="w-3 h-3 mr-1" /> Auto-Trade ON (≥{AUTO_TRADE_CONFIDENCE_THRESHOLD}%)
+          </Badge>
+        )}
+        {isMt5Live && (
+          <Badge className="text-[10px] bg-amber-500/20 text-amber-400 border border-amber-500/30 px-2 py-1">MT5</Badge>
+        )}
         <div className="flex gap-2 flex-wrap">
           <Select value={signalFilter.pair} onValueChange={(v) => setSignalFilter(f => ({ ...f, pair: v }))}>
             <SelectTrigger className="w-32 bg-zinc-800 border-zinc-700 text-zinc-300 h-8 text-xs">
@@ -96,6 +205,17 @@ export function TradingSignalsPanel() {
         </div>
       </div>
 
+      {/* Auto-trading progress */}
+      {autoTrading && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3 flex items-center gap-3">
+          <RefreshCw className="w-5 h-5 text-emerald-400 animate-spin shrink-0" />
+          <div>
+            <p className="text-xs font-medium text-emerald-400">Auto-Trading in Progress{isMt5Live ? ' (MT5 Live)' : ' (Simulation)'}</p>
+            <p className="text-[10px] text-emerald-400/70">Executing signals with ≥{AUTO_TRADE_CONFIDENCE_THRESHOLD}% confidence...</p>
+          </div>
+        </div>
+      )}
+
       {/* Signal cards */}
       {filteredSignals.length === 0 ? (
         <Card className="bg-zinc-900 border-zinc-800 p-8">
@@ -107,44 +227,56 @@ export function TradingSignalsPanel() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {filteredSignals.map((signal, i) => (
-            <Card key={i} className="bg-zinc-900 border-zinc-800 p-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-white">{PAIR_DISPLAY[signal.pair]}</span>
-                  <Badge className={`text-[10px] ${signal.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
-                    {signal.direction === 'BUY' ? <ArrowUpCircle className="w-3 h-3 mr-0.5" /> : <ArrowDownCircle className="w-3 h-3 mr-0.5" />}
-                    {signal.direction}
-                  </Badge>
+          {filteredSignals.map((signal, i) => {
+            const autoResult = autoTradeResults[i];
+            return (
+              <Card key={i} className={`bg-zinc-900 border-zinc-800 p-4 ${autoResult ? (autoResult.success ? 'border-emerald-500/30' : 'border-rose-500/30') : ''}`}>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-white">{PAIR_DISPLAY[signal.pair]}</span>
+                    <Badge className={`text-[10px] ${signal.direction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-rose-500/20 text-rose-400'}`}>
+                      {signal.direction === 'BUY' ? <ArrowUpCircle className="w-3 h-3 mr-0.5" /> : <ArrowDownCircle className="w-3 h-3 mr-0.5" />}
+                      {signal.direction}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {autoResult && (
+                      autoResult.success ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" title={autoResult.ticket ? `Ticket #${autoResult.ticket}` : 'Executed'} />
+                      ) : (
+                        <XCircle className="w-3.5 h-3.5 text-rose-400" title={autoResult.error || 'Failed'} />
+                      )
+                    )}
+                    <Badge variant="outline" className={`text-[10px] border-zinc-700 ${signal.confidence >= AUTO_TRADE_CONFIDENCE_THRESHOLD && isAutoTrading ? 'text-emerald-400 border-emerald-500/30' : 'text-zinc-400'}`}>
+                      {signal.confidence.toFixed(0)}%
+                    </Badge>
+                  </div>
                 </div>
-                <Badge variant="outline" className="text-[10px] border-zinc-700 text-zinc-400">
-                  {signal.confidence.toFixed(0)}%
-                </Badge>
-              </div>
-              <div className="space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Strategy</span>
-                  <span className="text-zinc-300">{STRATEGY_LABELS[signal.strategy]}</span>
+                <div className="space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Strategy</span>
+                    <span className="text-zinc-300">{STRATEGY_LABELS[signal.strategy]}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Entry</span>
+                    <span className="text-white font-mono">{fmtPrice(signal.pair, signal.entryPrice)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">SL</span>
+                    <span className="text-rose-400 font-mono">{fmtPrice(signal.pair, signal.stopLoss)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">TP</span>
+                    <span className="text-emerald-400 font-mono">{fmtPrice(signal.pair, signal.takeProfit)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Lot Size</span>
+                    <span className="text-zinc-300 font-mono">{signal.lotSize}</span>
+                  </div>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Entry</span>
-                  <span className="text-white font-mono">{fmtPrice(signal.pair, signal.entryPrice)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">SL</span>
-                  <span className="text-rose-400 font-mono">{fmtPrice(signal.pair, signal.stopLoss)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">TP</span>
-                  <span className="text-emerald-400 font-mono">{fmtPrice(signal.pair, signal.takeProfit)}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-zinc-500">Lot Size</span>
-                  <span className="text-zinc-300 font-mono">{signal.lotSize}</span>
-                </div>
-              </div>
-            </Card>
-          ))}
+              </Card>
+            );
+          })}
         </div>
       )}
 

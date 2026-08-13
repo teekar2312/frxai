@@ -26,7 +26,9 @@ export function DashboardPanel() {
     selectedPair, setSelectedPair,
     quotes, news, aiAnalysis, marketConditions,
     accountBalance, openPositionsCount, dailyPnl, todayRiskUsed,
+    tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
   } = useTradingStore();
+  const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   const [positions, setPositions] = useState<Position[]>([]);
   const [jakartaTime, setJakartaTime] = useState('');
@@ -43,9 +45,10 @@ export function DashboardPanel() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch positions
+  // Fetch positions — MT5-aware (#5)
   useEffect(() => {
     const load = async () => {
+      if (isMt5Live) return; // In MT5 mode, use store data directly
       try {
         const res = await fetch('/api/positions?status=open');
         if (res.ok) {
@@ -59,7 +62,7 @@ export function DashboardPanel() {
     load();
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isMt5Live]);
 
   // Session status
   const sessionStatus = useMemo(() => {
@@ -86,6 +89,31 @@ export function DashboardPanel() {
       isActive: currentHour >= o.startHour && currentHour < o.endHour,
     }));
   }, [jakartaTime]);
+
+  // MT5-aware display values (#5)
+  const displayPositions: Position[] = isMt5Live
+    ? mt5Positions.map((p) => ({
+        id: String(p.ticket),
+        pair: p.pair as ForexPair,
+        direction: p.direction,
+        lotSize: p.lotSize,
+        entryPrice: p.entryPrice,
+        stopLoss: p.stopLoss,
+        takeProfit: p.takeProfit,
+        currentPrice: p.currentPrice,
+        pnl: p.pnl,
+        pips: p.pnlPips,
+        strategy: null,
+        trailingStop: false,
+        trailingPips: 0,
+        isOpen: true,
+        openedAt: p.openTime,
+        closedAt: null,
+      }))
+    : positions;
+  const displayOpenCount = isMt5Live ? mt5Positions.length : positions.length;
+  const displayPnl = isMt5Live && mt5AccountInfo ? mt5AccountInfo.profit : dailyPnl;
+  const displayBalance = isMt5Live && mt5AccountInfo ? mt5AccountInfo.balance : accountBalance;
 
   const currentAnalysis = aiAnalysis[selectedPair];
 
@@ -252,12 +280,15 @@ export function DashboardPanel() {
           <CardHeader className="p-0 pb-3">
             <CardTitle className="text-sm text-white flex items-center gap-2">
               <Activity className="w-4 h-4" /> Open Positions
-              <Badge variant="secondary" className="text-[10px] bg-zinc-800 text-zinc-300 ml-auto">{positions.length}</Badge>
+              {isMt5Live && (
+                <Badge className="text-[10px] bg-amber-500/20 text-amber-400 border-amber-500/30">MT5</Badge>
+              )}
+              <Badge variant="secondary" className="text-[10px] bg-zinc-800 text-zinc-300 ml-auto">{displayOpenCount}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="max-h-72">
-              {positions.length === 0 ? (
+              {displayPositions.length === 0 ? (
                 <p className="text-xs text-zinc-500 text-center py-4">No open positions</p>
               ) : (
                 <Table>
@@ -270,7 +301,7 @@ export function DashboardPanel() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {positions.slice(0, 5).map((pos) => (
+                    {displayPositions.slice(0, 5).map((pos) => (
                       <TableRow key={pos.id} className="border-zinc-800/50">
                         <TableCell className="text-xs text-zinc-200 font-mono">{PAIR_DISPLAY[pos.pair]}</TableCell>
                         <TableCell>
@@ -303,17 +334,17 @@ export function DashboardPanel() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div>
               <p className="text-[10px] text-zinc-500 mb-1">Total P&L</p>
-              <p className={`text-lg font-mono font-bold ${dailyPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {dailyPnl >= 0 ? '+' : ''}{dailyPnl.toFixed(2)}
+              <p className={`text-lg font-mono font-bold ${displayPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {displayPnl >= 0 ? '+' : ''}{displayPnl.toFixed(2)}
               </p>
             </div>
             <div>
               <p className="text-[10px] text-zinc-500 mb-1">Balance</p>
-              <p className="text-lg font-mono font-bold text-white">${accountBalance.toLocaleString()}</p>
+              <p className="text-lg font-mono font-bold text-white">${displayBalance.toLocaleString()}</p>
             </div>
             <div>
               <p className="text-[10px] text-zinc-500 mb-1">Open Trades</p>
-              <p className="text-lg font-mono font-bold text-white">{openPositionsCount}</p>
+              <p className="text-lg font-mono font-bold text-white">{displayOpenCount}</p>
             </div>
             <div>
               <p className="text-[10px] text-zinc-500 mb-1">Daily Risk Used</p>

@@ -14,12 +14,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FX Pro Trading - AI-Powered Forex Dashboard",
-  description: "Professional AI-powered forex trading dashboard with real-time analysis, signals, and risk management.",
-  keywords: ["forex", "trading", "AI", "dashboard", "FX Pro", "FINEX Indonesia"],
+  title: "FINEX Indonesia - Platform Trading Forex AI",
+  description: "Platform trading forex berbasis AI dengan analisis real-time, sinyal trading, dan manajemen risiko profesional. Terdaftar dan diawasi oleh BAPPEBTI.",
+  keywords: ["forex", "trading", "AI", "dashboard", "FINEX Indonesia", "BAPPEBTI", "forex Indonesia"],
   authors: [{ name: "FINEX Indonesia" }],
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/favicon.svg",
   },
 };
 
@@ -29,7 +29,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="id" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >

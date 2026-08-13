@@ -34,7 +34,7 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise
         lotSize: signal.lotSize,
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
-        comment: `FRXAI-AUTO-${signal.strategy}`,
+        comment: `FINEX-AUTO-${signal.strategy}`,
       }),
     });
     const data = await res.json();
@@ -381,6 +381,14 @@ export function TradingSignalsPanel() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* REG-013: AI Disclaimer */}
+      <div className="mt-4 p-3 bg-zinc-800/30 rounded-lg border border-zinc-700/30">
+        <p className="text-[10px] text-zinc-500 leading-relaxed">
+          ⚠️ Sinyal yang dihasilkan oleh AI adalah untuk tujuan informasi saja dan bukan merupakan saran investasi.
+          Kinerja masa lalu tidak menjamin hasil di masa depan. Pastikan Anda memahami risiko sebelum mengambil keputusan trading.
+        </p>
+      </div>
     </div>
   );
 }

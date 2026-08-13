@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
 import { FOREX_PAIRS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 
 const PAIR_TO_FINNHUB: Record<ForexPair, string> = {
@@ -149,6 +150,8 @@ export async function GET() {
 
 // POST - Create new alert
 export async function POST(request: NextRequest) {
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   if (!request.headers.get('content-type')?.includes('application/json')) {
@@ -227,6 +230,8 @@ export async function POST(request: NextRequest) {
 
 // PUT - Update alert (toggle active, update fields)
 export async function PUT(request: NextRequest) {
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   try {
@@ -286,6 +291,8 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - Delete alert
 export async function DELETE(request: NextRequest) {
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   try {

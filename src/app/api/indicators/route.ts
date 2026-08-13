@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { CandleData, ForexPair } from '@/lib/trading-types';
+import { FOREX_PAIRS } from '@/lib/trading-types';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 import {
   sma, ema, hma, vwap,
@@ -28,6 +30,9 @@ function determineSignal(value: number, thresholds: { oversold: number; overboug
 }
 
 export async function POST(request: NextRequest) {
+  // S-6E-01: Rate limiting
+  const rateCheck = checkRateLimit(clientIp(request), 'analysis');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const { pair, candles, timeframe } = body as {
@@ -35,6 +40,11 @@ export async function POST(request: NextRequest) {
       candles: CandleData[];
       timeframe: string;
     };
+
+    // S-7E-02: Add pair validation
+    if (pair && !FOREX_PAIRS.includes(pair as ForexPair)) {
+      return NextResponse.json({ error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` }, { status: 400 });
+    }
 
     if (!pair || !candles || !Array.isArray(candles) || candles.length < 30) {
       return NextResponse.json(

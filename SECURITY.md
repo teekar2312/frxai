@@ -1,39 +1,67 @@
-# Security Considerations
+# Security Considerations — FINEX Indonesia
 
-## Platform-Controlled Limitations
+## Platform-Level Security (Caddy)
 
-The following items are managed by the hosting platform (Caddy reverse proxy) and cannot be modified at the application level:
+### C-3: XTransformPort SSRF Risk — RESOLVED
+The Caddyfile now restricts `XTransformPort` to an explicit allowlist (ports 3000 and 3004 only). Arbitrary port proxying is blocked.
 
-### C-3: XTransformPort SSRF Risk
-The `XTransformPort` query parameter in the Caddy configuration allows proxying to any local port. This is a platform feature for microservice routing. **Mitigation**: Restrict to an explicit port allowlist in the Caddyfile before production deployment.
+### H-8: Security Headers — RESOLVED
+The following security headers are now configured in the Caddyfile:
+- `X-Frame-Options: SAMEORIGIN`
+- `X-Content-Type-Options: nosniff`
+- `Referrer-Policy: strict-origin-when-cross-origin`
+- `X-XSS-Protection: 1; mode=block`
 
-### H-8: Missing Security Headers
-Security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS, Referrer-Policy) should be configured in the Caddyfile:
-```caddy
-header {
-    X-Frame-Options "SAMEORIGIN"
-    X-Content-Type-Options "nosniff"
-    Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    Referrer-Policy "strict-origin-when-cross-origin"
-    Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'"
-}
-```
+> **Note**: HSTS and CSP should be added when deploying with HTTPS (Caddy auto-TLS).
 
 ## Application-Level Security
 
 ### C-1: API Authentication
-All mutating API endpoints (POST, PUT, PATCH, DELETE) require authentication when `API_SECRET_KEY` environment variable is set. Auth is disabled in development mode.
+All mutating API endpoints (POST, PUT, PATCH, DELETE) require `API_SECRET_KEY` when set. In production mode, a warning is logged if the key is unset. All endpoints now have rate limiting.
 
-### H-1: Rate Limiting
-In-memory sliding window rate limiter protects trade execution (10/min), AI analysis (5/min), and general endpoints (60/min).
+### H-1: Rate Limiting — ENHANCED
+In-memory sliding window rate limiter now covers ALL endpoints:
+- **Trade**: 10/min (positions POST, MT5 orders POST)
+- **Analysis**: 5/min (AI analysis, indicators POST)
+- **General**: 60/min (all other mutating endpoints)
 
-### Design Limitations (Accepted)
+### S-8E-01: Structured Logging — RESOLVED
+All API routes now use `logApiError()` from `safe-log.ts`. Zero raw `console.error()` calls remain in production code.
+
+## MT5 Bridge Security
+
+### M-05: Bridge API Key — RESOLVED
+The MT5 bridge no longer has a hardcoded fallback API key. If `BRIDGE_API_KEY` is not set, bridge authentication is disabled with a startup warning.
+
+### M-06: CORS Configuration — ENHANCED
+Bridge CORS origins are now configurable via `ALLOWED_ORIGINS` environment variable (comma-separated).
+
+## Design Limitations (Accepted)
 
 ### L-2: Hardcoded Volatility Thresholds in `detectMarketCondition`
-The ATR percentage thresholds (0.3% for high volatility, 0.05% for low volatility) in `src/lib/indicators.ts` are not pair-aware. XAUUSD naturally has much higher ATR than EURUSD. **Future**: Add pair-specific calibration data and use percentile-based detection.
+The ATR percentage thresholds are not pair-aware. XAUUSD naturally has much higher ATR than EURUSD. **Future**: Add pair-specific calibration data.
 
 ### L-3: `pivotPoints` Returns Flat Object
-Unlike all other indicator functions that return arrays for charting, `pivotPoints()` returns a single flat object `{ pp, r1, r2, s1, s2 }`. This limits its usability in backtesting and historical charting. **Future**: Refactor to return an array of pivot data points (one per session) for API consistency.
+Returns a single flat object instead of arrays for charting. **Future**: Refactor for API consistency.
+
+### S-1E-02: Page-Level Authentication
+The dashboard currently has no login page or session management. For production deployment, implement NextAuth.js with credential-based login, session cookies, and idle timeout.
+
+### S-3E-01: Encryption at Rest
+SQLite database is unencrypted. For production, consider SQLCipher or migrate to PostgreSQL with TLS.
+
+## Regulatory Compliance — FINEX Indonesia
+
+### BAPPEBTI
+- Leverage default changed from 1:500 to 1:100 (compliant with BAPPEBTI retail limits)
+- Risk disclosure banner displayed on every page view
+- BAPPEBTI registration info shown in sidebar and settings
+- Fund segregation (dana klien terpisah) disclosure present
+
+### Risk Disclosure
+- Persistent risk warning banner on all pages
+- Full risk disclosure statement in Settings > Informasi Regulasi
+- AI disclaimer on AI Analysis and Trading Signals panels
 
 ## Environment Variables
 ```env
@@ -41,4 +69,5 @@ API_SECRET_KEY=your-secret-key-here  # Required for production
 MT5_BRIDGE_API_KEY=bridge-key-here   # Required for MT5 integration
 FINNHUB_API_KEY=finnhub-key         # Required for live market data
 MARKETAUX_API_KEY=marketaux-key     # Required for live news
+ALLOWED_ORIGINS=https://your-domain.com  # CORS for MT5 bridge
 ```

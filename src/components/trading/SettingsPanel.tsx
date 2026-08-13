@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Settings, RefreshCw, Cable } from 'lucide-react';
+import { Settings, RefreshCw, Cable, Shield, FileText, Info } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -196,7 +196,7 @@ export function SettingsPanel() {
                 <div className="flex items-center justify-between">
                   <Label className="text-zinc-300 text-xs">Leverage</Label>
                   <Input type="number" value={config.leverage}
-                    onChange={(e) => updateConfig('leverage', parseInt(e.target.value) || 500)}
+                    onChange={(e) => updateConfig('leverage', parseInt(e.target.value) || 100)}
                     className="bg-zinc-800 border-zinc-700 text-white w-20 h-8 text-xs" />
                 </div>
                 <div className="flex items-center justify-between">
@@ -253,6 +253,59 @@ export function SettingsPanel() {
           </div>
         </CardContent>
       </Card>
+      {/* Legal & Regulatory Info */}
+      <Card className="bg-zinc-900 border-zinc-800 p-4">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="text-sm text-white flex items-center gap-2">
+            <Shield className="w-4 h-4" /> Informasi Regulasi
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0 space-y-3">
+          <div className="bg-zinc-800/50 rounded-lg p-3 space-y-2 text-xs text-zinc-300">
+            <div className="flex items-center gap-2">
+              <FileText className="w-3 h-3 text-emerald-400 shrink-0" />
+              <span className="font-medium text-white">Badan Pengawas Perdagangan Berjangka Komoditi (BAPPEBTI)</span>
+            </div>
+            <p className="text-zinc-400 leading-relaxed pl-5">
+              FINEX Indonesia beroperasi di bawah pengawasan BAPPEBTI, lembaga regulasi resmi di bawah Kementerian Perdagangan Republik Indonesia yang mengawasi perdagangan berjangka komoditi.
+            </p>
+          </div>
+          <div className="bg-zinc-800/50 rounded-lg p-3 space-y-2 text-xs text-zinc-300">
+            <div className="flex items-center gap-2">
+              <Shield className="w-3 h-3 text-emerald-400 shrink-0" />
+              <span className="font-medium text-white">Pemisahan Dana Klien</span>
+            </div>
+            <p className="text-zinc-400 leading-relaxed pl-5">
+              Sesuai dengan Undang-Undang No. 10 Tahun 2011 tentang Perdagangan Berjangka Komoditi, dana klien disimpan terpisah pada bank penampung yang diawasi oleh BAPPEBTI, terpisah dari aset perusahaan.
+            </p>
+          </div>
+          <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Info className="w-3 h-3 text-amber-400 shrink-0" />
+              <span className="font-medium text-amber-400 text-xs">Pernyataan Risiko</span>
+            </div>
+            <p className="text-[11px] text-zinc-400 leading-relaxed pl-5">
+              Perdagangan berjangka memiliki risiko tinggi dan mungkin tidak cocok untuk semua investor. Anda dapat mengalami kerugian yang melebihi investasi awal Anda. Pastikan Anda telah membaca dan memahami seluruh risiko sebelum memulai perdagangan. Kinerja masa lalu bukan indikator hasil di masa depan.
+            </p>
+          </div>
+          <div className="bg-zinc-800/50 rounded-lg p-3 space-y-2 text-xs text-zinc-300">
+            <div className="flex items-center gap-2">
+              <Info className="w-3 h-3 text-emerald-400 shrink-0" />
+              <span className="font-medium text-white">Disclaimer AI</span>
+            </div>
+            <p className="text-zinc-400 leading-relaxed pl-5">
+              Fitur analisis AI dan sinyal trading yang disediakan merupakan alat bantu keputusan dan BUKAN merupakan saran investasi. Keputusan trading sepenuhnya menjadi tanggung jawab pengguna. FINEX Indonesia tidak bertanggung jawab atas kerugian yang timbul dari penggunaan fitur AI ini.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Version & Legal Footer */}
+      <div className="text-center space-y-2 pt-2">
+        <p className="text-[10px] text-zinc-500">FINEX Indonesia v1.0 — Platform Trading Forex AI</p>
+        <p className="text-[10px] text-zinc-600">© {new Date().getFullYear()} FINEX Indonesia. Seluruh hak cipta dilindungi.</p>
+        <p className="text-[9px] text-zinc-700">Terdaftar dan diawasi oleh BAPPEBTI · Dana klien disimpan terpisah</p>
+      </div>
     </div>
   );
 }

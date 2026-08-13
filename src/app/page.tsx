@@ -27,6 +27,7 @@ export default function TradingDashboard() {
   const [connected, setConnected] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
+  const [priceSourceWarning, setPriceSourceWarning] = useState(false);
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   // Jakarta timezone clock
@@ -78,7 +79,10 @@ export default function TradingDashboard() {
           setConnected(true);
           return;
         }
-        // If MT5 prices fail, fall back to Finnhub
+        // MT5 prices failed — falling back to Finnhub (P-03)
+        console.warn('MT5 prices unavailable, falling back to Finnhub');
+        setPriceSourceWarning(true);
+        setTimeout(() => setPriceSourceWarning(false), 10000);
       }
       const res = await fetch('/api/finnhub');
       if (!res.ok) throw new Error('Failed to fetch prices');
@@ -171,9 +175,21 @@ export default function TradingDashboard() {
               <Globe className="w-3 h-3" />
               <span>WIB {jakartaTime}</span>
             </div>
-            <span className="text-zinc-500">FX Pro Trading v1.0</span>
+            <span className="text-zinc-500">FINEX Indonesia v1.0</span>
           </div>
         </div>
+
+        {/* Risk Disclosure Banner (REG-003) */}
+        <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 text-[10px] text-amber-400/80 text-center">
+          ⚠️ Perdagangan berjangka memiliki risiko tinggi. Anda dapat mengalami kerugian melebihi investasi awal. Pastikan Anda memahami risiko sebelum bertransaksi.
+        </div>
+
+        {/* MT5 Price Fallback Warning (P-03) */}
+        {priceSourceWarning && (
+          <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 text-[10px] text-amber-400/80 text-center">
+            ⚠️ Sumber harga MT5 tidak tersedia, menggunakan data cadangan
+          </div>
+        )}
 
         <div className="flex flex-1 overflow-hidden">
           {/* Desktop sidebar */}
@@ -203,7 +219,7 @@ export default function TradingDashboard() {
                 <div className="w-6 h-6 rounded bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
                   <TrendingUp className="w-3.5 h-3.5 text-white" />
                 </div>
-                <span className="text-sm font-semibold text-white">FX Pro Trading</span>
+                <span className="text-sm font-semibold text-white">FINEX Indonesia</span>
               </div>
             </div>
 
@@ -214,23 +230,30 @@ export default function TradingDashboard() {
               </div>
             </div>
 
-            {/* Footer */}
-            <footer className="border-t border-zinc-800 bg-zinc-900/50 px-4 py-2 flex items-center justify-between text-[10px] text-zinc-500 shrink-0">
-              <div className="flex items-center gap-2">
-                <span className="font-medium">FINEX Indonesia</span>
-                <Separator orientation="vertical" className="h-3 bg-zinc-700" />
-                <span>© 2024 All Rights Reserved</span>
+            {/* Footer (REG-002, REG-008, REG-011) */}
+            <footer className="border-t border-zinc-800 bg-zinc-900/50 px-4 py-2 shrink-0">
+              <div className="flex items-center justify-between text-[10px] text-zinc-500">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">FINEX Indonesia</span>
+                  <Separator orientation="vertical" className="h-3 bg-zinc-700" />
+                  <span>Diawasi BAPPEBTI</span>
+                  <Separator orientation="vertical" className="h-3 bg-zinc-700" />
+                  <span>Dana klien disegregasi</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
+                  <span>{connected ? 'Connected' : 'Disconnected'}</span>
+                  {tradingMode === 'mt5_live' && (
+                    <>
+                      <Separator orientation="vertical" className="h-3 bg-zinc-700" />
+                      <div className={`w-1.5 h-1.5 rounded-full ${mt5ConnectionStatus === 'connected' ? 'bg-amber-400' : 'bg-amber-400/40'}`} />
+                      <span>MT5 {mt5ConnectionStatus === 'connected' ? 'Live' : 'Standby'}</span>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                <span>{connected ? 'Connected' : 'Disconnected'}</span>
-                {tradingMode === 'mt5_live' && (
-                  <>
-                    <Separator orientation="vertical" className="h-3 bg-zinc-700" />
-                    <div className={`w-1.5 h-1.5 rounded-full ${mt5ConnectionStatus === 'connected' ? 'bg-amber-400' : 'bg-amber-400/40'}`} />
-                    <span>MT5 {mt5ConnectionStatus === 'connected' ? 'Live' : 'Standby'}</span>
-                  </>
-                )}
+              <div className="text-[9px] text-zinc-600 mt-0.5">
+                Dana klien disimpan terpisah pada bank penampung yang diawasi BAPPEBTI · © {new Date().getFullYear()} FINEX Indonesia
               </div>
             </footer>
           </main>

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
+import { logApiError } from '@/lib/safe-log';
 
 async function getBridgeStatus() {
   try {
@@ -26,7 +27,7 @@ export async function GET() {
       bridgeReachable: bridgeStatus !== null,
     });
   } catch (error) {
-    console.error('[MT5 Connection GET] Error:', error);
+    logApiError('MT5 Connection', error);
     return NextResponse.json({
       connected: false,
       eaConnected: false,
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
           : 'Status checked',
     });
   } catch (error) {
-    console.error('[MT5 Connection POST] Error:', error);
+    logApiError('MT5 Connection', error);
     return NextResponse.json(
       { error: 'Failed to process connection request' },
       { status: 500 }

@@ -339,7 +339,7 @@ export function Mt5ConnectionPanel() {
               <p className="text-xs text-zinc-500 text-center py-8">No open positions on MT5</p>
             ) : (
               <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                <Table>
+                <Table aria-label="Posisi MT5">
                   <TableHeader>
                     <TableRow className="border-zinc-800 hover:bg-transparent">
                       <TableHead className="text-[10px] text-zinc-500">Ticket</TableHead>

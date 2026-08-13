@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Plus, Square, LineChart, Cable } from 'lucide-react';
+import { Plus, Square, LineChart, Cable, Loader2 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +42,7 @@ export function LiveTradingPanel() {
 
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
   const [positions, setPositions] = useState<Position[]>([]);
+  const [positionsLoading, setPositionsLoading] = useState(true);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [newTradeDialog, setNewTradeDialog] = useState(false);
   const [newTrade, setNewTrade] = useState({
@@ -81,6 +83,8 @@ export function LiveTradingPanel() {
         }
       } catch {
         // silent
+      } finally {
+        setPositionsLoading(false);
       }
     };
     load();
@@ -99,6 +103,7 @@ export function LiveTradingPanel() {
     } catch {
       // silent
     }
+    setPositionsLoading(false);
   };
 
   // Execute MT5 order (called after confirmation)
@@ -114,7 +119,7 @@ export function LiveTradingPanel() {
           lotSize: order.lotSize,
           stopLoss: order.stopLoss || undefined,
           takeProfit: order.takeProfit || undefined,
-          comment: `FRXAI-${order.strategy}`,
+          comment: `FINEX-${order.strategy}`,
         }),
       });
       const data = res.ok ? await res.json() : await res.json();
@@ -184,7 +189,7 @@ export function LiveTradingPanel() {
 
   const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
   const CONTRACT_SIZE = 100000; // Standard lot size in units
-  const leverage = 500; // Default leverage; in production read from config
+  const leverage = 100; // BAPPEBTI compliant default; in production read from config
   const marginUsed = positions.reduce((sum, p) => sum + (p.lotSize * CONTRACT_SIZE / leverage), 0);
   const displayBalance = isMt5Live && mt5AccountInfo ? mt5AccountInfo.balance : accountBalance;
   const displayEquity = isMt5Live && mt5AccountInfo ? mt5AccountInfo.equity : (accountBalance + totalPnl);
@@ -328,7 +333,17 @@ export function LiveTradingPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {isMt5Live ? (
+          {positionsLoading && !isMt5Live ? (
+            <div className="space-y-2 py-8">
+              <div className="flex items-center justify-center gap-2 text-zinc-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-xs">Loading positions...</span>
+              </div>
+              {[1, 2, 3].map(i => (
+                <Skeleton key={i} className="h-8 w-full bg-zinc-800" />
+              ))}
+            </div>
+          ) : isMt5Live ? (
             mt5Positions.length === 0 ? (
               <p className="text-xs text-zinc-500 text-center py-8">No open positions on MT5</p>
             ) : (
@@ -366,6 +381,7 @@ export function LiveTradingPanel() {
                         </TableCell>
                         <TableCell className="text-right">
                           <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                            aria-label={`Tutup posisi ${pos.pair}`}
                             onClick={async () => {
                               try {
                                 const res = await fetch(`/api/mt5/orders?ticket=${pos.ticket}`, { method: 'DELETE' });
@@ -423,6 +439,7 @@ export function LiveTradingPanel() {
                         </TableCell>
                         <TableCell className="text-right">
                           <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                            aria-label={`Tutup posisi ${pos.pair}`}
                             onClick={() => handleClosePosition(pos.id)}>
                             <Square className="w-3 h-3" />
                           </Button>

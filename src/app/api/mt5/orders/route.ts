@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
-import { FINEX_CONFIG } from '@/lib/trading-types';
+import { FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
@@ -42,6 +42,39 @@ export async function POST(request: NextRequest) {
         { error: 'direction must be BUY or SELL' },
         { status: 400 }
       );
+    }
+
+    // O-04: Add pair validation
+    if (!FOREX_PAIRS.includes(pair as any)) {
+      return NextResponse.json({ error: `Invalid pair: ${pair}` }, { status: 400 });
+    }
+
+    // O-01: Validate SL/TP directional correctness
+    const entryPrice = (body as Record<string, unknown>).entryPrice;
+    if (stopLoss !== undefined && stopLoss !== null && typeof stopLoss === 'number') {
+      const entryRef = typeof entryPrice === 'number' ? entryPrice : 0;
+      if (direction === 'BUY' && stopLoss >= entryRef && entryRef > 0) {
+        return NextResponse.json({ error: 'Stop loss must be below entry price for BUY orders' }, { status: 400 });
+      }
+      if (direction === 'SELL' && stopLoss <= entryRef && entryRef > 0) {
+        return NextResponse.json({ error: 'Stop loss must be above entry price for SELL orders' }, { status: 400 });
+      }
+    }
+    if (takeProfit !== undefined && takeProfit !== null && typeof takeProfit === 'number') {
+      const entryRef = typeof entryPrice === 'number' ? entryPrice : 0;
+      if (direction === 'BUY' && takeProfit <= entryRef && entryRef > 0) {
+        return NextResponse.json({ error: 'Take profit must be above entry price for BUY orders' }, { status: 400 });
+      }
+      if (direction === 'SELL' && takeProfit >= entryRef && entryRef > 0) {
+        return NextResponse.json({ error: 'Take profit must be below entry price for SELL orders' }, { status: 400 });
+      }
+    }
+
+    // O-02: Add maxOpenPositions check
+    const openCount = await db.tradingPosition.count({ where: { status: 'open' } });
+    const config = await db.tradingConfig.findFirst({ where: { id: 'default' } });
+    if (config && openCount >= config.maxOpenPositions) {
+      return NextResponse.json({ error: `Maximum open positions (${config.maxOpenPositions}) reached` }, { status: 400 });
     }
 
     const res = await fetch(`${MT5_BRIDGE_URL}/api/orders`, {
@@ -110,6 +143,9 @@ export async function POST(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
+  // S-6E-01: Rate limiting
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const { searchParams } = new URL(request.url);
     const ticket = searchParams.get('ticket');
@@ -182,6 +218,9 @@ export async function DELETE(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
+  // S-6E-01: Rate limiting
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   let body: Record<string, unknown>;
   try {
     body = await request.json();

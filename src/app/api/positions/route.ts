@@ -87,18 +87,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!entryPrice || entryPrice === 0) {
-      const mid = await getCurrentMidPrice(pair);
-      if (mid) entryPrice = mid;
-    }
-
-    if (!entryPrice || entryPrice === 0) {
-      return NextResponse.json(
-        { error: 'entryPrice is required (could not determine current price from market data)' },
-        { status: 400 }
-      );
-    }
-
     if (!['BUY', 'SELL'].includes(direction)) {
       return NextResponse.json(
         { error: 'direction must be BUY or SELL' },
@@ -108,7 +96,24 @@ export async function POST(request: NextRequest) {
 
     // POS-01: Fetch TradingConfig from DB instead of using hardcoded FINEX_CONFIG
     let config = await db.tradingConfig.findFirst();
-    if (!config) config = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 500, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
+    if (!config) config = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 100, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
+
+    if (!entryPrice || entryPrice === 0) {
+      const mid = await getCurrentMidPrice(pair);
+      if (mid) {
+        // F-02: Spread-adjusted entry pricing
+        const pipSize = PAIR_PIP_VALUES[pair]?.pipSize ?? 0.0001;
+        const spreadAdjust = (config.spreadPip * pipSize) / 2;
+        entryPrice = direction === 'BUY' ? mid + spreadAdjust : mid - spreadAdjust;
+      }
+    }
+
+    if (!entryPrice || entryPrice === 0) {
+      return NextResponse.json(
+        { error: 'entryPrice is required (could not determine current price from market data)' },
+        { status: 400 }
+      );
+    }
 
     // POS-03: SL/TP directional validation
     if (stopLoss !== undefined && stopLoss !== null && stopLoss > 0) {
@@ -224,6 +229,9 @@ export async function POST(request: NextRequest) {
       // Non-critical
     }
 
+    // F-03: Check margin call / stop-out after position creation
+    await checkMarginCall();
+
     return NextResponse.json({ position }, { status: 201 });
   } catch (error) {
     logApiError('Positions', error);
@@ -234,10 +242,85 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// F-03: Margin call / stop-out check
+async function checkMarginCall() {
+  try {
+    const tradingConfig = await db.tradingConfig.findFirst();
+    if (!tradingConfig) return;
+
+    const openPositions = await db.tradingPosition.findMany({ where: { status: 'open' } });
+    if (openPositions.length === 0) return;
+
+    // Calculate total equity (balance + sum of PnL)
+    const totalPnl = openPositions.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
+    const equity = tradingConfig.accountBalance + totalPnl;
+
+    // Calculate total margin used (simplified: notional / leverage)
+    let totalMarginUsed = 0;
+    for (const pos of openPositions) {
+      const pipCfg = PAIR_PIP_VALUES[pos.pair as ForexPair] || { pipSize: 0.0001 };
+      const exchangeRate = pos.pair === 'USDJPY' ? (pos.currentPrice || pos.entryPrice) : 1;
+      const contractSize = 100000;
+      totalMarginUsed += (pos.lotSize * contractSize) / ((tradingConfig.leverage || 100) * exchangeRate);
+    }
+
+    if (totalMarginUsed <= 0) return;
+    const marginLevel = (equity / totalMarginUsed) * 100;
+
+    // Stop-out: force-close worst PnL position
+    if (marginLevel <= tradingConfig.stopOutLevel) {
+      const worst = openPositions.reduce((w, p) => ((p.pnl ?? 0) < (w.pnl ?? 0) ? p : w), openPositions[0]);
+      if (worst) {
+        const closePrice = worst.currentPrice || worst.entryPrice;
+        const pipCfg = PAIR_PIP_VALUES[worst.pair as ForexPair] || { standard: 10, pipSize: 0.0001 };
+        const pipValue = pipCfg.standard * worst.lotSize;
+        const priceDiff = worst.direction === 'BUY'
+          ? closePrice - worst.entryPrice
+          : worst.entryPrice - closePrice;
+        const pnlPips = priceDiff / pipCfg.pipSize;
+        const pnl = pnlPips * pipValue - worst.commission;
+
+        await db.tradingPosition.update({
+          where: { id: worst.id },
+          data: { currentPrice: closePrice, pnl, pnlPips, status: 'closed', closedAt: new Date() },
+        });
+        try {
+          await db.activityLog.create({
+            data: {
+              level: 'error',
+              category: 'trading',
+              message: `STOP-OUT: Force-closed ${worst.direction} ${worst.pair} (margin level ${marginLevel.toFixed(1)}%)`,
+              pair: worst.pair,
+              metadata: JSON.stringify({ positionId: worst.id, marginLevel, pnl }),
+            },
+          });
+        } catch { /* non-critical */ }
+      }
+    }
+    // Margin call warning
+    else if (marginLevel <= tradingConfig.marginCallLevel) {
+      try {
+        await db.activityLog.create({
+          data: {
+            level: 'warn',
+            category: 'trading',
+            message: `MARGIN CALL: Margin level at ${marginLevel.toFixed(1)}% (threshold: ${tradingConfig.marginCallLevel}%)`,
+            metadata: JSON.stringify({ marginLevel, totalMarginUsed, equity }),
+          },
+        });
+      } catch { /* non-critical */ }
+    }
+  } catch {
+    // Non-critical — don't let margin check failures break the main flow
+  }
+}
+
 // PUT - Update position (close, modify SL/TP, trailing stop)
 export async function PUT(request: NextRequest) {
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const { id, action, stopLoss, takeProfit, trailingStop, currentPrice } = body as {
@@ -312,6 +395,9 @@ export async function PUT(request: NextRequest) {
 
       // Email notification simulation
       console.log(`[EMAIL NOTIFY] Position closed: ${existing.pair} ${existing.direction}, PnL: $${pnl.toFixed(2)}`);
+
+      // F-03: Check margin call / stop-out after closing position
+      await checkMarginCall();
 
       return NextResponse.json({ position: updated });
     }
@@ -395,6 +481,8 @@ export async function PUT(request: NextRequest) {
 export async function DELETE(request: NextRequest) {
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

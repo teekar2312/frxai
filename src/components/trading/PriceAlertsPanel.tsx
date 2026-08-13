@@ -3,7 +3,8 @@
 import React, { useState, useEffect } from 'react';
 import { format } from 'date-fns';
 import { toast } from 'sonner';
-import { Bell, Plus, CheckCircle2, Trash2 } from 'lucide-react';
+import { Bell, Plus, CheckCircle2, Trash2, Loader2 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +27,7 @@ import { type PriceAlert, fmtPrice } from './shared';
 
 export function PriceAlertsPanel() {
   const [alerts, setAlerts] = useState<PriceAlert[]>([]);
+  const [alertsLoading, setAlertsLoading] = useState(true);
   const [triggeredAlerts, setTriggeredAlerts] = useState<PriceAlert[]>([]);
   const [newAlert, setNewAlert] = useState({
     pair: 'EURUSD' as ForexPair,
@@ -48,6 +50,8 @@ export function PriceAlertsPanel() {
         }
       } catch {
         // silent
+      } finally {
+        setAlertsLoading(false);
       }
     };
     load();
@@ -181,7 +185,17 @@ export function PriceAlertsPanel() {
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {alerts.length === 0 ? (
+          {alertsLoading ? (
+            <div className="space-y-2 py-8">
+              <div className="flex items-center justify-center gap-2 text-zinc-500">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span className="text-xs">Loading alerts...</span>
+              </div>
+              {[1, 2, 3].map(i => (
+                <Skeleton key={i} className="h-8 w-full bg-zinc-800" />
+              ))}
+            </div>
+          ) : alerts.length === 0 ? (
             <p className="text-xs text-zinc-500 text-center py-8">No active alerts. Create one above.</p>
           ) : (
             <Table>
@@ -207,6 +221,7 @@ export function PriceAlertsPanel() {
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-rose-400 hover:text-rose-300 hover:bg-rose-500/10"
+                        aria-label="Hapus alert"
                         onClick={() => handleDeleteAlert(alert.id)}>
                         <Trash2 className="w-3 h-3" />
                       </Button>

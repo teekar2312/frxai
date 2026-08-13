@@ -56,8 +56,9 @@ const MIN_LOT = 0.01;
 const MAX_LOT = 50;
 const COMMAND_TIMEOUT_MS = 15_000;
 const STALE_EA_TIMEOUT_MS = 30_000;
-const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY || 'frxai-bridge-key-2024';
-const ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
+const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY || '';
+if (!BRIDGE_API_KEY) console.warn('[MT5-BRIDGE] BRIDGE_API_KEY not set. Bridge API authentication is DISABLED.');
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://127.0.0.1:3000').split(',').map(s => s.trim());
 
 // ─── State ───────────────────────────────────────────────────────────────────
 

@@ -187,7 +187,7 @@ export function BacktestingPanel() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3 mb-4">
                 {[
                   { label: 'Total Trades', value: String(backtestResult.totalTrades), color: 'text-white' },
                   { label: 'Win Rate', value: `${backtestResult.winRate.toFixed(1)}%`, color: backtestResult.winRate > 50 ? 'text-emerald-400' : 'text-rose-400' },
@@ -221,16 +221,19 @@ export function BacktestingPanel() {
               </CardHeader>
               <CardContent className="p-0">
                 <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={backtestEquity}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
-                      <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#71717a' }} interval="preserveStartEnd" />
-                      <YAxis tick={{ fontSize: 9, fill: '#71717a' }} domain={['auto', 'auto']} />
-                      <RTooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', fontSize: 11 }} />
-                      <ReferenceLine y={backtestConfig.initialBalance} stroke="#71717a" strokeDasharray="3 3" />
-                      <Area type="monotone" dataKey="equity" stroke="#10b981" fill="#10b98120" strokeWidth={1.5} />
-                    </AreaChart>
-                  </ResponsiveContainer>
+                  <figure aria-label="Grafik ekuitas backtesting">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={backtestEquity}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                        <XAxis dataKey="time" tick={{ fontSize: 9, fill: '#71717a' }} interval="preserveStartEnd" />
+                        <YAxis tick={{ fontSize: 9, fill: '#71717a' }} domain={['auto', 'auto']} />
+                        <RTooltip contentStyle={{ backgroundColor: '#18181b', border: '1px solid #27272a', fontSize: 11 }} />
+                        <ReferenceLine y={backtestConfig.initialBalance} stroke="#71717a" strokeDasharray="3 3" />
+                        <Area type="monotone" dataKey="equity" stroke="#10b981" fill="#10b98120" strokeWidth={1.5} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                    <figcaption className="sr-only">Grafik kurva ekuitas dari hasil backtesting</figcaption>
+                  </figure>
                 </div>
               </CardContent>
             </Card>

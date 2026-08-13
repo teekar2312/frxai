@@ -562,6 +562,9 @@ export function detectMarketCondition(candles: OHLCV[]): 'trending' | 'range_bou
     const ssRes = recent.reduce((s, y, i) => s + (y - (slope * i + (sumY - slope * sumX) / 20)) ** 2, 0);
     return ssTot === 0 ? 0 : 1 - ssRes / ssTot;
   })();
+  // L-2: Note - ATR percentage thresholds are not pair-aware.
+  // XAUUSD naturally has much higher ATR than EURUSD.
+  // Future: Add pair-specific calibration data and use percentile-based detection.
   if (atrPct > 0.3 || bbWidthPct > 1.5) return 'high_volatility';
   if (atrPct < 0.05 || bbWidthPct < 0.2) return 'low_volatility';
   if (slopePct > 0.02 && rSquared > 0.6) return 'trending';

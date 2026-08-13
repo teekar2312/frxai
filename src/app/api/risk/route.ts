@@ -2,8 +2,17 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair, RiskCalculation } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES, FINEX_CONFIG } from '@/lib/trading-types';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
+import { logApiError } from '@/lib/safe-log';
 
 export async function POST(request: NextRequest) {
+  // S-7E-03: Content-Type validation
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
+  }
+  // R-04/S-6E-01: Rate limiting
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const {
@@ -26,7 +35,7 @@ export async function POST(request: NextRequest) {
 
     // RISK-01/02/03: Use server-side values instead of client-provided
     let serverConfig = await db.tradingConfig.findFirst();
-    if (!serverConfig) serverConfig = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 500, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
+    if (!serverConfig) serverConfig = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 100, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
 
     const serverBalance = serverConfig.accountBalance;
     const serverPositions = await db.tradingPosition.count({ where: { status: 'open' } });
@@ -89,15 +98,17 @@ export async function POST(request: NextRequest) {
     const potentialLoss = stopLossPips * pipValue;
 
     // Suggested take profit based on risk:reward ratio
-    const suggestedTPPips = Math.round(stopLossPips * 1.5);
+    // R-01: Use serverConfig.riskRewardRatio instead of hardcoded 1.5
+    const suggestedTPPips = Math.round(stopLossPips * serverConfig.riskRewardRatio);
     const potentialProfit = suggestedTPPips * pipValue;
 
     // Risk:Reward ratio
     const riskRewardRatio = potentialLoss > 0 ? potentialProfit / potentialLoss : 0;
 
-    // Margin required for the position
+    // R-03: Fix margin formula for JPY/XAU
     const contractSize = 100000; // Standard lot
-    const marginRequired = (lotSize * contractSize * pipConfig.pipSize) / leverage;
+    const exchangeRate = pair === 'USDJPY' ? 150 : 1;
+    const marginRequired = (lotSize * contractSize) / (leverage * exchangeRate);
 
     // Margin as percentage of account
     const marginPct = finalBalance > 0 ? (marginRequired / finalBalance) * 100 : 0;
@@ -126,8 +137,9 @@ export async function POST(request: NextRequest) {
       marginPct: parseFloat(marginPct.toFixed(2)),
       commission: parseFloat((serverConfig.commissionPerLot * lotSize).toFixed(2)),
       leverage,
-      marginCallLevel: FINEX_CONFIG.marginCallLevel,
-      stopOutLevel: FINEX_CONFIG.stopOutLevel,
+      // F-05: Read marginCallLevel/stopOutLevel from serverConfig
+      marginCallLevel: serverConfig.marginCallLevel,
+      stopOutLevel: serverConfig.stopOutLevel,
       pipSize: pipConfig.pipSize,
       warnings: [] as string[],
     };
@@ -155,7 +167,8 @@ export async function POST(request: NextRequest) {
       details: extras,
     });
   } catch (error) {
-    console.error('[Risk API] Error:', error);
+    // S-8E-01: Replace console.error with logApiError
+    logApiError('Risk', error);
     return NextResponse.json(
       { error: 'Risk calculation failed' },
       { status: 500 }

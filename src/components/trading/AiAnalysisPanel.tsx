@@ -252,6 +252,14 @@ export function AiAnalysisPanel() {
           </div>
         </Card>
       )}
+
+      {/* REG-013: AI Disclaimer */}
+      <div className="mt-4 p-3 bg-zinc-800/30 rounded-lg border border-zinc-700/30">
+        <p className="text-[10px] text-zinc-500 leading-relaxed">
+          ⚠️ Sinyal yang dihasilkan oleh AI adalah untuk tujuan informasi saja dan bukan merupakan saran investasi.
+          Kinerja masa lalu tidak menjamin hasil di masa depan. Pastikan Anda memahami risiko sebelum mengambil keputusan trading.
+        </p>
+      </div>
     </div>
   );
 }

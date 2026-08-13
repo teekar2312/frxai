@@ -191,7 +191,7 @@ export const MARKET_CONDITION_LABELS: Record<MarketCondition, string> = {
 export const TIMEFRAMES = ['M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] as const;
 
 export const FINEX_CONFIG = {
-  leverage: 500,
+  leverage: 100,
   spreadPip: 0.5,
   commissionPerLot: 1,
   minLot: 0.01,

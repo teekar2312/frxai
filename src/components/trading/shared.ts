@@ -82,6 +82,10 @@ export interface EquityPoint {
 
 // ============================================================
 // Navigation items for sidebar
+// NOTE: Labels are intentionally kept in English as they represent
+// standard trading/technical terms. Indonesian translations are
+// provided contextually in other parts of the UI (e.g., error pages,
+// regulatory disclaimers, and accessible labels).
 // ============================================================
 
 export const NAV_ITEMS = [

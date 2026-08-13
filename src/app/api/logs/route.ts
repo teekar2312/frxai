@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 
 // GET - Fetch activity logs (paginated)
@@ -67,6 +68,8 @@ export async function GET(request: NextRequest) {
 
 // POST - Create a new log entry
 export async function POST(request: NextRequest) {
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   if (!request.headers.get('content-type')?.includes('application/json')) {
@@ -113,6 +116,8 @@ export async function POST(request: NextRequest) {
 
 // DELETE - Clear old logs
 export async function DELETE(request: NextRequest) {
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   try {

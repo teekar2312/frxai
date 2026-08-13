@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Shield, Crosshair, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Shield, Crosshair, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
+import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -16,6 +17,7 @@ import {
   type RiskCalculation, type ForexPair,
   FOREX_PAIRS, PAIR_DISPLAY, FINEX_CONFIG,
 } from '@/lib/trading-types';
+import type { TradingConfig } from './shared';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -26,8 +28,26 @@ export function RiskManagementPanel() {
   const { accountBalance, todayRiskUsed } = useTradingStore();
 
   const [positions, setPositions] = useState<Position[]>([]);
+  const [positionsLoading, setPositionsLoading] = useState(true);
   const [riskCalc, setRiskCalc] = useState<RiskCalculation | null>(null);
   const [riskForm, setRiskForm] = useState({ accountBalance: 10000, pair: 'EURUSD' as ForexPair, stopLossPips: 10, riskPerTrade: 1 });
+  const [fetchedConfig, setFetchedConfig] = useState<TradingConfig | null>(null);
+
+  // Fetch config from API
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const res = await fetch('/api/config');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.config) setFetchedConfig(data.config as TradingConfig);
+        }
+      } catch {
+        // silent - fallback to FINEX_CONFIG
+      }
+    };
+    load();
+  }, []);
 
   // Fetch positions
   useEffect(() => {
@@ -40,6 +60,8 @@ export function RiskManagementPanel() {
         }
       } catch {
         // silent
+      } finally {
+        setPositionsLoading(false);
       }
     };
     load();
@@ -65,6 +87,9 @@ export function RiskManagementPanel() {
       toast.error('Risk calculation failed');
     }
   };
+
+  const dailyRiskLimit = fetchedConfig?.dailyRiskLimit ?? 3;
+  const dailyRiskThreshold = dailyRiskLimit * (2 / 3); // warn at ~67%
 
   return (
     <div className="space-y-4">
@@ -141,14 +166,14 @@ export function RiskManagementPanel() {
           <CardContent className="p-0">
             <div className="bg-zinc-800/50 rounded-lg p-4 space-y-2">
               {[
-                { label: 'Leverage', value: `1:${FINEX_CONFIG.leverage}` },
-                { label: 'Spread', value: `${FINEX_CONFIG.spreadPip} pip` },
-                { label: 'Commission', value: `$${FINEX_CONFIG.commissionPerLot}/lot` },
+                { label: 'Leverage', value: `1:${fetchedConfig?.leverage ?? FINEX_CONFIG.leverage}` },
+                { label: 'Spread', value: `${fetchedConfig?.spreadPip ?? FINEX_CONFIG.spreadPip} pip` },
+                { label: 'Commission', value: `$${fetchedConfig?.commissionPerLot ?? FINEX_CONFIG.commissionPerLot}/lot` },
                 { label: 'Min Lot', value: String(FINEX_CONFIG.minLot) },
                 { label: 'Max Lot/Order', value: String(FINEX_CONFIG.maxLotPerOrder) },
-                { label: 'Max Open Positions', value: String(FINEX_CONFIG.maxOpenPositions) },
-                { label: 'Margin Call Level', value: `${FINEX_CONFIG.marginCallLevel}%` },
-                { label: 'Stop Out Level', value: `${FINEX_CONFIG.stopOutLevel}%` },
+                { label: 'Max Open Positions', value: String(fetchedConfig?.maxOpenPositions ?? FINEX_CONFIG.maxOpenPositions) },
+                { label: 'Margin Call Level', value: `${fetchedConfig?.marginCallLevel ?? FINEX_CONFIG.marginCallLevel}%` },
+                { label: 'Stop Out Level', value: `${fetchedConfig?.stopOutLevel ?? FINEX_CONFIG.stopOutLevel}%` },
               ].map((item) => (
                 <div key={item.label} className="flex justify-between text-xs">
                   <span className="text-zinc-400">{item.label}</span>
@@ -194,18 +219,18 @@ export function RiskManagementPanel() {
         <CardContent className="p-0 space-y-3">
           <div className="flex items-center justify-between text-xs mb-1">
             <span className="text-zinc-400">Risk Used Today</span>
-            <span className={`font-mono font-medium ${todayRiskUsed > 2 ? 'text-rose-400' : todayRiskUsed > 1 ? 'text-amber-400' : 'text-emerald-400'}`}>
-              {todayRiskUsed.toFixed(2)}% / 3.00%
+            <span className={`font-mono font-medium ${todayRiskUsed > dailyRiskThreshold ? 'text-rose-400' : todayRiskUsed > dailyRiskThreshold / 2 ? 'text-amber-400' : 'text-emerald-400'}`}>
+              {todayRiskUsed.toFixed(2)}% / {dailyRiskLimit.toFixed(2)}%
             </span>
           </div>
-          <Progress value={Math.min(todayRiskUsed / 3 * 100, 100)} className="h-3 bg-zinc-800" />
-          <Alert className={`${todayRiskUsed > 2 ? 'border-rose-500/30 bg-rose-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
-            {todayRiskUsed > 2 ? <AlertTriangle className="w-4 h-4 text-rose-400" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-            <AlertTitle className={`text-xs ${todayRiskUsed > 2 ? 'text-rose-400' : 'text-emerald-400'}`}>
-              {todayRiskUsed > 2 ? 'Daily Risk Limit Approaching' : 'Risk Level Healthy'}
+          <Progress value={Math.min(todayRiskUsed / dailyRiskLimit * 100, 100)} className="h-3 bg-zinc-800" />
+          <Alert className={`${todayRiskUsed > dailyRiskThreshold ? 'border-rose-500/30 bg-rose-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
+            {todayRiskUsed > dailyRiskThreshold ? <AlertTriangle className="w-4 h-4 text-rose-400" /> : <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+            <AlertTitle className={`text-xs ${todayRiskUsed > dailyRiskThreshold ? 'text-rose-400' : 'text-emerald-400'}`}>
+              {todayRiskUsed > dailyRiskThreshold ? 'Daily Risk Limit Approaching' : 'Risk Level Healthy'}
             </AlertTitle>
             <AlertDescription className="text-xs text-zinc-400">
-              {todayRiskUsed > 2
+              {todayRiskUsed > dailyRiskThreshold
                 ? 'You are approaching your daily risk limit. Consider closing some positions or waiting.'
                 : 'Your current risk usage is within safe limits.'}
             </AlertDescription>

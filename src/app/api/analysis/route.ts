@@ -130,7 +130,7 @@ export async function POST(request: NextRequest) {
     try {
       parsed = JSON.parse(cleanJson);
     } catch {
-      console.error('[Analysis] Failed to parse AI response:', responseText.slice(0, 500));
+      logApiError('Analysis', new Error(`Failed to parse AI response: ${responseText.slice(0, 500)}`));
       return NextResponse.json(
         { error: 'Failed to parse AI analysis response' },
         { status: 502 }

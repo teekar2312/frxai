@@ -35,8 +35,8 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
             <TrendingUp className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="font-bold text-sm text-white">FX Pro Trading</h1>
-            <p className="text-[10px] text-zinc-400">AI-Powered Dashboard</p>
+            <h1 className="font-bold text-sm text-white">FINEX Indonesia</h1>
+            <p className="text-[10px] text-zinc-400">Platform Trading AI</p>
           </div>
         </div>
       </div>
@@ -102,9 +102,12 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       </ScrollArea>
 
       {/* Footer in sidebar */}
-      <div className="p-3 border-t border-zinc-700/50">
+      <div className="p-3 border-t border-zinc-700/50 space-y-1">
         <div className="text-[10px] text-zinc-500 text-center">
-          © 2024 FINEX Indonesia
+          © {new Date().getFullYear()} FINEX Indonesia
+        </div>
+        <div className="text-[9px] text-zinc-600 text-center leading-tight">
+          Terdaftar di BAPPEBTI
         </div>
       </div>
     </div>

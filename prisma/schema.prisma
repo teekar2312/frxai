@@ -143,16 +143,18 @@ model NewsItem {
 }
 
 model TradingConfig {
-  id                    String   @id @default(cuid())
+  id                    String   @id @default("default")
   riskPerTrade          Float    @default(0.75)
   stopLossMin           Float    @default(5)
   stopLossMax           Float    @default(15)
   riskRewardRatio       Float    @default(1.5)
   maxOpenPositions      Int      @default(3)
+  minLot                Float    @default(0.01)
+  maxLotPerOrder        Float    @default(50)
   dailyRiskLimit        Float    @default(2.5)
   dailyTargetMin        Float    @default(1)
   dailyTargetMax        Float    @default(3)
-  leverage              Int      @default(500)
+  leverage              Int      @default(100)
   spreadPip             Float    @default(0.5)
   commissionPerLot      Float    @default(1)
   marginCallLevel       Int      @default(50)

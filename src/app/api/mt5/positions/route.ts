@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
+import { logApiError } from '@/lib/safe-log';
 
 // GET - Fetch MT5 positions
 export async function GET() {
@@ -17,7 +18,7 @@ export async function GET() {
     const data = await res.json();
     return NextResponse.json(data);
   } catch (error) {
-    console.error('[MT5 Positions GET] Error:', error);
+    logApiError('MT5 Positions', error);
     return NextResponse.json(
       { error: 'Failed to reach MT5 bridge', positions: [] },
       { status: 500 }

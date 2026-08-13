@@ -22,6 +22,9 @@ const DEFAULT_CONFIG = {
   autoTrading: false,
   autoTrailingStop: false,
   trailingStopPips: 10,
+  // D-01/F-07: Add minLot and maxLotPerOrder
+  minLot: FINEX_CONFIG.minLot,
+  maxLotPerOrder: FINEX_CONFIG.maxLotPerOrder,
   avoidNewsTrading: true,
   accountBalance: 10000,
 };
@@ -32,7 +35,7 @@ export async function GET() {
     const config = await db.tradingConfig.upsert({
       where: { id: 'default' },
       update: {},
-      create: { id: 'default', ...DEFAULT_CONFIG },
+      create: { ...DEFAULT_CONFIG },
     });
 
     return NextResponse.json({ config });
@@ -61,6 +64,8 @@ export async function PUT(request: NextRequest) {
       'maxOpenPositions', 'dailyRiskLimit', 'dailyTargetMin', 'dailyTargetMax',
       'leverage', 'spreadPip', 'commissionPerLot', 'marginCallLevel',
       'stopOutLevel', 'trailingStopPips', 'accountBalance',
+      // D-01/F-07: Add minLot and maxLotPerOrder
+      'minLot', 'maxLotPerOrder',
     ];
 
     const updateData: Record<string, unknown> = {};
@@ -73,7 +78,7 @@ export async function PUT(request: NextRequest) {
     // M-7: Handle config reset
     if (body.reset === true) {
       await db.tradingConfig.deleteMany({});
-      const resetConfig = await db.tradingConfig.create({ data: { id: 'default', ...DEFAULT_CONFIG } });
+      const resetConfig = await db.tradingConfig.create({ data: { ...DEFAULT_CONFIG } });
       try {
         await db.activityLog.create({
           data: { level: 'info', category: 'system', message: 'Trading config reset to defaults' },
@@ -146,6 +151,13 @@ export async function PUT(request: NextRequest) {
     if (typeof updateData.commissionPerLot === 'number' && (updateData.commissionPerLot < 0 || updateData.commissionPerLot > 50)) {
       return NextResponse.json({ error: 'commissionPerLot must be between 0 and 50' }, { status: 400 });
     }
+    // D-01/F-07: Validate minLot and maxLotPerOrder with FINEX_CONFIG bounds
+    if (typeof updateData.minLot === 'number') {
+      updateData.minLot = Math.max(FINEX_CONFIG.minLot, Math.min(FINEX_CONFIG.maxLotPerOrder, updateData.minLot));
+    }
+    if (typeof updateData.maxLotPerOrder === 'number') {
+      updateData.maxLotPerOrder = Math.max(FINEX_CONFIG.minLot, Math.min(FINEX_CONFIG.maxLotPerOrder, updateData.maxLotPerOrder));
+    }
 
     // CFG-03: Cross-field validation
     if (typeof updateData.stopLossMin === 'number' && typeof updateData.stopLossMax === 'number') {
@@ -163,7 +175,7 @@ export async function PUT(request: NextRequest) {
     const updated = await db.tradingConfig.upsert({
       where: { id: 'default' },
       update: updateData,
-      create: { id: 'default', ...DEFAULT_CONFIG, ...updateData },
+      create: { ...DEFAULT_CONFIG, ...updateData },
     });
 
     // Log config change

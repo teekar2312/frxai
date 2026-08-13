@@ -1,10 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import type { CandleData } from '@/lib/trading-types';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 import { detectMarketCondition } from '@/lib/indicators';
 import type { OHLCV } from '@/lib/indicators';
 
 export async function POST(request: NextRequest) {
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const { candles } = body as { candles: CandleData[] };

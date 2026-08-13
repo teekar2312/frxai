@@ -22,6 +22,7 @@ import { PriceAlertsPanel } from '@/components/trading/PriceAlertsPanel';
 import { BacktestingPanel } from '@/components/trading/BacktestingPanel';
 import { ActivityLogPanel } from '@/components/trading/ActivityLogPanel';
 import { SettingsPanel } from '@/components/trading/SettingsPanel';
+import { TimeframeSessionBar } from '@/components/trading/TimeframeSessionBar';
 
 export default function TradingDashboard() {
   const { activeTab, setQuote, setNews, isAutoTrading, tradingMode, mt5ConnectionStatus } = useTradingStore();
@@ -241,6 +242,9 @@ export default function TradingDashboard() {
 
           {/* Main content */}
           <main className="flex-1 flex flex-col overflow-hidden">
+            {/* Timeframe & Session bar */}
+            <TimeframeSessionBar />
+
             {/* Mobile header */}
             <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
               <Button variant="ghost" size="icon" className="text-zinc-400 hover:text-white hover:bg-zinc-800"

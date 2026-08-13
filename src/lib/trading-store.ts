@@ -5,6 +5,9 @@ import type {
   Mt5ConnectionStatus, TradingMode, Mt5AccountInfo, Mt5Position,
 } from './trading-types';
 
+export type TimeframeId = 'M1' | 'M2' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1' | 'W1';
+export type TradingSessionId = 'Sydney' | 'Tokyo' | 'London' | 'New York' | 'all';
+
 interface TradingStore {
   // Active tab
   activeTab: string;
@@ -72,6 +75,12 @@ interface TradingStore {
   setMt5AccountInfo: (info: Mt5AccountInfo | null) => void;
   mt5Positions: Mt5Position[];
   setMt5Positions: (positions: Mt5Position[]) => void;
+
+  // Timeframe & Session selection
+  selectedTimeframe: TimeframeId;
+  setSelectedTimeframe: (tf: TimeframeId) => void;
+  selectedSession: TradingSessionId;
+  setSelectedSession: (session: TradingSessionId) => void;
 }
 
 export const useTradingStore = create<TradingStore>()(
@@ -156,11 +165,21 @@ export const useTradingStore = create<TradingStore>()(
       setMt5AccountInfo: (info) => set({ mt5AccountInfo: info }),
       mt5Positions: [],
       setMt5Positions: (positions) => set({ mt5Positions: positions }),
+
+      // Timeframe & Session
+      selectedTimeframe: 'H1' as TimeframeId,
+      setSelectedTimeframe: (tf) => set({ selectedTimeframe: tf }),
+      selectedSession: 'all' as TradingSessionId,
+      setSelectedSession: (session) => set({ selectedSession: session }),
     }),
     {
       name: 'frxai-trading-store',
-      // H3: Only persist tradingMode — connection state should re-verify on reload
-      partialize: (state) => ({ tradingMode: state.tradingMode }),
+      // Persist tradingMode, timeframe, and session preferences
+      partialize: (state) => ({
+        tradingMode: state.tradingMode,
+        selectedTimeframe: state.selectedTimeframe,
+        selectedSession: state.selectedSession,
+      }),
     }
   )
 );

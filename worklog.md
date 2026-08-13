@@ -1542,3 +1542,27 @@ Stage Summary:
 - Health check returns 200 with DB + AI provider status
 - All new production files created
 - Ready for Docker deployment
+
+---
+Task ID: TF-SESSION-1
+Agent: Main Orchestrator
+Task: Build Time Frame and Trading Session selection feature
+
+Work Log:
+- Added TimeframeId and TradingSessionId types to trading-store.ts
+- Added selectedTimeframe (default: H1) and selectedSession (default: all) to Zustand store
+- Both preferences are persisted to localStorage via partialize
+- Created TimeframeSessionBar component with:
+  - Timeframe dropdown (grouped: Menit, Jam, Hari+) with 9 options (M1-W1)
+  - Quick timeframe chips for most-used TFs (5m, 15m, H1, 4H, 1D)
+  - Session dropdown (5 options: Semua Sesi, Sydney, Tokyo, London, New York)
+  - Live session indicator pills with active pulse animation
+  - Session active text on the right (hidden on mobile)
+- Integrated bar into page.tsx between sidebar and content area
+- Bar is visible on ALL tabs (global toolbar)
+- Session status auto-updates every minute
+
+Stage Summary:
+- 3 files changed, 1 new file created
+- ESLint + TypeScript clean (0 errors)
+- Browser verified: all interactions work (dropdown, chips, pills, cross-tab persistence)

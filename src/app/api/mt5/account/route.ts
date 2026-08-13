@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server';
-
-const BRIDGE_URL = 'http://localhost:3004';
+import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
 
 // GET - Fetch MT5 account info
 export async function GET() {
   try {
-    const res = await fetch(`${BRIDGE_URL}/api/account`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${MT5_BRIDGE_URL}/api/account`, {
+      headers: BRIDGE_HEADERS,
+      signal: AbortSignal.timeout(5000),
+    });
     if (res.status === 503) {
       return NextResponse.json({ error: 'MT5 not connected' }, { status: 503 });
     }

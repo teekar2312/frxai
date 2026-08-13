@@ -248,18 +248,9 @@ export interface Mt5OrderResult {
   errorCode?: number;
 }
 
-export interface Mt5ConnectionConfig {
-  host: string;
-  port: number;
-  enabled: boolean;
-}
-
+// M2: Removed unused Mt5ConnectionConfig and MT5_DEFAULT_CONFIG (dead code)
+// Bridge URL is now configured via src/lib/mt5-config.ts using environment variables
 export const MT5_BRIDGE_PORT = 3004;
-export const MT5_DEFAULT_CONFIG: Mt5ConnectionConfig = {
-  host: 'localhost',
-  port: MT5_BRIDGE_PORT,
-  enabled: false,
-};
 
 export const TRADING_SESSIONS: TradingSession[] = [
   {

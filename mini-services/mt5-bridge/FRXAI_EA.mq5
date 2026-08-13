@@ -14,6 +14,7 @@
 input string  InpBridgeUrl     = "http://localhost:3004"; // Bridge URL
 input int     InpSyncSec       = 1;                     // Sync Interval (sec)
 input bool    InpLogEnabled    = true;                  // Enable Logging
+input long    InpMagicNumber   = 123456;               // L4: Magic Number (configurable)
 
 // ─── State ────────────────────────────────────────────────────────
 
@@ -330,7 +331,7 @@ void ExecSendOrder(string data, bool &ok, long &ticket, string &err, int &errCod
                     ? SymbolInfoDouble(sym, SYMBOL_ASK)
                     : SymbolInfoDouble(sym, SYMBOL_BID);
    req.deviation = 10;
-   req.magic     = 123456;
+   req.magic     = InpMagicNumber;
    if(StringLen(cmt) > 0) StringCopy(req.comment, cmt);
    if(sl > 0) req.sl = sl;
    if(tp > 0) req.tp = tp;
@@ -391,7 +392,7 @@ void ExecCloseOrder(string data, bool &ok, long &ticket, string &err, int &errCo
    req.position   = tk;
    req.price     = closePrice;
    req.deviation = 10;
-   req.magic     = 123456;
+   req.magic     = InpMagicNumber;
 
    ResetLastError();
    if(!OrderSend(req, res))
@@ -473,17 +474,33 @@ void ExecModifyOrder(string data, bool &ok, long &ticket, string &err, int &errC
 
 // ─── Simple JSON Parsers (no external libs needed) ────────────────────
 
+// M4: Improved JSON string parser that handles escaped quotes
 string JsonGetString(string json, string key)
   {
    string pattern = "\"" + key + "\":\"";
    int start = StringFind(json, pattern);
    if(start < 0) return "";
    start += StringLen(pattern);
-   int end = StringFind(json, "\"", start);
-   if(end < 0) return "";
-   return StringSubstr(json, start, end - start);
+   
+   // Scan for unescaped closing quote (handle \" sequences)
+   string result = "";
+   for(int i = start; i < StringLen(json); i++)
+     {
+      ushort ch = StringGetCharacter(json, i);
+      if(ch == '\\' && i + 1 < StringLen(json))
+        {
+         // Escape sequence: take next char literally
+         result += CharToString((uchar)StringGetCharacter(json, i + 1));
+         i++; // skip escaped char
+         continue;
+        }
+      if(ch == '"') break; // unescaped closing quote
+      result += CharToString((uchar)ch);
+     }
+   return result;
   }
 
+// M4: Improved JSON number parser that handles negative numbers and null
 double JsonGetNumber(string json, string key)
   {
    string pattern = "\"" + key + "\":";
@@ -491,17 +508,25 @@ double JsonGetNumber(string json, string key)
    if(start < 0) return 0;
    start += StringLen(pattern);
 
-   // Find end of number (comma, closing brace, or bracket)
+   // Skip leading whitespace
+   while(start < StringLen(json) && StringGetCharacter(json, start) == ' ')
+      start++;
+
+   // Handle null
+   if(StringFind(json, "null", start) == start)
+      return 0;
+
+   // Find end of number (comma, closing brace, bracket, or space)
    int end = start;
    while(end < StringLen(json))
      {
       ushort ch = StringGetCharacter(json, end);
-      if(ch == ',' || ch == '}' || ch == ']' || ch == ' ' || ch == '\n')
+      if(ch == ',' || ch == '}' || ch == ']')
          break;
       end++;
      }
-   string numStr = StringSubstr(json, start, end - start);
-   if(numStr == "null") return 0;
+   string numStr = StringTrimLeft(StringSubstr(json, start, end - start));
+   if(numStr == "null" || StringLen(numStr) == 0) return 0;
    return StringToDouble(numStr);
   }
 

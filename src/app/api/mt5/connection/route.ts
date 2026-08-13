@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const BRIDGE_URL = 'http://localhost:3004';
+import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
 
 async function getBridgeStatus() {
   try {
-    const res = await fetch(`${BRIDGE_URL}/api/status`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${MT5_BRIDGE_URL}/api/status`, {
+      headers: BRIDGE_HEADERS,
+      signal: AbortSignal.timeout(5000),
+    });
     if (!res.ok) return null;
     return await res.json();
   } catch {

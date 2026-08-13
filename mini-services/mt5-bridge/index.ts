@@ -56,6 +56,8 @@ const MIN_LOT = 0.01;
 const MAX_LOT = 50;
 const COMMAND_TIMEOUT_MS = 15_000;
 const STALE_EA_TIMEOUT_MS = 30_000;
+const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY || 'frxai-bridge-key-2024';
+const ALLOWED_ORIGINS = ['http://localhost:3000', 'http://127.0.0.1:3000'];
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -70,20 +72,24 @@ let commandQueue: PendingCommand[] = [];
 let startTime = Date.now();
 let lastPing: number | null = null;
 let lastHttpSync: number | null = null;
-let lastEaDisconnectNotifiedAt = 0;
+// Connection tracking
+let wsLastMessageTime: number | null = null;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+function getCorsHeaders(origin?: string | null): Record<string, string> {
+  const allowed = (!origin || ALLOWED_ORIGINS.includes(origin)) ? (origin || ALLOWED_ORIGINS[0]) : ALLOWED_ORIGINS[0];
+  return {
+    "Access-Control-Allow-Origin": allowed,
+    "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, X-Bridge-API-Key",
+  };
+}
 
-function json(data: unknown, status = 200): Response {
+function json(data: unknown, status = 200, origin?: string | null): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS_HEADERS },
+    headers: { "Content-Type": "application/json", ...getCorsHeaders(origin) },
   });
 }
 
@@ -176,6 +182,7 @@ function markEaConnected(method: "ws" | "http") {
   mt5Connected = true;
   eaConnectionMethod = method;
   lastPing = Date.now();
+  wsLastMessageTime = Date.now();
 }
 
 function markEaDisconnected(reason: string) {
@@ -187,6 +194,7 @@ function markEaDisconnected(reason: string) {
   eaConnectionMethod = null;
   lastPing = null;
   lastHttpSync = null;
+  wsLastMessageTime = null;
 
   // Reject all pending requests
   for (const [, pending] of pendingRequests) {
@@ -202,11 +210,6 @@ function markEaDisconnected(reason: string) {
   }
   commandQueue = [];
 
-  // Notify (rate-limited, max once per 5s)
-  const now = Date.now();
-  if (now - lastEaDisconnectNotifiedAt > 5000) {
-    lastEaDisconnectNotifiedAt = now;
-  }
 }
 
 // ─── WebSocket Message Handler ───────────────────────────────────────────────
@@ -267,6 +270,7 @@ function handleEAMessage(raw: string) {
 
     case "ping":
       lastPing = Date.now();
+      wsLastMessageTime = Date.now();
       sendToEA({ type: "pong" });
       break;
 
@@ -282,14 +286,27 @@ function parseTicket(url: string): string | null {
   return match ? match[1] : null;
 }
 
+// Authentication middleware for API routes (not EA polling routes)
+function authenticateRequest(req: Request): boolean {
+  const apiKey = req.headers.get('X-Bridge-API-Key');
+  return apiKey === BRIDGE_API_KEY;
+}
+
 async function handleRequest(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const path = url.pathname;
   const method = req.method;
+  const origin = req.headers.get('origin');
 
   // CORS preflight
   if (method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
+    return new Response(null, { status: 204, headers: getCorsHeaders(origin) });
+  }
+
+  // Skip auth for EA polling endpoints (they connect from MT5, not Next.js)
+  const isEaEndpoint = path.startsWith('/ea/');
+  if (!isEaEndpoint && !authenticateRequest(req)) {
+    return json({ error: 'Unauthorized: invalid or missing API key' }, 401, origin);
   }
 
   // ── GET /api/status ──────────────────────────────────────────────────────
@@ -345,7 +362,13 @@ async function handleRequest(req: Request): Promise<Response> {
 
     console.log(`[MT5-Bridge] Place order: ${body.direction} ${body.pair} x${body.lotSize}`);
     const result = await sendCommandToEA("send_order", body as Record<string, unknown>);
-    return json(result);
+    const cmdResult = result as { success?: boolean; error?: string };
+    // H4: Return proper HTTP status codes for order results
+    if (!cmdResult.success) {
+      const status = cmdResult.error?.includes('timed out') ? 504 : 502;
+      return json(cmdResult, status, origin);
+    }
+    return json(cmdResult, 200, origin);
   }
 
   // ── DELETE /api/orders/:ticket ───────────────────────────────────────────
@@ -359,7 +382,12 @@ async function handleRequest(req: Request): Promise<Response> {
     }
     console.log(`[MT5-Bridge] Close order: #${ticket}`);
     const result = await sendCommandToEA("close_order", { ticket: Number(ticket) });
-    return json(result);
+    const cmdResult = result as { success?: boolean; error?: string };
+    if (!cmdResult.success) {
+      const status = cmdResult.error?.includes('timed out') ? 504 : 502;
+      return json(cmdResult, status, origin);
+    }
+    return json(cmdResult, 200, origin);
   }
 
   // ── PATCH /api/orders/:ticket ────────────────────────────────────────────
@@ -381,7 +409,12 @@ async function handleRequest(req: Request): Promise<Response> {
       stopLoss: body.stopLoss,
       takeProfit: body.takeProfit,
     });
-    return json(result);
+    const cmdResult = result as { success?: boolean; error?: string };
+    if (!cmdResult.success) {
+      const status = cmdResult.error?.includes('timed out') ? 504 : 502;
+      return json(cmdResult, status, origin);
+    }
+    return json(cmdResult, 200, origin);
   }
 
   // ── EA HTTP Polling Endpoints ──────────────────────────────────────────
@@ -443,7 +476,7 @@ async function handleRequest(req: Request): Promise<Response> {
     }
     commandQueue = commandQueue.filter((c) => now <= c.timeoutAt);
 
-    // Return pending commands and clear from queue
+    // L6: Atomically swap queue to prevent race condition
     const commands = commandQueue.map((c) => ({
       id: c.id,
       type: c.type,
@@ -498,7 +531,7 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // ── 404 ──────────────────────────────────────────────────────────────────
-  return json({ error: "Not found" }, 404);
+  return json({ error: "Not found" }, 404, origin);
 }
 
 // ─── Stale EA Detection Timer ───────────────────────────────────────────────
@@ -511,6 +544,14 @@ setInterval(() => {
     if (now - lastHttpSync > STALE_EA_TIMEOUT_MS) {
       console.log(`[MT5-Bridge] HTTP EA stale (no sync for ${STALE_EA_TIMEOUT_MS / 1000}s)`);
       markEaDisconnected("HTTP EA stale (no sync received)");
+    }
+  }
+  // C3: WebSocket stale detection
+  if (eaConnectionMethod === "ws" && wsLastMessageTime) {
+    if (now - wsLastMessageTime > STALE_EA_TIMEOUT_MS) {
+      console.log(`[MT5-Bridge] WebSocket EA stale (no message for ${STALE_EA_TIMEOUT_MS / 1000}s)`);
+      if (mt5Ws) mt5Ws.close();
+      markEaDisconnected("WebSocket EA stale (no message received)");
     }
   }
 }, 5000);
@@ -551,6 +592,8 @@ Bun.serve({
     },
 
     message(ws: ServerWebSocket, message: string | Buffer) {
+      wsLastMessageTime = Date.now();
+      lastPing = Date.now();
       handleEAMessage(message.toString());
     },
 

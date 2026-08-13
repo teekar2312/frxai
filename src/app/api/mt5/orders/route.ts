@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
+import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
 
-const BRIDGE_URL = 'http://localhost:3004';
-const MIN_LOT = 0.01;
-const MAX_LOT = 50;
+const MIN_LOT = 0.01; // M1: Must stay in sync with bridge MIN_LOT
+const MAX_LOT = 50;   // M1: Must stay in sync with bridge MAX_LOT
 
 // POST - Send order to MT5
 export async function POST(request: NextRequest) {
+  // L1: Parse body once at the top level
+  let body: Record<string, unknown>;
   try {
-    const body = await request.json();
-    const { pair, direction, lotSize, stopLoss, takeProfit, comment } = body;
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
 
+  const { pair, direction, lotSize, stopLoss, takeProfit, comment } = body;
+
+  try {
     if (!pair || !direction || !lotSize) {
       return NextResponse.json(
         { error: 'pair, direction, and lotSize are required' },
@@ -18,29 +25,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (lotSize < MIN_LOT || lotSize > MAX_LOT) {
+    if (typeof lotSize !== 'number' || lotSize < MIN_LOT || lotSize > MAX_LOT) {
       return NextResponse.json(
         { error: `lotSize must be between ${MIN_LOT} and ${MAX_LOT}` },
         { status: 400 }
       );
     }
 
-    if (!['BUY', 'SELL'].includes(direction)) {
+    if (!['BUY', 'SELL'].includes(direction as string)) {
       return NextResponse.json(
         { error: 'direction must be BUY or SELL' },
         { status: 400 }
       );
     }
 
-    const res = await fetch(`${BRIDGE_URL}/api/orders`, {
+    const res = await fetch(`${MT5_BRIDGE_URL}/api/orders`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: BRIDGE_HEADERS,
       body: JSON.stringify({ pair, direction, lotSize, stopLoss, takeProfit, comment }),
       signal: AbortSignal.timeout(15000),
     });
 
     if (res.status === 503) {
       return NextResponse.json({ error: 'MT5 not connected' }, { status: 503 });
+    }
+
+    // H4: Bridge now returns 502/504 for EA failures — forward properly
+    if (res.status === 401) {
+      return NextResponse.json({ error: 'Bridge authentication failed' }, { status: 502 });
     }
 
     const data = await res.json();
@@ -55,7 +67,7 @@ export async function POST(request: NextRequest) {
           message: isSuccess
             ? `MT5 Order: ${direction} ${pair} x${lotSize} (Ticket #${data.ticket ?? 'unknown'})`
             : `MT5 Order FAILED: ${direction} ${pair} x${lotSize} - ${data.error ?? 'unknown error'}`,
-          pair,
+          pair: pair as string,
           metadata: JSON.stringify({ ticket: data.ticket, direction, lotSize, stopLoss, takeProfit, responseStatus: res.status }),
         },
       });
@@ -63,19 +75,18 @@ export async function POST(request: NextRequest) {
       // Non-critical
     }
 
-    return NextResponse.json(data, { status: isSuccess ? 200 : res.status });
+    return NextResponse.json(data, { status: res.ok ? 200 : 502 });
   } catch (error) {
     console.error('[MT5 Orders POST] Error:', error);
 
-    // Activity log for failure
+    // L1: Use pre-parsed body for error logging
     try {
-      const body = await request.json().catch(() => ({}));
       await db.activityLog.create({
         data: {
           level: 'warn',
           category: 'mt5_trading',
           message: `MT5 Order EXCEPTION: ${body.direction ?? 'unknown'} ${body.pair ?? 'unknown'} - ${error instanceof Error ? error.message : 'Unknown'}`,
-          pair: body.pair ?? null,
+          pair: (body.pair as string) ?? null,
           metadata: JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown' }),
         },
       });
@@ -100,8 +111,9 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'ticket query parameter is required' }, { status: 400 });
     }
 
-    const res = await fetch(`${BRIDGE_URL}/api/orders/${ticket}`, {
+    const res = await fetch(`${MT5_BRIDGE_URL}/api/orders/${ticket}`, {
       method: 'DELETE',
+      headers: BRIDGE_HEADERS,
       signal: AbortSignal.timeout(15000),
     });
 
@@ -128,11 +140,10 @@ export async function DELETE(request: NextRequest) {
       // Non-critical
     }
 
-    return NextResponse.json(data, { status: isSuccess ? 200 : res.status });
+    return NextResponse.json(data, { status: res.ok ? 200 : 502 });
   } catch (error) {
     console.error('[MT5 Orders DELETE] Error:', error);
 
-    // Activity log for failure
     try {
       const { searchParams } = new URL(request.url);
       const ticket = searchParams.get('ticket');
@@ -157,10 +168,16 @@ export async function DELETE(request: NextRequest) {
 
 // PATCH - Modify order SL/TP on MT5
 export async function PATCH(request: NextRequest) {
+  let body: Record<string, unknown>;
   try {
-    const body = await request.json();
-    const { ticket, stopLoss, takeProfit } = body;
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
 
+  const { ticket, stopLoss, takeProfit } = body;
+
+  try {
     if (!ticket) {
       return NextResponse.json({ error: 'ticket is required' }, { status: 400 });
     }
@@ -169,9 +186,9 @@ export async function PATCH(request: NextRequest) {
     if (stopLoss !== undefined) modifyData.stopLoss = stopLoss;
     if (takeProfit !== undefined) modifyData.takeProfit = takeProfit;
 
-    const res = await fetch(`${BRIDGE_URL}/api/orders/${ticket}`, {
+    const res = await fetch(`${MT5_BRIDGE_URL}/api/orders/${ticket}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: BRIDGE_HEADERS,
       body: JSON.stringify(modifyData),
       signal: AbortSignal.timeout(15000),
     });
@@ -203,13 +220,12 @@ export async function PATCH(request: NextRequest) {
       // Non-critical
     }
 
-    return NextResponse.json(data, { status: isSuccess ? 200 : res.status });
+    return NextResponse.json(data, { status: res.ok ? 200 : 502 });
   } catch (error) {
     console.error('[MT5 Orders PATCH] Error:', error);
 
-    // Activity log for failure
+    // L1: Use pre-parsed body for error logging
     try {
-      const body = await request.json().catch(() => ({ ticket: 'unknown' }));
       await db.activityLog.create({
         data: {
           level: 'warn',

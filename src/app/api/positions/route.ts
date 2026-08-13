@@ -28,7 +28,6 @@ export async function POST(request: NextRequest) {
       pair,
       direction,
       lotSize: requestedLotSize,
-      entryPrice,
       stopLoss,
       takeProfit,
       strategy,
@@ -47,6 +46,9 @@ export async function POST(request: NextRequest) {
       aiConfidence?: number;
       riskAmount?: number;
     };
+
+    // L14: entryPrice is optional for simulation (can be fetched from market data)
+    let entryPrice: number = body.entryPrice || 0;
 
     if (!pair || !direction) {
       return NextResponse.json(

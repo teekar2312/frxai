@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { TrendingUp, ChevronRight, Cable } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useTradingStore } from '@/lib/trading-store';
@@ -10,10 +10,21 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const {
     activeTab, setActiveTab,
     accountBalance,
-    dailyPnl,
-    openPositionsCount,
-    tradingMode, mt5ConnectionStatus, mt5AccountInfo,
+    dailyPnl, openPositionsCount,
+    tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
   } = useTradingStore();
+
+  // H2: Compute MT5-aware sidebar values
+  const isMt5Live = tradingMode === 'mt5_live';
+  const displayPnl = useMemo(() => {
+    if (isMt5Live && mt5AccountInfo) return mt5AccountInfo.profit;
+    return dailyPnl;
+  }, [isMt5Live, mt5AccountInfo, dailyPnl]);
+
+  const displayPositionCount = useMemo(() => {
+    if (isMt5Live) return mt5Positions.length;
+    return openPositionsCount;
+  }, [isMt5Live, mt5Positions.length, openPositionsCount]);
 
   return (
     <div className="flex flex-col h-full">
@@ -33,7 +44,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
       {/* Account summary in sidebar */}
       <div className="p-3 border-b border-zinc-700/50">
         <div className="bg-zinc-800/80 rounded-lg p-3 space-y-2">
-          {tradingMode === 'mt5_live' && (
+          {isMt5Live && (
             <div className="flex items-center gap-2 mb-1">
               <Cable className={`w-3 h-3 ${mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/50'}`} />
               <span className={`text-[10px] font-medium ${mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/70'}`}>
@@ -44,20 +55,20 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Balance</span>
             <span className="text-white font-mono font-medium">
-              {tradingMode === 'mt5_live' && mt5AccountInfo
+              {isMt5Live && mt5AccountInfo
                 ? `${mt5AccountInfo.currency} ${mt5AccountInfo.balance.toLocaleString()}`
                 : `$${accountBalance.toLocaleString()}`}
             </span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Daily P&L</span>
-            <span className={`font-mono font-medium ${dailyPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {dailyPnl >= 0 ? '+' : ''}{dailyPnl.toFixed(2)}
+            <span className={`font-mono font-medium ${displayPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {displayPnl >= 0 ? '+' : ''}{displayPnl.toFixed(2)}
             </span>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Open Positions</span>
-            <span className="text-white font-mono font-medium">{openPositionsCount}</span>
+            <span className="text-white font-mono font-medium">{displayPositionCount}</span>
           </div>
         </div>
       </div>

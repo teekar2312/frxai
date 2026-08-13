@@ -2,13 +2,18 @@
 
 import React, { useState, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
-import { Zap, RefreshCw, ArrowUpCircle, ArrowDownCircle, Play, CheckCircle2, XCircle } from 'lucide-react';
+import { Zap, RefreshCw, ArrowUpCircle, ArrowDownCircle, Play, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel,
+  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
+  AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   type ForexPair, type TradingSignal, type StrategyName, type AiAnalysisResult,
   FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS,
@@ -54,7 +59,7 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise
 }
 
 export function TradingSignalsPanel() {
-  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus } = useTradingStore();
+  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus, mt5Positions } = useTradingStore();
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   const [signalFilter, setSignalFilter] = useState<{ pair: string; strategy: string; direction: string }>({ pair: 'all', strategy: 'all', direction: 'all' });
@@ -62,6 +67,10 @@ export function TradingSignalsPanel() {
   const [autoTradeResults, setAutoTradeResults] = useState<Record<number, { success: boolean; ticket?: number; error?: string }>>({});
   const [autoTrading, setAutoTrading] = useState(false);
   const executedSignalIds = useRef(new Set<string>());
+
+  // C1: Confirmation dialog state for auto-trading MT5 orders
+  const [pendingAutoSignals, setPendingAutoSignals] = useState<TradingSignal[] | null>(null);
+  const [autoTradeConfirmed, setAutoTradeConfirmed] = useState(false);
 
   // Generate signals for all pairs
   const handleGenerateSignals = async () => {
@@ -88,9 +97,43 @@ export function TradingSignalsPanel() {
       setSignals(allSignals);
       toast.success(`Generated ${allSignals.length} signals across all pairs`);
 
-      // #2 Auto-trading: auto-execute qualifying signals
+      // Auto-trading: check eligibility and show confirmation if MT5 live
       if (isAutoTrading && allSignals.length > 0) {
-        await autoExecuteSignals(allSignals);
+        const eligible = allSignals.filter(
+          (s) => s.confidence >= AUTO_TRADE_CONFIDENCE_THRESHOLD && !executedSignalIds.current.has(s.id)
+        );
+
+        if (eligible.length === 0) {
+          if (allSignals.length > 0) {
+            toast.info(`No signals above ${AUTO_TRADE_CONFIDENCE_THRESHOLD}% confidence threshold for auto-trading`);
+          }
+          return;
+        }
+
+        // H5: Risk management pre-check before auto-trading
+        if (isMt5Live) {
+          const currentMt5Positions = mt5Positions.length;
+          const totalRiskAmount = eligible.reduce((sum, s) => sum + (Math.abs(s.entryPrice - s.stopLoss) * s.lotSize * 10000), 0);
+          const riskWarning = [];
+
+          if (currentMt5Positions + eligible.length > 50) {
+            riskWarning.push(`${currentMt5Positions + eligible.length} total positions (current: ${currentMt5Positions} + new: ${eligible.length})`);
+          }
+          if (totalRiskAmount > 5000) {
+            riskWarning.push(`Total risk exposure: $${totalRiskAmount.toFixed(2)}`);
+          }
+
+          if (riskWarning.length > 0) {
+            toast.warning(`Risk alert: ${riskWarning.join('; ')}`);
+          }
+
+          // C1: Show confirmation dialog for MT5 auto-trading
+          setPendingAutoSignals(eligible);
+          return;
+        }
+
+        // Simulation: execute directly
+        await autoExecuteSignals(eligible);
       }
     } catch {
       toast.error('Failed to generate signals');
@@ -99,19 +142,17 @@ export function TradingSignalsPanel() {
     }
   };
 
-  // Auto-execute signals when auto-trading is ON (#2 HIGH)
-  const autoExecuteSignals = async (newSignals: TradingSignal[]) => {
-    const eligible = newSignals.filter(
-      (s) => s.confidence >= AUTO_TRADE_CONFIDENCE_THRESHOLD && !executedSignalIds.current.has(s.id)
-    );
+  // Execute confirmed auto-trading
+  const handleAutoTradeConfirm = async () => {
+    if (!pendingAutoSignals) return;
+    setAutoTradeConfirmed(true);
+    setPendingAutoSignals(null);
+    await autoExecuteSignals(pendingAutoSignals);
+    setAutoTradeConfirmed(false);
+  };
 
-    if (eligible.length === 0) {
-      if (newSignals.length > 0) {
-        toast.info(`No signals above ${AUTO_TRADE_CONFIDENCE_THRESHOLD}% confidence threshold for auto-trading`);
-      }
-      return;
-    }
-
+  // Auto-execute signals
+  const autoExecuteSignals = async (eligible: TradingSignal[]) => {
     setAutoTrading(true);
     toast.info(`Auto-trading: executing ${eligible.length} signal(s)...`);
 
@@ -296,6 +337,43 @@ export function TradingSignalsPanel() {
           </div>
         </CardContent>
       </Card>
+
+      {/* C1: Auto-Trade Confirmation Dialog for MT5 */}
+      <AlertDialog open={!!pendingAutoSignals} onOpenChange={(open) => { if (!open) setPendingAutoSignals(null); }}>
+        <AlertDialogContent className="bg-zinc-900 border-zinc-700">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-white flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-400" />
+              Confirm Auto-Trading on MT5
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              {pendingAutoSignals && (
+                <>
+                  <p className="mb-3">This will execute <strong className="text-amber-400">{pendingAutoSignals.length} real-money order(s)</strong> on MetaTrader 5. Please review the signals below.</p>
+                  <div className="bg-zinc-800/50 rounded-lg p-3 space-y-2 max-h-48 overflow-y-auto">
+                    {pendingAutoSignals.map((s, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-zinc-300">{PAIR_DISPLAY[s.pair]} <span className={s.direction === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}>{s.direction}</span></span>
+                        <span className="text-zinc-400">{s.lotSize} lots · {s.confidence.toFixed(0)}%</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-zinc-700 text-zinc-300 hover:bg-zinc-800" onClick={() => setPendingAutoSignals(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleAutoTradeConfirm}
+              disabled={autoTradeConfirmed}
+              className="bg-emerald-600 hover:bg-emerald-700"
+            >
+              {autoTradeConfirmed ? <><RefreshCw className="w-4 h-4 animate-spin mr-1" /> Executing...</> : 'Confirm All Orders'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

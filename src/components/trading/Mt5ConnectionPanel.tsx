@@ -248,9 +248,9 @@ export function Mt5ConnectionPanel() {
                   <h4 className="text-xs font-medium text-amber-400 mb-2">Setup Instructions</h4>
                   <ol className="text-[11px] text-zinc-400 space-y-1.5 list-decimal list-inside">
                     <li>Start the MT5 Bridge: <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-[10px]">cd mini-services/mt5-bridge && bun run dev</code></li>
-                    <li>Install the FRXAI Expert Advisor in MetaTrader 5</li>
-                    <li>Configure the EA to connect to WebSocket: <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-[10px]">ws://localhost:3004/ws</code></li>
-                    <li>The EA will automatically sync account info and positions</li>
+                    <li>Copy <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-[10px]">FRXAI_EA.mq5</code> to your MT5 Experts folder and compile in MetaEditor</li>
+                    <li>Attach the EA to a chart — it connects via HTTP polling to <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-[10px]">http://localhost:3004</code> automatically</li>
+                    <li>Enable <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-[10px]">Allow WebRequest</code> in MT5 for <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-[10px]">http://localhost:3004</code></li>
                   </ol>
                 </div>
               )}

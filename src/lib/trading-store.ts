@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type {
   ForexPair, QuoteData, NewsArticle, AiAnalysisResult, TradingSignal, MarketCondition,
   Mt5ConnectionStatus, TradingMode, Mt5AccountInfo, Mt5Position,
@@ -73,84 +74,93 @@ interface TradingStore {
   setMt5Positions: (positions: Mt5Position[]) => void;
 }
 
-export const useTradingStore = create<TradingStore>((set) => ({
-  activeTab: 'dashboard',
-  setActiveTab: (tab) => set({ activeTab: tab }),
+export const useTradingStore = create<TradingStore>()(
+  persist(
+    (set) => ({
+      activeTab: 'dashboard',
+      setActiveTab: (tab) => set({ activeTab: tab }),
 
-  selectedPair: 'EURUSD',
-  setSelectedPair: (pair) => set({ selectedPair: pair }),
+      selectedPair: 'EURUSD',
+      setSelectedPair: (pair) => set({ selectedPair: pair }),
 
-  quotes: {
-    EURUSD: null,
-    USDJPY: null,
-    GBPUSD: null,
-    XAUUSD: null,
-  },
-  setQuote: (pair, quote) =>
-    set((state) => ({
-      quotes: { ...state.quotes, [pair]: quote },
-    })),
+      quotes: {
+        EURUSD: null,
+        USDJPY: null,
+        GBPUSD: null,
+        XAUUSD: null,
+      },
+      setQuote: (pair, quote) =>
+        set((state) => ({
+          quotes: { ...state.quotes, [pair]: quote },
+        })),
 
-  news: [],
-  setNews: (news) => set({ news }),
+      news: [],
+      setNews: (news) => set({ news }),
 
-  aiAnalysis: {
-    EURUSD: null,
-    USDJPY: null,
-    GBPUSD: null,
-    XAUUSD: null,
-  },
-  setAiAnalysis: (pair, analysis) =>
-    set((state) => ({
-      aiAnalysis: { ...state.aiAnalysis, [pair]: analysis },
-    })),
+      aiAnalysis: {
+        EURUSD: null,
+        USDJPY: null,
+        GBPUSD: null,
+        XAUUSD: null,
+      },
+      setAiAnalysis: (pair, analysis) =>
+        set((state) => ({
+          aiAnalysis: { ...state.aiAnalysis, [pair]: analysis },
+        })),
 
-  signals: [],
-  setSignals: (signals) => set({ signals }),
+      signals: [],
+      setSignals: (signals) => set({ signals }),
 
-  marketConditions: {
-    EURUSD: 'range_bound',
-    USDJPY: 'range_bound',
-    GBPUSD: 'range_bound',
-    XAUUSD: 'range_bound',
-  },
-  setMarketCondition: (pair, condition) =>
-    set((state) => ({
-      marketConditions: { ...state.marketConditions, [pair]: condition },
-    })),
+      marketConditions: {
+        EURUSD: 'range_bound',
+        USDJPY: 'range_bound',
+        GBPUSD: 'range_bound',
+        XAUUSD: 'range_bound',
+      },
+      setMarketCondition: (pair, condition) =>
+        set((state) => ({
+          marketConditions: { ...state.marketConditions, [pair]: condition },
+        })),
 
-  isAutoTrading: false,
-  toggleAutoTrading: () => set((state) => ({ isAutoTrading: !state.isAutoTrading })),
+      isAutoTrading: false,
+      toggleAutoTrading: () => set((state) => ({ isAutoTrading: !state.isAutoTrading })),
 
-  accountBalance: 10000,
-  setAccountBalance: (balance) => set({ accountBalance: balance }),
+      accountBalance: 10000,
+      setAccountBalance: (balance) => set({ accountBalance: balance }),
 
-  logs: [],
-  addLog: (log) => set((state) => ({ logs: [log, ...state.logs].slice(0, 500) })),
-  clearLogs: () => set({ logs: [] }),
+      logs: [],
+      addLog: (log) => set((state) => ({ logs: [log, ...state.logs].slice(0, 500) })),
+      clearLogs: () => set({ logs: [] }),
 
-  isLoading: {},
-  setLoading: (key, loading) =>
-    set((state) => ({
-      isLoading: { ...state.isLoading, [key]: loading },
-    })),
+      isLoading: {},
+      setLoading: (key, loading) =>
+        set((state) => ({
+          isLoading: { ...state.isLoading, [key]: loading },
+        })),
 
-  openPositionsCount: 0,
-  setOpenPositionsCount: (count) => set({ openPositionsCount: count }),
+      openPositionsCount: 0,
+      setOpenPositionsCount: (count) => set({ openPositionsCount: count }),
 
-  dailyPnl: 0,
-  setDailyPnl: (pnl) => set({ dailyPnl: pnl }),
+      dailyPnl: 0,
+      setDailyPnl: (pnl) => set({ dailyPnl: pnl }),
 
-  todayRiskUsed: 0,
-  setTodayRiskUsed: (risk) => set({ todayRiskUsed: risk }),
+      todayRiskUsed: 0,
+      setTodayRiskUsed: (risk) => set({ todayRiskUsed: risk }),
 
-  // MT5 Integration
-  tradingMode: 'simulation' as TradingMode,
-  setTradingMode: (mode) => set({ tradingMode: mode }),
-  mt5ConnectionStatus: 'disconnected' as Mt5ConnectionStatus,
-  setMt5ConnectionStatus: (status) => set({ mt5ConnectionStatus: status }),
-  mt5AccountInfo: null,
-  setMt5AccountInfo: (info) => set({ mt5AccountInfo: info }),
-  mt5Positions: [],
-  setMt5Positions: (positions) => set({ mt5Positions: positions }),
-}));
+      // MT5 Integration — tradingMode is persisted (H3)
+      tradingMode: 'simulation' as TradingMode,
+      setTradingMode: (mode) => set({ tradingMode: mode }),
+      mt5ConnectionStatus: 'disconnected' as Mt5ConnectionStatus,
+      setMt5ConnectionStatus: (status) => set({ mt5ConnectionStatus: status }),
+      mt5AccountInfo: null,
+      setMt5AccountInfo: (info) => set({ mt5AccountInfo: info }),
+      mt5Positions: [],
+      setMt5Positions: (positions) => set({ mt5Positions: positions }),
+    }),
+    {
+      name: 'frxai-trading-store',
+      // H3: Only persist tradingMode — connection state should re-verify on reload
+      partialize: (state) => ({ tradingMode: state.tradingMode }),
+    }
+  )
+);

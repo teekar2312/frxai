@@ -180,5 +180,10 @@ model TradingConfig {
   accountBalance        Float    @default(10000)
   aiProvider            String   @default("zai")  // AI-006: active AI provider
   aiModel               String   @default("default") // AI-006: active AI model
+  // Email notification settings
+  notifyEmail           String?  // Target email for notifications (overrides NOTIFICATION_EMAIL_TO)
+  emailOnPositionOpen   Boolean  @default(false)
+  emailOnPositionClose  Boolean  @default(false)
+  emailOnAlertTrigger   Boolean  @default(true)
   updatedAt             DateTime @updatedAt
 }

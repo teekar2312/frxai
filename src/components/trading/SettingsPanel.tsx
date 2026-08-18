@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Settings, RefreshCw, Cable, Shield, FileText, Info, Brain, CheckCircle2, XCircle } from 'lucide-react';
+import { Settings, RefreshCw, Cable, Shield, FileText, Info, Brain, CheckCircle2, XCircle, Mail } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -31,6 +31,7 @@ export function SettingsPanel() {
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
+  const [emailStatus, setEmailStatus] = useState<Record<string, string | boolean> | null>(null);
 
   // Fetch config
   const fetchConfig = useCallback(async () => {
@@ -40,6 +41,7 @@ export function SettingsPanel() {
       if (res.ok) {
         const data = await res.json();
         if (data.config) setConfig(data.config as TradingConfig);
+        if (data.emailStatus) setEmailStatus(data.emailStatus);
       }
     } catch {
       // silent
@@ -127,7 +129,7 @@ export function SettingsPanel() {
     );
   }
 
-  const updateConfig = (key: keyof TradingConfig, value: number | boolean | string) => {
+  const updateConfig = (key: keyof TradingConfig, value: number | boolean | string | null) => {
     setConfig(prev => prev ? { ...prev, [key]: value } : prev);
   };
 
@@ -357,6 +359,56 @@ export function SettingsPanel() {
                   <Switch checked={config.avoidNewsTrading} onCheckedChange={(v) => updateConfig('avoidNewsTrading', v)} />
                 </div>
               </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+      {/* Email Notifications */}
+      <Card className="bg-zinc-900 border-zinc-800 p-4">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="text-sm text-white flex items-center gap-2">
+            <Mail className="w-4 h-4 text-emerald-400" /> Notifikasi Email
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0 space-y-4">
+          <div className="space-y-2">
+            <Label className="text-zinc-300 text-xs">Email Penerima</Label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="email"
+                placeholder="trader@email.com"
+                value={config?.notifyEmail || ''}
+                onChange={(e) => updateConfig('notifyEmail', e.target.value || null)}
+                className="bg-zinc-800 border-zinc-700 text-white text-xs h-8"
+              />
+              {emailStatus?.configured ? (
+                <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]">
+                  <CheckCircle2 className="w-3 h-3 mr-1" /> Aktif
+                </Badge>
+              ) : (
+                <Badge className="bg-zinc-500/10 text-zinc-400 border-zinc-500/20 text-[10px]">
+                  <XCircle className="w-3 h-3 mr-1" /> Nonaktif
+                </Badge>
+              )}
+            </div>
+            {emailStatus && !emailStatus.configured && (
+              <p className="text-[10px] text-zinc-500">
+                Set RESEND_API_KEY dan NOTIFICATION_EMAIL_TO di .env
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-1 gap-3">
+            <div className="flex items-center justify-between">
+              <Label className="text-zinc-300 text-xs">Posisi Dibuka</Label>
+              <Switch checked={config?.emailOnPositionOpen || false} onCheckedChange={(v) => updateConfig('emailOnPositionOpen', v)} />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label className="text-zinc-300 text-xs">Posisi Ditutup</Label>
+              <Switch checked={config?.emailOnPositionClose || false} onCheckedChange={(v) => updateConfig('emailOnPositionClose', v)} />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label className="text-zinc-300 text-xs">Price Alert Terpicau</Label>
+              <Switch checked={config?.emailOnAlertTrigger ?? true} onCheckedChange={(v) => updateConfig('emailOnAlertTrigger', v)} />
             </div>
           </div>
         </CardContent>

@@ -7,6 +7,7 @@ import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit'
 import { getCurrentMidPriceLegacy as getCurrentMidPrice } from '@/lib/price-fetcher';
 import { getCurrentBidAsk } from '@/lib/price-cache';
 import { logApiError, safeLog } from '@/lib/safe-log';
+import { sendPositionOpenEmail, sendPositionCloseEmail } from '@/lib/email-service';
 
 // GET - Fetch positions (supports ?status=open|closed|cancelled filter)
 export async function GET(request: NextRequest) {
@@ -231,6 +232,9 @@ export async function POST(request: NextRequest) {
       // Non-critical
     }
 
+    // Send email notification on position open
+    sendPositionOpenEmail(pair, direction, lotSize, entryPrice, stopLoss ?? null, takeProfit ?? null).catch(() => {});
+
     // F-03: Check margin call / stop-out after position creation
     await checkMarginCall();
 
@@ -401,8 +405,8 @@ export async function PUT(request: NextRequest) {
         // Non-critical
       }
 
-      // Email notification simulation
-      safeLog({ level: 'info', route: 'Positions', message: `[EMAIL NOTIFY] Position closed: ${existing.pair} ${existing.direction}, PnL: $${pnl.toFixed(2)}` });
+      // Send email notification on position close
+      sendPositionCloseEmail(existing.pair, existing.direction, existing.lotSize, existing.entryPrice, closePrice, pnl).catch(() => {});
 
       // F-03: Check margin call / stop-out after closing position
       await checkMarginCall();

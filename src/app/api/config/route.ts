@@ -5,6 +5,7 @@ import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 import { AI_PROVIDERS, getModelsForProvider, VALID_AI_PROVIDER_IDS } from '@/lib/ai-provider';
+import { getEmailConfigStatus } from '@/lib/email-service';
 
 const DEFAULT_CONFIG = {
   id: 'default',
@@ -42,7 +43,8 @@ export async function GET() {
       create: { ...DEFAULT_CONFIG },
     });
 
-    return NextResponse.json({ config });
+    const emailStatus = await getEmailConfigStatus();
+    return NextResponse.json({ config, emailStatus });
   } catch (error) {
     logApiError('Config', error);
     return NextResponse.json(
@@ -83,10 +85,11 @@ export async function PUT(request: NextRequest) {
     const allowedFields = new Set([
       ...numericFields,
       'autoTrading', 'autoTrailingStop', 'avoidNewsTrading',
-      'aiProvider', 'aiModel',
+      'aiProvider', 'aiModel', 'notifyEmail',
+      'emailOnPositionOpen', 'emailOnPositionClose', 'emailOnAlertTrigger',
     ]);
 
-    const stringFields = ['aiProvider', 'aiModel'];
+    const stringFields = ['aiProvider', 'aiModel', 'notifyEmail'];
 
     // M-7: Handle config reset
     if (body.reset === true) {
@@ -104,7 +107,18 @@ export async function PUT(request: NextRequest) {
       if (value === undefined) continue;
       if (!allowedFields.has(key)) continue; // CFG-02: Reject unknown fields
 
-      if (numericFields.includes(key)) {
+    // Email notification fields
+    const emailBooleanFields = ['emailOnPositionOpen', 'emailOnPositionClose', 'emailOnAlertTrigger'];
+
+      if (key === 'notifyEmail') {
+        const emailVal = String(value).trim();
+        if (emailVal && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
+          return NextResponse.json({ error: 'Invalid email format for notifyEmail' }, { status: 400 });
+        }
+        updateData[key] = emailVal || null;
+      } else if (emailBooleanFields.includes(key)) {
+        updateData[key] = Boolean(value);
+      } else if (numericFields.includes(key)) {
         const num = Number(value);
         if (isNaN(num)) {
           return NextResponse.json(

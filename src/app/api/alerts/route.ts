@@ -6,6 +6,7 @@ import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
 import { getCachedQuote, getCurrentMidPrice } from '@/lib/price-cache';
+import { sendPriceAlertEmail } from '@/lib/email-service';
 
 // FNH-002/FNH-010/C-001: Use centralized price cache instead of direct Finnhub calls
 // RD-004: Falls back to getCurrentMidPrice when cache expired
@@ -107,9 +108,9 @@ export async function GET() {
             // Non-critical
           }
 
-          // Simulate email notification
+          // Send email notification if enabled
           if (alert.emailNotify) {
-            safeLog({ level: 'info', route: 'Alerts', message: `[EMAIL NOTIFY] Price Alert: ${alert.pair} ${alert.condition} ${alert.targetPrice} - Current: ${price}. Note: ${alert.note || 'No note'}` });
+            sendPriceAlertEmail(alert.pair, alert.condition, alert.targetPrice, price, alert.note).catch(() => {});
           }
         } else {
           // M-8: Only update price for non-triggered alerts

@@ -74,6 +74,11 @@ export interface TradingConfig {
   accountBalance: number;
   aiProvider: string;  // AI-006
   aiModel: string;     // AI-006
+  // Email notification settings
+  notifyEmail: string | null;
+  emailOnPositionOpen: boolean;
+  emailOnPositionClose: boolean;
+  emailOnAlertTrigger: boolean;
   // FE-019: Lot size constraints from server config
   minLot: number;
   maxLotPerOrder: number;

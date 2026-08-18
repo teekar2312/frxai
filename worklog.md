@@ -2038,3 +2038,43 @@ Files Modified:
 - src/components/trading/AiAnalysisPanel.tsx (AUDIT-AI-03, AUDIT-AI-05)
 - src/app/api/analysis/route.ts (AUDIT-AI-04)
 - src/components/trading/DashboardPanel.tsx (AUDIT-AI-06)
+
+---
+Task ID: audit-ai-analysis
+Agent: Main Orchestrator
+Task: Deep audit of AI Analysis integration across all features
+
+Work Log:
+- Scanned entire codebase for AI analysis related files (13 primary + 9 provider-related)
+- Deployed 3 parallel sub-agents to audit: AI provider layer, frontend components, backend integration
+- Sub-agent 1 (AI Provider Layer): Found 11 issues — ZAI timeout, simulated candles, sequential sentiment calls, no max_tokens, no retry, etc.
+- Sub-agent 2 (Frontend Components): Found 8 issues — confidence display bug, autoTradeResults keying, missing market condition on signals, etc.
+- Sub-agent 3 (Backend Integration): Found 12 issues — field attrition in AI→Position pipeline, backtest date filtering, store missing AI config, etc.
+- Applied 15 fixes across 14 files, including 4 HIGH severity issues
+- Pushed Prisma schema changes (riskLevel, aiRecommendation columns)
+- Fixed pre-existing BacktestingPanel JSX nesting bug
+- Removed stray fix-riskpanel.js
+- Verified: ESLint 0 errors (177 pre-existing warnings), pushed to main
+
+Stage Summary:
+- 15 fixes applied (AUDIT-AI-07 through AUDIT-AI-21)
+- HIGH fixes:
+  1. AUDIT-AI-07: History confidence displayed raw 0-1 float ("1%" instead of "75%")
+  2. AUDIT-AI-09/10/11/12/13: AI field attrition — riskLevel/recommendation now flow through full AI→Signal→Position pipeline
+  3. AUDIT-AI-14: ZAI calls now have 30s timeout, temperature=0.3, max_tokens=2000, and fallback to non-ZAI providers
+- MEDIUM fixes:
+  4. AUDIT-AI-15: Removed unused AI_PROVIDERS import
+  5. AUDIT-AI-16: DB cleanup throttled to once per minute
+  6. AUDIT-AI-17: autoTradeResults keyed by signal.id (not array index)
+  7. AUDIT-AI-18: Signal cards now display market condition and risk level
+  8. AUDIT-AI-19: Store serverConfig now includes aiProvider/aiModel
+- LOW fixes:
+  9. AUDIT-AI-20: AI sentiment response parsing uses regex for robustness
+  10. AUDIT-AI-21: Backtest AI comparison now filtered by backtest date range
+  11. AVOID recommendation gets distinct red styling
+  12. BacktestingPanel JSX nesting bug fixed (pre-existing)
+  13. Stray file removed
+- Known Gaps (not fixed — architectural): risk endpoint has no AI awareness, market-condition endpoint disconnected from AI, news sentiment limited to 3 items, no AI-backtest correlation logic
+- Files Modified: 14 files
+- ESLint: 0 errors (177 pre-existing warnings)
+- Commit: 731f767 pushed to main

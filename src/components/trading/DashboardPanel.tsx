@@ -144,7 +144,7 @@ export function DashboardPanel() {
                 <span className="text-sm font-semibold text-white">{PAIR_DISPLAY[pair]}</span>
                 <Badge variant={isUp ? 'default' : 'destructive'} className={`text-[10px] ${isUp ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border-rose-500/30'}`}>
                   {isUp ? <TrendingUp className="w-3 h-3 mr-0.5" /> : <TrendingDown className="w-3 h-3 mr-0.5" />}
-                  {fmtChange(q.change)}
+                  {fmtChange(q.changePercent)}
                 </Badge>
               </div>
               <div className="grid grid-cols-2 gap-2 text-xs">
@@ -227,9 +227,9 @@ export function DashboardPanel() {
                 <div className="text-xs text-zinc-400">
                   <div className="flex justify-between mb-1">
                     <span>Confidence</span>
-                    <span className="text-white font-mono">{currentAnalysis.confidence.toFixed(0)}%</span>
+                    <span className="text-white font-mono">{(currentAnalysis.confidence * 100).toFixed(0)}%</span>
                   </div>
-                  <Progress value={currentAnalysis.confidence} className="h-1.5 bg-zinc-800 [&>div]:bg-emerald-500" />
+                  <Progress value={currentAnalysis.confidence * 100} className="h-1.5 bg-zinc-800 [&>div]:bg-emerald-500" />
                 </div>
                 <p className="text-[11px] text-zinc-500 line-clamp-3">{currentAnalysis.reasoning}</p>
               </div>
@@ -340,7 +340,7 @@ export function DashboardPanel() {
             </div>
             <div>
               <p className="text-[10px] text-zinc-500 mb-1">Balance</p>
-              <p className="text-lg font-mono font-bold text-white">${displayBalance.toLocaleString()}</p>
+              <p className="text-lg font-mono font-bold text-white">{isMt5Live && mt5AccountInfo ? `${mt5AccountInfo.currency} ${displayBalance.toLocaleString()}` : `$${displayBalance.toLocaleString()}`}</p>
             </div>
             <div>
               <p className="text-[10px] text-zinc-500 mb-1">Open Trades</p>

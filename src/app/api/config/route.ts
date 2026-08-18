@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { FINEX_CONFIG } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 import { AI_PROVIDERS, getModelsForProvider, VALID_AI_PROVIDER_IDS } from '@/lib/ai-provider';
 
@@ -53,6 +54,9 @@ export async function GET() {
 
 // PUT - Update trading config
 export async function PUT(request: NextRequest) {
+  // API-AUDIT-005: Rate limit BEFORE auth
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   if (!request.headers.get('content-type')?.includes('application/json')) {
@@ -192,14 +196,18 @@ export async function PUT(request: NextRequest) {
       updateData.maxLotPerOrder = Math.max(FINEX_CONFIG.minLot, Math.min(FINEX_CONFIG.maxLotPerOrder, updateData.maxLotPerOrder));
     }
 
-    // CFG-03: Cross-field validation
-    if (typeof updateData.stopLossMin === 'number' && typeof updateData.stopLossMax === 'number') {
-      if (updateData.stopLossMin >= updateData.stopLossMax) {
+    // API-AUDIT-010: Cross-field validation — merge incoming fields with current config
+    // so cross-field checks work even when only one field is sent
+    const mergedForValidation = { ...currentConfig, ...updateData } as Record<string, unknown>;
+
+    // CFG-03: Cross-field validation on merged values
+    if (typeof mergedForValidation.stopLossMin === 'number' && typeof mergedForValidation.stopLossMax === 'number') {
+      if (mergedForValidation.stopLossMin >= mergedForValidation.stopLossMax) {
         return NextResponse.json({ error: 'stopLossMin must be less than stopLossMax' }, { status: 400 });
       }
     }
-    if (typeof updateData.marginCallLevel === 'number' && typeof updateData.stopOutLevel === 'number') {
-      if (updateData.marginCallLevel <= updateData.stopOutLevel) {
+    if (typeof mergedForValidation.marginCallLevel === 'number' && typeof mergedForValidation.stopOutLevel === 'number') {
+      if (mergedForValidation.marginCallLevel <= mergedForValidation.stopOutLevel) {
         return NextResponse.json({ error: 'marginCallLevel must be greater than stopOutLevel' }, { status: 400 });
       }
     }

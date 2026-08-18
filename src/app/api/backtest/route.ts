@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair, StrategyName, CandleData, BacktestConfig, BacktestResult } from '@/lib/trading-types';
-import { PAIR_PIP_VALUES, FINEX_CONFIG, PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, toFinnhubResolution } from '@/lib/trading-types';
+import { PAIR_PIP_VALUES, FINEX_CONFIG, PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, toFinnhubResolution, FOREX_PAIRS } from '@/lib/trading-types';
 import { fetchWithTimeout } from '@/lib/fetch-utils';
 import { generateSimulatedCandles } from '@/lib/sim-candles';
 // FIX IND-005: Only import what's actually used
@@ -88,7 +88,8 @@ async function fetchHistoricalCandles(
   const unique = allCandles.filter((c, i, arr) => i === 0 || c.time !== arr[i - 1].time);
 
   // FNH-007: Fallback to simulated if insufficient real data
-  if (unique.length < 50) return generateSimulatedCandles(pair, Math.max(500, 100), getResolutionSeconds(resolution));
+  // API-AUDIT-013: Use 500 directly instead of Math.max(500, 100)
+  if (unique.length < 50) return generateSimulatedCandles(pair, 500, getResolutionSeconds(resolution));
   return unique;
 }
 
@@ -450,19 +451,20 @@ function calculateBacktestStats(
 }
 
 export async function POST(request: NextRequest) {
+  // API-AUDIT-005: Rate limit BEFORE auth to prevent brute-force API key guessing
+  const rateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   if (!request.headers.get('content-type')?.includes('application/json')) {
     return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
   }
-  const rateCheck = checkRateLimit(clientIp(request), 'general');
-  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const config = body as BacktestConfig;
 
     // M-3: Validate pair, strategy, and timeframe against allowed lists
-    const { FOREX_PAIRS } = await import('@/lib/trading-types');
+    // API-AUDIT-029: FOREX_PAIRS is now imported statically at the top of file
     if (!FOREX_PAIRS.includes(config.pair)) {
       return NextResponse.json({ error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` }, { status: 400 });
     }
@@ -484,9 +486,17 @@ export async function POST(request: NextRequest) {
     }
 
     // BT-01: Validate numeric fields
-    const { stopLossPips, riskPerTrade, initialBalance, maxPositions: configMaxPositions } = body;
+    const { stopLossPips, riskPerTrade, initialBalance } = body;
     if (!stopLossPips || stopLossPips <= 0 || stopLossPips > 500) {
       return NextResponse.json({ error: 'stopLossPips must be between 1 and 500' }, { status: 400 });
+    }
+    // API-AUDIT-011: Validate takeProfitPips
+    if (config.takeProfitPips !== undefined && (typeof config.takeProfitPips !== 'number' || config.takeProfitPips <= 0)) {
+      return NextResponse.json({ error: 'takeProfitPips must be greater than 0' }, { status: 400 });
+    }
+    // API-AUDIT-011: Validate maxPositions
+    if (config.maxPositions !== undefined && (typeof config.maxPositions !== 'number' || config.maxPositions < 1 || config.maxPositions > 20)) {
+      return NextResponse.json({ error: 'maxPositions must be between 1 and 20' }, { status: 400 });
     }
     if (typeof riskPerTrade !== 'number' || riskPerTrade < 0.1 || riskPerTrade > 100) {
       return NextResponse.json({ error: 'riskPerTrade must be between 0.1 and 100' }, { status: 400 });
@@ -580,8 +590,9 @@ export async function POST(request: NextRequest) {
       trades,
       candlesUsed: candles.length,
       // FIX STRATEGY-004: Format equity curve as {time, equity} objects for chart rendering
+      // API-AUDIT-049: Fix time mapping — equity values start from minLookback, not index 0
       equityCurve: equityCurve.map((eq, i) => ({
-        time: candles[i]?.time ? new Date(candles[i].time).toISOString().slice(0, 10) : String(i),
+        time: candles[i + minLookback]?.time ? new Date(candles[i + minLookback].time).toISOString().slice(0, 10) : String(i),
         equity: parseFloat(eq.toFixed(2)),
       })),
     });
@@ -613,6 +624,9 @@ export async function GET() {
 
 // DELETE - Delete a backtest result
 export async function DELETE(request: NextRequest) {
+  // API-AUDIT-005: Rate limit BEFORE auth
+  const deleteRateCheck = checkRateLimit(clientIp(request), 'general');
+  if (!deleteRateCheck.allowed) return rateLimitedResponse(deleteRateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   try {

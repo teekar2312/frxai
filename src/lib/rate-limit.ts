@@ -12,9 +12,11 @@ const store = new Map<string, RateLimitEntry>();
 // Cleanup old entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
+  // LIB-007: Use the max window from all configs instead of hardcoded 60s
+  const maxWindowMs = Math.max(...Object.values(DEFAULT_CONFIGS).map(c => c.windowMs));
   for (const [key, entry] of store) {
-    // Remove timestamps older than 1 minute
-    entry.timestamps = entry.timestamps.filter(t => now - t < 60000);
+    // Remove timestamps older than the largest configured window
+    entry.timestamps = entry.timestamps.filter(t => now - t < maxWindowMs);
     if (entry.timestamps.length === 0) store.delete(key);
   }
 }, 300_000);

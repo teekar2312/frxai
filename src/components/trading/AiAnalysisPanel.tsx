@@ -73,6 +73,8 @@ export function AiAnalysisPanel() {
           setLastModel(data.aiModel || 'default');
           toast.success(`AI Analysis complete for ${PAIR_DISPLAY[selectedPair]}`);
         }
+        // FE-014: Refresh analysis history after new analysis
+        fetchAnalysisHistory();
       } else {
         toast.error('Failed to run AI analysis');
       }
@@ -137,14 +139,14 @@ export function AiAnalysisPanel() {
                     <circle cx="50" cy="50" r="40" fill="none" stroke="#27272a" strokeWidth="8" />
                     <circle
                       cx="50" cy="50" r="40" fill="none"
-                      stroke={currentAnalysis.confidence > 70 ? '#10b981' : currentAnalysis.confidence > 40 ? '#f59e0b' : '#ef4444'}
+                      stroke={currentAnalysis.confidence > 0.7 ? '#10b981' : currentAnalysis.confidence > 0.4 ? '#f59e0b' : '#ef4444'}
                       strokeWidth="8"
-                      strokeDasharray={`${currentAnalysis.confidence * 2.51} 251`}
+                      strokeDasharray={`${currentAnalysis.confidence * 100 * 2.51} 251`}
                       strokeLinecap="round"
                     />
                   </svg>
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-lg font-bold text-white font-mono">{currentAnalysis.confidence.toFixed(0)}%</span>
+                    <span className="text-lg font-bold text-white font-mono">{(currentAnalysis.confidence * 100).toFixed(0)}%</span>
                   </div>
                 </div>
                 <div className="space-y-2 flex-1">
@@ -236,8 +238,8 @@ export function AiAnalysisPanel() {
                   <p className="text-xs text-zinc-500 text-center py-4">No analysis history</p>
                 ) : (
                   <div className="space-y-2">
-                    {analysisHistory.slice(0, 20).map((a, i) => (
-                      <div key={i} className="bg-zinc-800/50 rounded-lg p-2.5 space-y-1">
+                    {analysisHistory.slice(0, 20).map((a) => (
+                      <div key={a.id || `${a.pair}-${a.createdAt}`} className="bg-zinc-800/50 rounded-lg p-2.5 space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-medium text-zinc-200">{PAIR_DISPLAY[a.pair]}</span>
                           <Badge className={`text-[10px] ${a.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : a.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' : 'bg-zinc-700 text-zinc-400'}`}>

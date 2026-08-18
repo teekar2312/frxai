@@ -110,8 +110,16 @@ export async function GET(request: NextRequest) {
     );
   } catch (error) {
     logApiError('Finnhub', error);
-    // Force simulated fallback
-    const { quotes, simulated } = await refreshAllQuotes();
-    return NextResponse.json({ timestamp: Date.now(), quotes, simulated: true, error: 'fallback' });
+    // API-AUDIT-008: Wrap refreshAllQuotes fallback in its own try-catch
+    let fallbackQuotes: Record<string, unknown> = {};
+    let fallbackSimulated = true;
+    try {
+      const fallback = await refreshAllQuotes();
+      fallbackQuotes = fallback.quotes;
+      fallbackSimulated = fallback.simulated;
+    } catch {
+      // If even the fallback fails, return minimal error response
+    }
+    return NextResponse.json({ timestamp: Date.now(), quotes: fallbackQuotes, simulated: fallbackSimulated, error: 'fallback' });
   }
 }

@@ -39,13 +39,14 @@ export async function GET(request: NextRequest) {
 
 // POST - Create new position
 export async function POST(request: NextRequest) {
+  // API-AUDIT-005: Rate limit BEFORE auth to prevent brute-force API key guessing
+  const rateCheck = checkRateLimit(clientIp(request), 'trade');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   const auth = requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
   if (!request.headers.get('content-type')?.includes('application/json')) {
     return NextResponse.json({ error: 'Content-Type must be application/json' }, { status: 415 });
   }
-  const rateCheck = checkRateLimit(clientIp(request), 'trade');
-  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
     const {
@@ -318,10 +319,11 @@ async function checkMarginCall() {
 
 // PUT - Update position (close, modify SL/TP, trailing stop)
 export async function PUT(request: NextRequest) {
-  const auth = requireAuthForMutation(request);
-  if (!auth.authorized) return auth.error!;
+  // API-AUDIT-005: Rate limit BEFORE auth
   const rateCheck = checkRateLimit(clientIp(request), 'general');
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const body = await request.json();
     const { id, action, stopLoss, takeProfit, trailingStop, currentPrice } = body as {
@@ -485,10 +487,11 @@ export async function PUT(request: NextRequest) {
 
 // DELETE - Cancel position
 export async function DELETE(request: NextRequest) {
-  const auth = requireAuthForMutation(request);
-  if (!auth.authorized) return auth.error!;
+  // API-AUDIT-005: Rate limit BEFORE auth
   const rateCheck = checkRateLimit(clientIp(request), 'general');
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   try {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');

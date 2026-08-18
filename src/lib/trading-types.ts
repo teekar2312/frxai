@@ -188,7 +188,7 @@ export const MARKET_CONDITION_LABELS: Record<MarketCondition, string> = {
   low_volatility: 'Low-Volatility Market',
 };
 
-export const TIMEFRAMES = ['M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'] as const;
+export const TIMEFRAMES = ['M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'] as const;
 
 // ============================================================
 // FNH-002: Single source of truth for Finnhub OANDA symbol mapping

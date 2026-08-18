@@ -158,14 +158,14 @@ export function BacktestingPanel() {
             </div>
             <div className="space-y-1.5">
               <Label className="text-zinc-400 text-xs">SL (pips)</Label>
-              <Input type="number" value={backtestConfig.stopLossPips}
-                onChange={(e) => setBacktestConfig(c => ({ ...c, stopLossPips: parseInt(e.target.value) || 10 }))}
+              <Input type="number" step="0.1" value={backtestConfig.stopLossPips}
+                onChange={(e) => setBacktestConfig(c => ({ ...c, stopLossPips: parseFloat(e.target.value) || 10 }))}
                 className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
             </div>
             <div className="space-y-1.5">
               <Label className="text-zinc-400 text-xs">TP (pips)</Label>
-              <Input type="number" value={backtestConfig.takeProfitPips}
-                onChange={(e) => setBacktestConfig(c => ({ ...c, takeProfitPips: parseInt(e.target.value) || 15 }))}
+              <Input type="number" step="0.1" value={backtestConfig.takeProfitPips}
+                onChange={(e) => setBacktestConfig(c => ({ ...c, takeProfitPips: parseFloat(e.target.value) || 15 }))}
                 className="bg-zinc-800 border-zinc-700 text-white h-8 text-xs" />
             </div>
           </div>

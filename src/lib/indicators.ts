@@ -45,7 +45,8 @@ export function hma(data: number[], period: number): number[] {
   const sqrtPeriod = Math.floor(Math.sqrt(period));
   const wma1 = wma(data, halfPeriod);
   const wma2 = wma(data, period);
-  const diff = wma1.map((v, i) => (2 * v) - (wma2[i] || 0));
+  // FIX LIB-001: Proper NaN propagation instead of || 0 coercion
+  const diff = wma1.map((v, i) => (isNaN(v) || isNaN(wma2[i])) ? NaN : (2 * v) - wma2[i]!);
   return wma(diff, sqrtPeriod);
 }
 
@@ -138,17 +139,22 @@ export function macd(data: number[], fast: number = 12, slow: number = 26, signa
   const emaFast = ema(data, fast);
   const emaSlow = ema(data, slow);
   const macdLine = emaFast.map((v, i) => (isNaN(v) || isNaN(emaSlow[i])) ? NaN : v - emaSlow[i]);
+  // FIX LIB-002: Pad signal array to match macdLine length
   const validMacd = macdLine.filter(v => !isNaN(v)) as number[];
   const signalLine = ema(validMacd, signal);
-  const histogram: number[] = [];
+  const paddedSignal: number[] = [];
   let sIdx = 0;
   for (let i = 0; i < macdLine.length; i++) {
-    if (isNaN(macdLine[i])) { histogram.push(NaN); continue; }
-    const s = signalLine[sIdx] ?? NaN;
-    histogram.push(isNaN(s) ? NaN : macdLine[i]! - s);
+    if (isNaN(macdLine[i])) { paddedSignal.push(NaN); continue; }
+    paddedSignal.push(signalLine[sIdx] ?? NaN);
     sIdx++;
   }
-  return { macd: macdLine, signal: signalLine, histogram };
+  const histogram: number[] = [];
+  for (let i = 0; i < macdLine.length; i++) {
+    if (isNaN(macdLine[i]) || isNaN(paddedSignal[i])) { histogram.push(NaN); continue; }
+    histogram.push(macdLine[i]! - paddedSignal[i]!);
+  }
+  return { macd: macdLine, signal: paddedSignal, histogram };
 }
 
 export function williamsR(candles: OHLCV[], period: number = 14): number[] {
@@ -189,7 +195,8 @@ export function mfi(candles: OHLCV[], period: number = 14): number[] {
       const mf = tp * candles[j].volume;
       const prevTp = j > 0 ? (candles[j - 1].high + candles[j - 1].low + candles[j - 1].close) / 3 : tp;
       if (tp > prevTp) positiveFlow += mf;
-      else negativeFlow += mf;
+      // FIX LIB-019: Equal TP should not count as negative flow
+      else if (tp < prevTp) negativeFlow += mf;
     }
     result.push(negativeFlow === 0 ? 100 : 100 - 100 / (1 + positiveFlow / negativeFlow));
   }
@@ -459,6 +466,8 @@ export function accumulationDistribution(candles: OHLCV[]): number[] {
 // ==================== LINEAR REGRESSION ====================
 
 export function linearRegressionChannel(data: number[], period: number = 20): { upper: number[]; middle: number[]; lower: number[] } {
+  // FIX LIB-006: Guard against period < 3 (would divide by zero)
+  if (period < 3) return { upper: data.map(() => NaN), middle: data.map(() => NaN), lower: data.map(() => NaN) };
   const middle: number[] = [];
   const upper: number[] = [];
   const lower: number[] = [];
@@ -495,10 +504,16 @@ export function schaffTrendCycle(data: number[], fastPeriod: number = 23, slowPe
   // FIX IND-014: Guard against empty validMacd array
   const validMacd = macdVals.filter(v => !isNaN(v)) as number[];
   if (validMacd.length === 0) return data.map(() => NaN);
-  const minMacd = Math.min(...validMacd);
-  const maxMacd = Math.max(...validMacd);
-  const range = maxMacd - minMacd;
-  const normalized = macdVals.map(v => isNaN(v) ? NaN : range === 0 ? 0.5 : (v - minMacd) / range);
+  // FIX LIB-003: Use rolling min/max to avoid look-ahead bias (repainting)
+  const lookback = slowPeriod;
+  const normalized = macdVals.map((v, i) => {
+    if (isNaN(v) || i < lookback - 1) return NaN;
+    const window = macdVals.slice(i - lookback + 1, i + 1).filter(x => !isNaN(x)) as number[];
+    const wMin = Math.min(...window);
+    const wMax = Math.max(...window);
+    const wRange = wMax - wMin;
+    return wRange === 0 ? 0.5 : (v - wMin) / wRange;
+  });
   const validNorm = normalized.filter(v => !isNaN(v)) as number[];
   const stc1 = ema(validNorm, cyclePeriod);
   const stc2 = ema(stc1.filter(v => !isNaN(v)) as number[], cyclePeriod);
@@ -551,6 +566,8 @@ export function detectMarketCondition(candles: OHLCV[]): 'trending' | 'range_bou
   });
   const avgBbWidth = recentBbWidth.reduce((a, b) => a + b, 0) / recentBbWidth.length;
   const avgPrice = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  // FIX LIB-008: Guard against zero avgPrice
+  if (avgPrice === 0) return 'range_bound';
   const atrPct = (avgAtr / avgPrice) * 100;
   const bbWidthPct = (avgBbWidth / avgPrice) * 100;
   // Trend detection: ADX-like using linear regression slope

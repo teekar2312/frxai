@@ -174,7 +174,7 @@ export function LiveTradingPanel() {
   const handleClosePosition = async (id: string) => {
     try {
       const res = await fetch('/api/positions', {
-        method: 'PATCH',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, action: 'close' }),
       });

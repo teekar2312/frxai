@@ -4,6 +4,7 @@ import type { ForexPair, RiskCalculation } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES, FINEX_CONFIG } from '@/lib/trading-types';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
+import { getCachedQuote } from '@/lib/price-cache';
 
 export async function POST(request: NextRequest) {
   // S-7E-03: Content-Type validation
@@ -107,7 +108,9 @@ export async function POST(request: NextRequest) {
 
     // R-03: Fix margin formula for JPY/XAU
     const contractSize = 100000; // Standard lot
-    const exchangeRate = pair === 'USDJPY' ? 150 : 1;
+    // API-AUDIT-007: Try to get current USDJPY rate from price cache; fallback to 150
+    const usdjpyQuote = pair === 'USDJPY' ? getCachedQuote('USDJPY') : null;
+    const exchangeRate = usdjpyQuote ? usdjpyQuote.quote.mid : (pair === 'USDJPY' ? 150 : 1);
     const marginRequired = (lotSize * contractSize) / (leverage * exchangeRate);
 
     // Margin as percentage of account

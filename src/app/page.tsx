@@ -93,11 +93,11 @@ export default function TradingDashboard() {
           setConnected(true);
           return;
         }
-        // MT5 prices failed — falling back to Finnhub (P-03)
-        safeLog({ level: 'warn', route: 'Page', message: 'MT5 prices unavailable, falling back to Finnhub' });
-        setPriceSourceWarning(true);
-        setTimeout(() => setPriceSourceWarning(false), 10000);
+        // MT5 prices failed — do NOT fall through to Finnhub to avoid showing SIMULASI in MT5 mode
+        safeLog({ level: 'warn', route: 'Page', message: 'MT5 prices unavailable, skipping fetch cycle' });
+        return;
       }
+      // Only fetch from Finnhub when NOT in MT5 live mode
       const res = await fetch('/api/finnhub');
       if (!res.ok) throw new Error('Failed to fetch prices');
       const data = await res.json();

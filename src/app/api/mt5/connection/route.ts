@@ -39,32 +39,38 @@ export async function GET() {
 
 // POST - Enable/disable/check MT5 connection
 export async function POST(request: NextRequest) {
+  // API-AUDIT-037: Wrap request.json() in try-catch for invalid JSON
+  let body: { action?: string };
   try {
-    const body = await request.json();
-    const { action } = body as { action: 'check' | 'enable' | 'disable' };
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  const { action } = body as { action: 'check' | 'enable' | 'disable' };
 
     if (!action || !['check', 'enable', 'disable'].includes(action)) {
       return NextResponse.json({ error: 'action must be check, enable, or disable' }, { status: 400 });
     }
 
-    const bridgeStatus = await getBridgeStatus();
+    try {
+      const bridgeStatus = await getBridgeStatus();
 
-    return NextResponse.json({
-      action,
-      connected: bridgeStatus?.connected ?? false,
-      eaConnected: bridgeStatus?.eaConnected ?? false,
-      bridgeReachable: bridgeStatus !== null,
-      message: action === 'enable'
-        ? 'Bridge is reachable. Start the MT5 Expert Advisor to connect.'
-        : action === 'disable'
-          ? 'MT5 mode can be disabled. Switch to Simulation mode in settings.'
-          : 'Status checked',
-    });
-  } catch (error) {
-    logApiError('MT5 Connection', error);
-    return NextResponse.json(
-      { error: 'Failed to process connection request' },
-      { status: 500 }
-    );
-  }
+      return NextResponse.json({
+        action,
+        connected: bridgeStatus?.connected ?? false,
+        eaConnected: bridgeStatus?.eaConnected ?? false,
+        bridgeReachable: bridgeStatus !== null,
+        message: action === 'enable'
+          ? 'Bridge is reachable. Start the MT5 Expert Advisor to connect.'
+          : action === 'disable'
+            ? 'MT5 mode can be disabled. Switch to Simulation mode in settings.'
+            : 'Status checked',
+      });
+    } catch (error) {
+      logApiError('MT5 Connection', error);
+      return NextResponse.json(
+        { error: 'Failed to process connection request' },
+        { status: 500 }
+      );
+    }
 }

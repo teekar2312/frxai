@@ -164,26 +164,61 @@ async function fetchAndCacheNews(limit: number): Promise<void> {
       const toCreate = rawNews.slice(0, 10).filter(a => a.uuid && !existingIds.has(a.uuid as string));
 
       if (toCreate.length > 0) {
-        await db.newsItem.createMany({
-          data: toCreate.map(article => {
-            const title = (article.title as string) || '';
-            const description = (article.description as string) || '';
-            const pair = matchPairToNews(title, description);
-            return {
-              id: article.uuid as string,
-              source: (article.source as string) || 'Unknown',
-              title,
-              description: description.slice(0, 1000),
-              url: ((article.url as string) || '').slice(0, 2048),
-              imageUrl: (article.image_url as string) || '',
-              publishedAt: article.published_at ? new Date(article.published_at as string) : null,
-              category: (article.category as string) || 'forex',
-              pair: pair || null,
-              impact: determineImpact(title, description),
-              sentiment: determineSentiment(`${title} ${description}`),
-            };
-          }),
-        });
+        // API-AUDIT-004: Wrap createMany in try-catch; fall back to individual creates on unique constraint error (SQLite doesn't support skipDuplicates)
+        try {
+          await db.newsItem.createMany({
+            data: toCreate.map(article => {
+              const title = (article.title as string) || '';
+              const description = (article.description as string) || '';
+              const pair = matchPairToNews(title, description);
+              return {
+                id: article.uuid as string,
+                source: (article.source as string) || 'Unknown',
+                title,
+                description: description.slice(0, MAX_DESCRIPTION_LENGTH),
+                url: ((article.url as string) || '').slice(0, 2048),
+                imageUrl: (article.image_url as string) || '',
+                publishedAt: article.published_at ? new Date(article.published_at as string) : null,
+                category: (article.category as string) || 'forex',
+                pair: pair || null,
+                impact: determineImpact(title, description),
+                sentiment: determineSentiment(`${title} ${description}`),
+              };
+            }),
+          });
+        } catch (createErr: unknown) {
+          // P2002 = unique constraint violation — fall back to individual creates
+          if (createErr && typeof createErr === 'object' && 'code' in createErr && (createErr as { code: string }).code === 'P2002') {
+            for (const article of toCreate) {
+              try {
+                const title = (article.title as string) || '';
+                const description = (article.description as string) || '';
+                const pair = matchPairToNews(title, description);
+                await db.newsItem.create({
+                  data: {
+                    id: article.uuid as string,
+                    source: (article.source as string) || 'Unknown',
+                    title,
+                    description: description.slice(0, MAX_DESCRIPTION_LENGTH),
+                    url: ((article.url as string) || '').slice(0, 2048),
+                    imageUrl: (article.image_url as string) || '',
+                    publishedAt: article.published_at ? new Date(article.published_at as string) : null,
+                    category: (article.category as string) || 'forex',
+                    pair: pair || null,
+                    impact: determineImpact(title, description),
+                    sentiment: determineSentiment(`${title} ${description}`),
+                  },
+                });
+              } catch {
+                // Skip duplicates individually
+              }
+            }
+          }
+          // Non-P2002 errors: let the outer catch handle
+          else {
+            throw createErr;
+          }
+        }
       }
 
       lastNewsFetchAt = Date.now();

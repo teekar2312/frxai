@@ -209,6 +209,9 @@ export async function getCurrentMidPrice(pair: string): Promise<{ mid: number; s
   const change = (Math.random() - 0.5) * 2 * base.volatility;
   const meanRevert = (base.price - s.price) * 0.05;
   s.price = s.price + change + meanRevert;
+  // LIB-013: Update session high/low in simulated fallback
+  s.high = Math.max(s.high, s.price);
+  s.low = Math.min(s.low, s.price);
   return { mid: s.price, simulated: true };
 }
 
@@ -225,7 +228,8 @@ export async function getCurrentBidAsk(pair: string, direction: 'BUY' | 'SELL'):
   const mid = await getCurrentMidPrice(pair);
   if (!mid) return null;
 
-  const pipSize = (pair as ForexPair === 'USDJPY' || pair as ForexPair === 'XAUUSD') ? 0.01 : 0.0001;
+  // FIX LIB-005: Use PAIR_PIP_VALUES as single source of truth instead of hardcoded values
+  const pipSize = PAIR_PIP_VALUES[pair as ForexPair]?.pipSize ?? 0.0001;
   const spread = FINEX_CONFIG.spreadPip * pipSize;
   const price = direction === 'BUY'
     ? mid.mid + spread / 2  // ask

@@ -41,16 +41,16 @@ export async function POST(request: NextRequest) {
       timeframe: string;
     };
 
-    // S-7E-02: Add pair validation
-    if (pair && !FOREX_PAIRS.includes(pair as ForexPair)) {
-      return NextResponse.json({ error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` }, { status: 400 });
-    }
-
     if (!pair || !candles || !Array.isArray(candles) || candles.length < 30) {
       return NextResponse.json(
         { error: 'Valid pair and at least 30 candles are required' },
         { status: 400 }
       );
+    }
+
+    // S-7E-02: Validate pair against allowed list
+    if (!FOREX_PAIRS.includes(pair as ForexPair)) {
+      return NextResponse.json({ error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` }, { status: 400 });
     }
 
     // IND-02: Cap candles array size

@@ -276,6 +276,29 @@ async function checkMarginCall() {
     const openPositions = await db.tradingPosition.findMany({ where: { status: 'open' } });
     if (openPositions.length === 0) return;
 
+    // RISK-007: Update stale PnL from price cache before computing equity
+    const { getCachedQuote } = await import('@/lib/price-cache');
+    for (const pos of openPositions) {
+      const quote = getCachedQuote(pos.pair as ForexPair);
+      if (quote?.quote?.mid && quote.quote.mid > 0) {
+        const pipCfg = PAIR_PIP_VALUES[pos.pair as ForexPair] || { standard: 10, pipSize: 0.0001 };
+        const pipValue = pipCfg.standard * pos.lotSize;
+        const priceDiff = pos.direction === 'BUY'
+          ? quote.quote.mid - pos.entryPrice
+          : pos.entryPrice - quote.quote.mid;
+        const pnlPips = priceDiff / pipCfg.pipSize;
+        const pnl = pnlPips * pipValue - pos.commission;
+        // Only update in DB if PnL changed significantly (> $0.01)
+        if (Math.abs((pos.pnl ?? 0) - pnl) > 0.01) {
+          await db.tradingPosition.update({
+            where: { id: pos.id },
+            data: { currentPrice: quote.quote.mid, pnl, pnlPips },
+          }).catch(() => {});
+          pos.pnl = pnl; // use updated value for equity calc
+        }
+      }
+    }
+
     // Calculate total equity (balance + sum of PnL)
     const totalPnl = openPositions.reduce((sum, p) => sum + (p.pnl ?? 0), 0);
     const equity = tradingConfig.accountBalance + totalPnl;
@@ -285,7 +308,8 @@ async function checkMarginCall() {
     for (const pos of openPositions) {
       const pipCfg = PAIR_PIP_VALUES[pos.pair as ForexPair] || { pipSize: 0.0001 };
       const exchangeRate = pos.pair === 'USDJPY' ? (pos.currentPrice || pos.entryPrice) : 1;
-      const contractSize = 100000;
+      // RISK-003: XAUUSD contract size is 100 oz, not 100,000
+      const contractSize = pos.pair === 'XAUUSD' ? 100 : 100000;
       totalMarginUsed += (pos.lotSize * contractSize) / ((tradingConfig.leverage || 100) * exchangeRate);
     }
 

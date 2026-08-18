@@ -172,6 +172,10 @@ export function LiveTradingPanel() {
       const data = res.ok ? await res.json() : await res.json();
       if (res.ok && data.success) {
         toast.success(`MT5 ${order.direction} ${PAIR_DISPLAY[order.pair]} @ ${order.lotSize} lots (Ticket #${data.ticket})`);
+        // RISK-005: Immediately process trailing stop after MT5 order if autoTrailingStop is on
+        if (serverConfig?.autoTrailingStop) {
+          fetch('/api/mt5/trailing-stop', { method: 'POST' }).catch(() => {});
+        }
         setNewTradeDialog(false);
       } else {
         toast.error(data.error || 'MT5 order failed');
@@ -368,7 +372,20 @@ export function LiveTradingPanel() {
 
         <div className="flex items-center gap-2">
           <Label className="text-zinc-400 text-xs">Auto Trading</Label>
-          <Switch checked={isAutoTrading} onCheckedChange={toggleAutoTrading} />
+          {/* RISK-002: Sync autoTrading toggle to server config */}
+          <Switch checked={isAutoTrading} onCheckedChange={async (v) => {
+            toggleAutoTrading(); // optimistic update
+            try {
+              await fetch('/api/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autoTrading: v }),
+              });
+            } catch {
+              toast.error('Failed to sync auto-trading setting to server');
+              toggleAutoTrading(); // revert
+            }
+          }} />
         </div>
       </div>
 

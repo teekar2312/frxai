@@ -6,6 +6,39 @@ import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit'
 import { logApiError } from '@/lib/safe-log';
 import { getCachedQuote } from '@/lib/price-cache';
 
+export async function GET() {
+  try {
+    const serverConfig = await db.tradingConfig.findFirst();
+    if (!serverConfig) {
+      return NextResponse.json({ todayRiskUsed: 0, dailyRiskLimit: 2.5, dailyTargetReached: false });
+    }
+
+    // RISK-001: Compute actual today's risk used from closed positions
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayClosed = await db.tradingPosition.findMany({
+      where: { status: 'closed', closedAt: { gte: todayStart } },
+      select: { pnl: true },
+    });
+    const todayLoss = todayClosed.filter(p => p.pnl < 0).reduce((sum, p) => sum + Math.abs(p.pnl), 0);
+    const todayProfit = todayClosed.filter(p => p.pnl > 0).reduce((sum, p) => sum + p.pnl, 0);
+    const dailyRiskUsed = serverConfig.accountBalance > 0 ? (todayLoss / serverConfig.accountBalance) * 100 : 0;
+    const dailyTargetAmount = (serverConfig.dailyTargetMax / 100) * serverConfig.accountBalance;
+    const dailyTargetReached = todayProfit >= dailyTargetAmount;
+
+    return NextResponse.json({
+      todayRiskUsed: parseFloat(dailyRiskUsed.toFixed(2)),
+      dailyRiskLimit: serverConfig.dailyRiskLimit,
+      dailyTargetReached,
+      todayLoss: parseFloat(todayLoss.toFixed(2)),
+      todayProfit: parseFloat(todayProfit.toFixed(2)),
+    });
+  } catch (error) {
+    logApiError('Risk', error);
+    return NextResponse.json({ todayRiskUsed: 0, dailyRiskLimit: 2.5, dailyTargetReached: false }, { status: 500 });
+  }
+}
+
 export async function POST(request: NextRequest) {
   // S-7E-03: Content-Type validation
   if (!request.headers.get('content-type')?.includes('application/json')) {
@@ -106,8 +139,10 @@ export async function POST(request: NextRequest) {
     // Risk:Reward ratio
     const riskRewardRatio = potentialLoss > 0 ? potentialProfit / potentialLoss : 0;
 
-    // R-03: Fix margin formula for JPY/XAU
-    const contractSize = 100000; // Standard lot
+    // R-03/RISK-003: Fix margin formula — use correct contract size per pair
+    // XAUUSD: 100 troy ounces per standard lot (not 100,000)
+    // Forex pairs: 100,000 units per standard lot
+    const contractSize = pair === 'XAUUSD' ? 100 : 100000;
     // API-AUDIT-007: Try to get current USDJPY rate from price cache; fallback to 150
     const usdjpyQuote = pair === 'USDJPY' ? getCachedQuote('USDJPY') : null;
     const exchangeRate = usdjpyQuote ? usdjpyQuote.quote.mid : (pair === 'USDJPY' ? 150 : 1);

@@ -249,9 +249,30 @@ function runBacktestSimulation(
   const minLookback = 60; // Minimum candles before trading starts
   // FIX STRATEGY-006: Use config value instead of hardcoded 1
   const maxOpenPositions = config.maxPositions || 1;
+  // RISK-008: Track daily risk for backtest circuit breaker
+  const dailyRiskLimitAmount = config.initialBalance * (config.riskPerTrade * 3 / 100); // ~3x single-trade risk as daily limit
+  const maxDrawdownPct = 30; // Stop backtest if 30% drawdown reached
+  let peakBalance = config.initialBalance;
+  let dailyLoss = 0;
+  let lastTradeDay = -1;
+  let tradingHalted = false;
 
   for (let i = minLookback; i < candles.length; i++) {
     const candle = candles[i];
+
+    // RISK-008: Check max drawdown circuit breaker
+    if (balance > peakBalance) peakBalance = balance;
+    const currentDrawdown = ((peakBalance - balance) / peakBalance) * 100;
+    if (currentDrawdown >= maxDrawdownPct) {
+      tradingHalted = true;
+    }
+
+    // RISK-008: Reset daily loss on new day (approximate: every 288 M5 candles = 1 day)
+    const candleDay = Math.floor(i / 288);
+    if (candleDay !== lastTradeDay) {
+      dailyLoss = 0;
+      lastTradeDay = candleDay;
+    }
 
     // Check open trade for SL/TP
     if (openTrade) {
@@ -295,12 +316,19 @@ function runBacktestSimulation(
         openTrade.reason = reason;
         openTrade.exitTime = candle.time;
         trades.push(openTrade);
+        // RISK-008: Track daily loss
+        if (pnl < 0) dailyLoss += Math.abs(pnl);
         openTrade = null;
       }
     }
 
-    // Open new trade if no position
-    if (!openTrade && i < candles.length - 5) {
+    // Open new trade if no position and not halted
+    if (!openTrade && !tradingHalted && i < candles.length - 5) {
+      // RISK-008: Check daily risk limit before opening new trade
+      if (dailyLoss >= dailyRiskLimitAmount) {
+        equityCurve.push(balance);
+        continue;
+      }
       const signal = generateSignal(config.strategy, candles, i, indicators);
       if (signal.direction && signal.strength > 0.2) {
         const atrVal = atrValues[i];

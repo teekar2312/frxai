@@ -185,7 +185,7 @@ export function RiskManagementPanel() {
         </Card>
       </div>
 
-      {/* Money management rules */}
+      {/* Money management rules — RISK-009: Use dynamic config values */}
       <Card className="bg-zinc-900 border-zinc-800 p-4">
         <CardHeader className="p-0 pb-3">
           <CardTitle className="text-sm text-white flex items-center gap-2">
@@ -195,12 +195,12 @@ export function RiskManagementPanel() {
         <CardContent className="p-0">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {[
-              { label: 'Risk/Trade', value: '0.5-1%' },
-              { label: 'SL Range', value: '5-15 pips' },
-              { label: 'R:R Ratio', value: '1:1.5' },
-              { label: 'Max Positions', value: '3' },
-              { label: 'Daily Risk Limit', value: '2-3%' },
-              { label: 'Daily Target', value: '1.5-2%' },
+              { label: 'Risk/Trade', value: `${fetchedConfig?.riskPerTrade ?? 0.75}%` },
+              { label: 'SL Range', value: `${fetchedConfig?.stopLossMin ?? 5}-${fetchedConfig?.stopLossMax ?? 15} pips` },
+              { label: 'R:R Ratio', value: `1:${fetchedConfig?.riskRewardRatio ?? 1.5}` },
+              { label: 'Max Positions', value: String(fetchedConfig?.maxOpenPositions ?? 3) },
+              { label: 'Daily Risk Limit', value: `${fetchedConfig?.dailyRiskLimit ?? 2.5}%` },
+              { label: 'Daily Target', value: `${fetchedConfig?.dailyTargetMin ?? 1}-${fetchedConfig?.dailyTargetMax ?? 3}%` },
             ].map((rule) => (
               <div key={rule.label} className="bg-zinc-800/50 rounded-lg p-3 text-center">
                 <p className="text-[10px] text-zinc-500 mb-1">{rule.label}</p>

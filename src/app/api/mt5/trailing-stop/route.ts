@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
+import { PAIR_PIP_VALUES } from '@/lib/trading-types';
 import { logApiError, safeLog } from '@/lib/safe-log';
 
 // POST /api/mt5/trailing-stop
@@ -48,12 +49,11 @@ export async function POST() {
 
     // 3. Process each position
     let updatedCount = 0;
-    const PIP_SIZES: Record<string, number> = {
-      EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, XAUUSD: 0.01,
-    };
+    // RISK-011: Use centralized PAIR_PIP_VALUES instead of hardcoded map
 
     for (const pos of mt5Positions) {
-      const pipSize = PIP_SIZES[pos.pair] || 0.0001;
+      const pipConfig = PAIR_PIP_VALUES[pos.pair as keyof typeof PAIR_PIP_VALUES];
+      const pipSize = pipConfig?.pipSize ?? 0.0001;
       const trailingDistance = configTrailingPips * pipSize;
       const { ticket, direction, entryPrice, currentPrice, stopLoss } = pos;
 

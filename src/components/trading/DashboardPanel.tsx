@@ -25,13 +25,30 @@ export function DashboardPanel() {
   const {
     selectedPair, setSelectedPair,
     quotes, news, aiAnalysis, marketConditions,
-    accountBalance, openPositionsCount, dailyPnl, todayRiskUsed,
+    accountBalance, openPositionsCount, dailyPnl, todayRiskUsed, setTodayRiskUsed,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
+    serverConfig,
   } = useTradingStore();
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   const [positions, setPositions] = useState<Position[]>([]);
   const [jakartaTime, setJakartaTime] = useState('');
+
+  // RISK-001: Fetch actual today's risk usage from server
+  useEffect(() => {
+    const loadRiskUsage = async () => {
+      try {
+        const res = await fetch('/api/risk');
+        if (res.ok) {
+          const data = await res.json();
+          setTodayRiskUsed(data.todayRiskUsed ?? 0);
+        }
+      } catch { /* non-critical */ }
+    };
+    loadRiskUsage();
+    const interval = setInterval(loadRiskUsage, 10000);
+    return () => clearInterval(interval);
+  }, [setTodayRiskUsed]);
 
   // Jakarta clock
   useEffect(() => {
@@ -350,7 +367,7 @@ export function DashboardPanel() {
               <p className="text-[10px] text-zinc-500 mb-1">Daily Risk Used</p>
               <div className="flex items-center gap-2">
                 <p className="text-lg font-mono font-bold text-amber-400">{todayRiskUsed.toFixed(1)}%</p>
-                <Progress value={Math.min(todayRiskUsed / 3 * 100, 100)} className="flex-1 h-1.5 bg-zinc-800 [&>div]:bg-amber-500" />
+                <Progress value={Math.min(todayRiskUsed / (serverConfig?.dailyRiskLimit ?? 3) * 100, 100)} className="flex-1 h-1.5 bg-zinc-800 [&>div]:bg-amber-500" />
               </div>
             </div>
           </div>

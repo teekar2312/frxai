@@ -1951,3 +1951,28 @@ Files modified:
   - src/app/api/mt5/positions/route.ts (added auth)
   - src/app/api/mt5/account/route.ts (added auth)
   - src/app/api/mt5/connection/route.ts (added auth for POST)
+---
+Task ID: trailing-stop-audit
+Agent: Main Orchestrator
+Task: Deep audit of trailing stop (manual and automatic) integration
+
+Work Log:
+- Audited 12 files containing trailing stop code
+- Found 12 issues (2 CRITICAL, 3 HIGH, 5 MEDIUM, 2 LOW)
+- Created POST /api/trailing-stop/process — trailing stop execution engine
+- Created POST /api/mt5/trailing-stop — MT5 trailing stop processing
+- Fixed auto-trading signals to include trailingStop from config
+- Added trailing stop to position open activity log
+- Added validation (1-100 pips) on trailing_stop action
+- Removed dead TrailingStopConfig type (activationPips, stepPips unused)
+- Fixed Position.trailingStop type from boolean to number|null
+- Added Trailing column to MT5 positions table
+- Trailing stop badge now shows pip value (e.g. "10p") instead of "ON"
+- Added descriptive subtitle to Auto Trailing Stop toggle in Settings
+- Integrated trailing stop processing into LiveTradingPanel polling (10s interval)
+
+Stage Summary:
+- 2 new API routes created (trailing-stop/process, mt5/trailing-stop)
+- 7 files modified (positions/route, LiveTradingPanel, SettingsPanel, TradingSignalsPanel, shared.ts, trading-types.ts, worklog.md)
+- ESLint: 0 errors (179 pre-existing warnings)
+- Commit: da6bc3e pushed to main

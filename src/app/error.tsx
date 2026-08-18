@@ -13,6 +13,23 @@ export default function Error({
 }) {
   useEffect(() => {
     console.error('[ERROR BOUNDARY]', error);
+
+    // Report client-side error to server for centralized logging
+    fetch('/api/logs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        level: 'error',
+        category: 'client-error',
+        message: error.message || 'Unknown client error',
+        metadata: JSON.stringify({
+          digest: error.digest,
+          name: error.name,
+          stack: error.stack?.slice(0, 500),
+          url: typeof window !== 'undefined' ? window.location.href : '',
+        }),
+      }),
+    }).catch(() => { /* best-effort */ });
   }, [error]);
 
   return (

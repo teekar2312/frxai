@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
-import { logApiError } from '@/lib/safe-log';
+import { logApiError, safeLog } from '@/lib/safe-log';
 
 async function getBridgeStatus() {
   try {
@@ -10,7 +10,8 @@ async function getBridgeStatus() {
     });
     if (!res.ok) return null;
     return await res.json();
-  } catch {
+  } catch (err) {
+    safeLog({ level: 'debug', route: 'MT5 Connection', message: 'Bridge status fetch failed', error: err instanceof Error ? err.message : String(err) });
     return null;
   }
 }

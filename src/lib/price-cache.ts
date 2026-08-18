@@ -8,6 +8,7 @@
 import type { ForexPair, QuoteData } from './trading-types';
 import { PAIR_TO_FINNHUB_SYMBOL, PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS, SIMULATED_BASES } from './trading-types';
 import { fetchWithTimeout } from './fetch-utils';
+import { safeLog } from './safe-log';
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 const CACHE_TTL_MS = 3000; // 3 seconds
@@ -106,7 +107,7 @@ export async function refreshAllQuotes(): Promise<{ quotes: Record<ForexPair, Qu
     try {
       const symbol = PAIR_TO_FINNHUB_SYMBOL[pair];
       const url = `${FINNHUB_BASE}/quote?symbol=${symbol}&token=${apiKey}`;
-      const res = await fetchWithTimeout(url);
+      const res = await fetchWithTimeout(url, 8000, 2, `Finnhub/${pair}`);
       if (!res.ok) continue;
       const data = await res.json();
 
@@ -140,8 +141,13 @@ export async function refreshAllQuotes(): Promise<{ quotes: Record<ForexPair, Qu
       cache.set(pair, { quote, fetchedAt: Date.now(), simulated: false });
       quotes[pair] = quote;
       anyReal = true;
-    } catch {
-      // fallback to simulated for this pair
+    } catch (err) {
+      safeLog({
+        level: 'warn',
+        route: 'PriceCache',
+        message: `Quote fetch failed for ${pair}, using simulated fallback`,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     // Rate-limit delay between pairs (FNH-001: stay under 60/min)
     if (pair !== FOREX_PAIRS[FOREX_PAIRS.length - 1]) {
@@ -187,7 +193,7 @@ export async function getCurrentMidPrice(pair: string): Promise<{ mid: number; s
   if (apiKey) {
     const symbol = PAIR_TO_FINNHUB_SYMBOL[pair as ForexPair] || `OANDA:${pair.slice(0, 3)}_${pair.slice(3)}`;
     try {
-      const res = await fetchWithTimeout(`${FINNHUB_BASE}/quote?symbol=${symbol}&token=${apiKey}`);
+      const res = await fetchWithTimeout(`${FINNHUB_BASE}/quote?symbol=${symbol}&token=${apiKey}`, 8000, 2, `Finnhub/direct/${pair}`);
       if (res.ok) {
         const data = await res.json();
         // RB-001: allow c=0 (market closed)
@@ -195,8 +201,13 @@ export async function getCurrentMidPrice(pair: string): Promise<{ mid: number; s
           return { mid: data.c, simulated: false };
         }
       }
-    } catch {
-      // fall through
+    } catch (err) {
+      safeLog({
+        level: 'warn',
+        route: 'PriceCache',
+        message: `Direct Finnhub fetch failed for ${pair}, using simulated fallback`,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

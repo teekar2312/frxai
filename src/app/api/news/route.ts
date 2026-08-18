@@ -222,8 +222,13 @@ async function fetchAndCacheNews(limit: number): Promise<void> {
       }
 
       lastNewsFetchAt = Date.now();
-    } catch {
-      // Non-critical
+    } catch (err) {
+      safeLog({
+        level: 'warn',
+        route: 'News',
+        message: 'Background news fetch/caching failed',
+        error: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       newsFetchPromise = null;
     }

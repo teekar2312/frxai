@@ -316,8 +316,9 @@ async function checkMarginCall() {
         });
       } catch { /* non-critical */ }
     }
-  } catch {
+  } catch (err) {
     // Non-critical — don't let margin check failures break the main flow
+    safeLog({ level: 'error', route: 'Positions', message: 'Margin call check failed', error: err instanceof Error ? err.message : String(err) });
   }
 }
 

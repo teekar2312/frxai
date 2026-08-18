@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { AI_PROVIDERS, isProviderAvailable } from '@/lib/ai-provider';
+import { logApiError } from '@/lib/safe-log';
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,7 @@ export async function GET() {
     await db.tradingConfig.findFirst();
     checks.database = { status: 'ok', latencyMs: Date.now() - dbStart };
   } catch (error) {
+    logApiError('Health', error);
     checks.database = {
       status: 'error',
       detail: 'Database connection failed',

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { getToken } from 'next-auth/jwt';
+import { safeLog } from '@/lib/safe-log';
 
 // Public paths that don't require authentication
 const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
@@ -17,10 +18,21 @@ export async function middleware(request: NextRequest) {
   // ============================================================
   // Authentication Check
   // ============================================================
-  const token = await getToken({
-    req: request,
-    secret: process.env.NEXTAUTH_SECRET,
-  });
+  let token;
+  try {
+    token = await getToken({
+      req: request,
+      secret: process.env.NEXTAUTH_SECRET,
+    });
+  } catch (error) {
+    safeLog({
+      level: 'error',
+      route: 'Middleware',
+      message: 'getToken() failed — treating as unauthenticated',
+      error: error instanceof Error ? error.message : String(error),
+    });
+    token = null;
+  }
 
   const isAuthenticated = !!token;
 
@@ -37,6 +49,9 @@ export async function middleware(request: NextRequest) {
 
   // Require authentication for all other routes
   if (!isAuthenticated) {
+    const ip = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
+    safeLog({ level: 'warn', route: 'Middleware', message: `Auth denied: ${pathname}`, meta: { ip } });
+
     // For API routes: return 401
     if (pathname.startsWith('/api/')) {
       return NextResponse.json(

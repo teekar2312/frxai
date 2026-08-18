@@ -157,7 +157,7 @@ async function sendEmail(to: string, subject: string, html: string): Promise<boo
     safeLog({ level: 'info', route: 'EmailService', message: `Email sent: ${subject} → ${to}` });
     return true;
   } catch (err) {
-    safeLog({ level: 'error', route: 'EmailService', message: `Email send failed: ${err}` });
+    safeLog({ level: 'error', route: 'EmailService', message: `Email send failed: ${err instanceof Error ? err.message : String(err)}` });
     return false;
   }
 }

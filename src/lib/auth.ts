@@ -2,6 +2,7 @@ import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
+import { safeLog } from '@/lib/safe-log';
 
 export const authOptions: NextAuthOptions = {
   providers: [
@@ -16,24 +17,56 @@ export const authOptions: NextAuthOptions = {
           return null;
         }
 
-        const user = await db.user.findUnique({
-          where: { email: credentials.email },
-        });
+        let user;
+        try {
+          user = await db.user.findUnique({
+            where: { email: credentials.email },
+          });
+        } catch (error) {
+          safeLog({
+            level: 'error',
+            route: 'Auth',
+            message: 'DB query failed during login',
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }
 
         if (!user || !user.isActive) {
           return null;
         }
 
-        const isValid = await bcrypt.compare(credentials.password, user.passwordHash);
+        let isValid: boolean;
+        try {
+          isValid = await bcrypt.compare(credentials.password, user.passwordHash);
+        } catch (error) {
+          safeLog({
+            level: 'error',
+            route: 'Auth',
+            message: 'bcrypt.compare failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return null;
+        }
+
         if (!isValid) {
           return null;
         }
 
-        // Update last login
-        await db.user.update({
-          where: { id: user.id },
-          data: { lastLoginAt: new Date() },
-        });
+        // Update last login (best-effort — don't let failure prevent login)
+        try {
+          await db.user.update({
+            where: { id: user.id },
+            data: { lastLoginAt: new Date() },
+          });
+        } catch (error) {
+          safeLog({
+            level: 'warn',
+            route: 'Auth',
+            message: 'Failed to update lastLoginAt',
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
 
         return {
           id: user.id,

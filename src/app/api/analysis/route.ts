@@ -234,8 +234,13 @@ export async function POST(request: NextRequest) {
           sentiment: n.sentiment || 'neutral',
         }));
       }
-    } catch {
-      // Non-critical
+    } catch (err) {
+      safeLog({
+        level: 'warn',
+        route: 'Analysis',
+        message: 'Failed to fetch news for AI analysis context',
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     // AI-006: Resolve active AI provider/model from DB config

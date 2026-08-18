@@ -1780,3 +1780,56 @@ Stage Summary:
 - 7 files changed/created, 0 errors
 - Production deployment: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 - All critical go-live issues resolved: env var passthrough, TLS, rate limiting, CSP hardening, robot blocking, resource limits
+
+---
+Task ID: ERROR-LOG-AUDIT
+Agent: Main Orchestrator
+Task: Deep audit and fix of error logging integration across the entire project
+
+Work Log:
+- Launched comprehensive audit agent (opus model) that read all 21 API routes, 8 library files, middleware, and error boundary
+- Audit found 17 issues: 2 CRITICAL, 5 HIGH, 7 MEDIUM, 3 LOW
+- Fixed all 17 issues across 13 files
+
+Stage Summary:
+CRITICAL FIXES (2):
+1. middleware.ts:20 — getToken() now wrapped in try-catch; on failure logs error and treats as unauthenticated (prevents complete outage with zero logging)
+2. auth.ts:14 — authorize() now has 3 try-catch blocks: DB query, bcrypt.compare, and lastLoginAt update (each logs appropriately; lastLoginAt failure doesn't block login)
+
+HIGH FIXES (5):
+3. price-cache.ts:143 — refreshAllQuotes() catch now logs warn with pair name (was silent — price data could degrade to simulated without visibility)
+4. price-cache.ts:198 — getCurrentMidPrice() catch now logs warn (same silent degradation risk)
+5. health/route.ts:16 — DB check failure now logged via logApiError (health endpoint itself is now observable)
+6. ai-providers/route.ts:18 — Added logApiError import and call (was the only route that caught but never logged errors)
+7. fetch-utils.ts — Added optional `context` parameter, logs retries at warn level and final failures at error level (all external API calls now have retry/failure visibility)
+
+MEDIUM FIXES (7):
+8. middleware.ts:39 — 401 events now logged at warn level with path and IP (enables brute-force detection)
+9. api-auth.ts:7 — Replaced console.warn with safeLog (consistent structured logging for security misconfiguration)
+10. auth.ts:33 — lastLoginAt update wrapped in try-catch with warn log (no longer crashes login or fails silently)
+11. positions/route.ts:319 — checkMarginCall() catch now logs error (margin call/stop-out detection failures are no longer invisible)
+12. analysis/route.ts:237 — News DB fetch failure now logged at warn level (AI analysis missing news context is now visible)
+13. news/route.ts:225 — Background news fetch/caching failure now logged at warn level (news pipeline failures are no longer invisible)
+14. email-service.ts:160 — Fixed [object Error] string interpolation (now properly extracts error.message)
+
+LOW FIXES (3):
+15. mt5/connection/route.ts:13 — Bridge status fetch failure now logged at debug level
+16. error.tsx:15 — Client-side errors now reported to server via POST /api/logs for centralized logging
+17. price-cache.ts — Added context labels (Finnhub/PAIR) to fetchWithTimeout calls for better log diagnostics
+
+Files Modified (13):
+- src/middleware.ts (CRITICAL: getToken try-catch + 401 logging)
+- src/lib/auth.ts (CRITICAL: authorize try-catch + lastLoginAt protection)
+- src/lib/price-cache.ts (HIGH: 2 silent catches + fetch context)
+- src/app/api/health/route.ts (HIGH: DB check logging)
+- src/app/api/ai-providers/route.ts (HIGH: missing logApiError)
+- src/lib/fetch-utils.ts (HIGH: retry/failure logging + context param)
+- src/lib/api-auth.ts (MEDIUM: console.warn → safeLog)
+- src/app/api/positions/route.ts (MEDIUM: margin call logging)
+- src/app/api/analysis/route.ts (MEDIUM: news fetch logging)
+- src/app/api/news/route.ts (MEDIUM: background fetch logging)
+- src/lib/email-service.ts (MEDIUM: error string fix)
+- src/app/api/mt5/connection/route.ts (LOW: bridge debug log)
+- src/app/error.tsx (LOW: server-side error reporting)
+
+Verification: ESLint 0 errors (174 pre-existing warnings), dev server compiled clean, browser verified no runtime errors

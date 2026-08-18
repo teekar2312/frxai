@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { AI_PROVIDERS, isProviderAvailable, getAvailableProviders } from '@/lib/ai-provider';
+import { logApiError } from '@/lib/safe-log';
 
 // GET - List all AI providers and their availability
 export async function GET() {
@@ -16,6 +17,7 @@ export async function GET() {
       availableProviders: getAvailableProviders(),
     });
   } catch (error) {
+    logApiError('AI-Providers', error);
     return NextResponse.json(
       { error: 'Failed to fetch AI providers' },
       { status: 500 }

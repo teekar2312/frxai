@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server.js';
 import { timingSafeEqual } from 'node:crypto';
+import { safeLog } from '@/lib/safe-log';
 
 const API_KEY = process.env.API_SECRET_KEY || '';
 
 if (!API_KEY && process.env.NODE_ENV === 'production') {
-  console.warn('[SECURITY] API_SECRET_KEY is not set in production. All mutating endpoints are unprotected!');
+  safeLog({ level: 'warn', route: 'API-Auth', message: 'API_SECRET_KEY is not set in production. All mutating endpoints are unprotected!' });
 }
 
 export function validateAuth(request: NextRequest): { authorized: boolean; error?: NextResponse } {

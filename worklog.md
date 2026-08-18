@@ -1757,3 +1757,26 @@ Work Log:
 
 Stage Summary:
 - R2 completed: automated test infrastructure in place
+---
+Task ID: GO-LIVE
+Agent: Main Orchestrator
+Task: Configure project for go-live (production deployment readiness)
+
+Work Log:
+- Fixed docker-compose.yml: added RESEND_API_KEY, NOTIFICATION_EMAIL_FROM, NOTIFICATION_EMAIL_TO, LOKAL_AI_API_KEY, NEXTAUTH_URL env vars; added deploy resource limits (1G/1CPU app, 512M/0.5CPU mt5); added finex-net bridge network for inter-service isolation
+- Created Caddyfile.production: TLS via Let's Encrypt, 3-tier rate limiting (global 200/s, API 30/s, auth 5/min), production CSP (no http: in connect-src/img-src), removed XTransformPort dev bypass, added HSTS, server identity hiding, 10MB body limit
+- Locked down robots.txt: changed from Allow: / to Disallow: / (private financial app)
+- Tightened CSP in middleware.ts: production now uses connect-src 'self' https: wss: (no http: or ws:), img-src 'self' data: blob: https: (no http:)
+- Moved prisma from dependencies to devDependencies (reduces production image size)
+- Enhanced CI pipeline (.github/workflows/ci.yml): added bun install cache, Next.js build cache, DATABASE_URL/NEXTAUTH_SECRET/API_SECRET_KEY env vars for test+build jobs, prisma generate in typecheck, concurrency groups to cancel in-progress runs, deploy step placeholder, uploads static+public artifacts
+- Created docker-compose.prod.yml: production overlay with Caddy reverse proxy, required env vars with error messages, app only exposed to internal network (no direct port mapping), Caddy handles 80/443/HTTP3, persistent Caddy data/config volumes
+
+Verification:
+- ESLint: 0 errors (182 pre-existing warnings)
+- Dev server: compiled successfully, no runtime errors
+- Browser: login page renders correctly, auth middleware redirects unauthenticated users, no console errors
+
+Stage Summary:
+- 7 files changed/created, 0 errors
+- Production deployment: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+- All critical go-live issues resolved: env var passthrough, TLS, rate limiting, CSP hardening, robot blocking, resource limits

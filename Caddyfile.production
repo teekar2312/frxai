@@ -1,0 +1,80 @@
+# Caddyfile.production — FINEX Indonesia
+# Usage: caddy run --config Caddyfile.production
+#
+# Replace YOUR_DOMAIN with your actual domain (e.g., app.finex.id)
+# Caddy will automatically obtain and renew TLS certificates via Let's Encrypt.
+
+{
+	email {$CADDY_ADMIN_EMAIL:admin@finex.id}
+	# Increase request body limit for API payloads
+	server {
+		max_request_body 10MB
+	}
+}
+
+{$FINEX_DOMAIN:localhost} {
+	# Automatic HTTPS via Let's Encrypt
+	# On localhost or IP, Caddy uses a self-signed cert
+
+	# ── Rate Limiting ──────────────────────────────────────
+	# Global: 100 req/s burst, 200 req/s max
+	rate_limit {
+		zone global {
+			key {remote_host}
+			events 200
+			window 1s
+		}
+		zone api {
+			key {remote_host}
+			events 30
+			window 1s
+		}
+		zone auth {
+			key {remote_host}
+			events 5
+			window 60s
+		}
+	}
+
+	# Auth endpoints: strict rate limit to prevent brute-force
+	@auth_path path /api/auth/*
+	rate_limit {
+		policy auth
+	}
+	
+	# API endpoints: moderate rate limit
+	@api_path path /api/*
+	rate_limit {
+		policy api
+	}
+
+	# All other routes: global limit
+	rate_limit {
+		policy global
+	}
+
+	# ── Security Headers (defense-in-depth) ─────────────────
+	header {
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-XSS-Protection "1; mode=block"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# Hide server identity
+		-Server
+		# Content-Security-Policy
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	}
+
+	# ── Reverse Proxy ──────────────────────────────────────
+	reverse_proxy localhost:3000 {
+		header_up Host {host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Real-IP {remote_host}
+		transport http {
+			read_timeout 120s
+		}
+	}
+}

@@ -1,3 +1,4 @@
+# FINEX Indonesia — Private Trading Dashboard
+# This is an authenticated application. Block all crawling.
 User-agent: *
-Allow: /
-Disallow: /api/
+Disallow: /

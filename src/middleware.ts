@@ -96,13 +96,22 @@ function setSecurityHeaders(response: NextResponse, isProduction: boolean) {
     ? "script-src 'self' 'unsafe-inline'"
     : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
 
+  // Production CSP: restrict connect-src to HTTPS/WSS only, img-src to HTTPS only
+  const connectSrc = isProduction
+    ? "connect-src 'self' https: wss:"
+    : "connect-src 'self' https: http: ws: wss:";
+
+  const imgSrc = isProduction
+    ? "img-src 'self' data: blob: https:"
+    : "img-src 'self' data: blob: https: http:";
+
   const cspDirectives = [
     "default-src 'self'",
     scriptSrc,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob: https: http:",
+    imgSrc,
     "font-src 'self' data:",
-    "connect-src 'self' https: http: ws: wss:",
+    connectSrc,
     "frame-ancestors 'none'",
     "base-uri 'self'",
     "form-action 'self'",

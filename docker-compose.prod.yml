@@ -1,16 +1,21 @@
+# docker-compose.prod.yml — Production Deployment
+# Usage: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+#   1. Create .env.production with all required secrets (see .env.example)
+#   2. Set FINEX_DOMAIN to your public domain
+#   3. Set CADDY_ADMIN_EMAIL for Let's Encrypt certificate notifications
+
 services:
-  app:
-    build: .
-    container_name: finex-app
-    restart: unless-stopped
-    ports:
-      - "${PORT:-3000}:3000"
+ app:
+    image: finex-app:latest
+    restart: always
     environment:
       - NODE_ENV=production
       - DATABASE_URL=file:/app/data/custom.db
-      - API_SECRET_KEY=${API_SECRET_KEY}
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      - API_SECRET_KEY=${API_SECRET_KEY:?ERROR: API_SECRET_KEY is required}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?ERROR: NEXTAUTH_SECRET is required}
+      - NEXTAUTH_URL=https://${FINEX_DOMAIN:-localhost}
       # Market Data
       - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
       - MARKETAUX_API_KEY=${MARKETAUX_API_KEY:-}
@@ -22,12 +27,14 @@ services:
       - LOKAL_AI_BASE_URL=${LOKAL_AI_BASE_URL:-}
       - LOKAL_AI_API_KEY=${LOKAL_AI_API_KEY:-}
       # MT5 Bridge
-      - MT5_BRIDGE_URL=${MT5_BRIDGE_URL:-http://mt5-bridge:3002}
+      - MT5_BRIDGE_URL=${MT5_BRIDGE_URL:-http://finex-mt5-bridge:3002}
       - MT5_BRIDGE_SECRET=${MT5_BRIDGE_SECRET:-}
       # Email Notifications
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - NOTIFICATION_EMAIL_FROM=${NOTIFICATION_EMAIL_FROM:-}
       - NOTIFICATION_EMAIL_TO=${NOTIFICATION_EMAIL_TO:-}
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - finex-data:/app/data
     deploy:
@@ -45,15 +52,42 @@ services:
       start_period: 15s
     networks:
       - finex-net
+    expose:
+      - "3000"
+    # No 'ports' — only accessible via Caddy reverse proxy
+
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    container_name: finex-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - FINEX_DOMAIN=${FINEX_DOMAIN:?ERROR: FINEX_DOMAIN is required}
+      - CADDY_ADMIN_EMAIL=${CADDY_ADMIN_EMAIL:-admin@${FINEX_DOMAIN}}
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+    depends_on:
+      app:
+        condition: service_healthy
+    networks:
+      - finex-net
 
   mt5-bridge:
     build:
       context: ./mini-services/mt5-bridge
       dockerfile: Dockerfile
     container_name: finex-mt5-bridge
-    restart: unless-stopped
-    ports:
-      - "3002:3002"
+    restart: always
     environment:
       - MT5_BRIDGE_SECRET=${MT5_BRIDGE_SECRET:-}
     deploy:
@@ -66,9 +100,11 @@ services:
     networks:
       - finex-net
 
+volumes:
+  finex-data:
+  caddy-data:
+  caddy-config:
+
 networks:
   finex-net:
     driver: bridge
-
-volumes:
-  finex-data:

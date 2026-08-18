@@ -366,7 +366,10 @@ export function SettingsPanel() {
                   <Switch checked={config.autoTrading} onCheckedChange={(v) => updateConfig('autoTrading', v)} />
                 </div>
                 <div className="flex items-center justify-between">
-                  <Label className="text-zinc-300 text-xs">Auto Trailing Stop</Label>
+                  <div className="space-y-0.5">
+                    <Label className="text-zinc-300 text-xs">Auto Trailing Stop</Label>
+                    <p className="text-[9px] text-zinc-600">Automatically applies TS to all positions</p>
+                  </div>
                   <Switch checked={config.autoTrailingStop} onCheckedChange={(v) => updateConfig('autoTrailingStop', v)} />
                 </div>
                 <div className="flex items-center justify-between">

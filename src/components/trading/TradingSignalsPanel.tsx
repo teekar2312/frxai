@@ -24,7 +24,10 @@ import { fmtPrice, STRATEGY_DESCS } from './shared';
 
 const AUTO_TRADE_CONFIDENCE_THRESHOLD = 60; // minimum confidence %
 
-async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise<{ success: boolean; error?: string; ticket?: number }> {
+async function executeSignal(signal: TradingSignal, isMt5Live: boolean, autoTrailingStop: boolean, trailingStopPips: number): Promise<{ success: boolean; error?: string; ticket?: number }> {
+  // TS-02: Include trailing stop in auto-trading signal execution
+  const trailingStop = autoTrailingStop ? trailingStopPips : null;
+
   if (isMt5Live) {
     const res = await fetch('/api/mt5/orders', {
       method: 'POST',
@@ -51,6 +54,8 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
         strategy: signal.strategy,
+        // TS-02: Pass trailingStop from server config
+        trailingStop,
       }),
     });
     if (res.ok) return { success: true };
@@ -244,7 +249,7 @@ export function TradingSignalsPanel() {
       }
 
       try {
-        const result = await executeSignal(signal, isMt5Live);
+        const result = await executeSignal(signal, isMt5Live, serverConfig?.autoTrailingStop ?? false, serverConfig?.trailingStopPips ?? 10);
         results[i] = result;
         if (result.success) {
           successCount++;

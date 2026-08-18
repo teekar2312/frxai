@@ -33,7 +33,7 @@ export interface Position {
   pnl: number;
   pips: number;
   strategy: StrategyName | null;
-  trailingStop: boolean;
+  trailingStop: number | null;
   trailingPips: number;
   isOpen: boolean;
   openedAt: string;

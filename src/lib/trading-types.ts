@@ -105,11 +105,8 @@ export interface RiskCalculation {
 }
 
 export interface TrailingStopConfig {
-  pair: ForexPair;
+  pips: number;
   type: 'manual' | 'automatic';
-  activationPips: number;
-  trailingPips: number;
-  stepPips: number;
 }
 
 export interface TradingSession {

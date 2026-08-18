@@ -99,7 +99,7 @@ export function LiveTradingPanel() {
     setOpenPositionsCount(positions.length);
   }, [positions, isMt5Live, setDailyPnl, setOpenPositionsCount]);
 
-  // Fetch positions (for polling)
+  // Fetch positions and process trailing stops (for polling)
   useEffect(() => {
     const load = async () => {
       try {
@@ -113,11 +113,18 @@ export function LiveTradingPanel() {
       } finally {
         setPositionsLoading(false);
       }
+      // TS-01: Process trailing stops for simulation positions
+      if (!isMt5Live) {
+        fetch('/api/trailing-stop/process', { method: 'POST' }).catch(() => {});
+      } else {
+        // TS-03: Process trailing stops for MT5 live positions
+        fetch('/api/mt5/trailing-stop', { method: 'POST' }).catch(() => {});
+      }
     };
     load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isMt5Live]);
 
   // AUDIT-TRADE-09: Populate equity history from positions data
   useEffect(() => {
@@ -401,6 +408,7 @@ export function LiveTradingPanel() {
                       <TableHead className="text-[10px] text-zinc-500">Entry</TableHead>
                       <TableHead className="text-[10px] text-zinc-500">SL</TableHead>
                       <TableHead className="text-[10px] text-zinc-500">TP</TableHead>
+                      <TableHead className="text-[10px] text-zinc-500">Trailing</TableHead>
                       <TableHead className="text-[10px] text-zinc-500 text-right">P&L</TableHead>
                       <TableHead className="text-[10px] text-zinc-500 text-right">Actions</TableHead>
                     </TableRow>
@@ -419,6 +427,9 @@ export function LiveTradingPanel() {
                         <TableCell className="text-xs text-zinc-300 font-mono">{pos.entryPrice}</TableCell>
                         <TableCell className="text-xs text-rose-400 font-mono">{pos.stopLoss ?? '-'}</TableCell>
                         <TableCell className="text-xs text-emerald-400 font-mono">{pos.takeProfit ?? '-'}</TableCell>
+                        <TableCell>
+                          <span className="text-xs text-zinc-500">{serverConfig?.autoTrailingStop ? `${serverConfig.trailingStopPips}p (auto)` : '-'}</span>
+                        </TableCell>
                         <TableCell className={`text-xs font-mono text-right ${pos.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {pos.pnl >= 0 ? '+' : ''}{pos.pnl.toFixed(2)}
                         </TableCell>
@@ -475,7 +486,11 @@ export function LiveTradingPanel() {
                         <TableCell className="text-xs text-rose-400 font-mono">{pos.stopLoss ? fmtPrice(pos.pair, pos.stopLoss) : '-'}</TableCell>
                         <TableCell className="text-xs text-emerald-400 font-mono">{pos.takeProfit ? fmtPrice(pos.pair, pos.takeProfit) : '-'}</TableCell>
                         <TableCell>
-                          {pos.trailingStop ? <Badge className="text-[10px] bg-amber-500/20 text-amber-400">ON</Badge> : <span className="text-xs text-zinc-500">-</span>}
+                          {pos.trailingStop ? (
+                            <Badge className="text-[10px] bg-amber-500/20 text-amber-400">
+                              {pos.trailingStop}p
+                            </Badge>
+                          ) : <span className="text-xs text-zinc-500">-</span>}
                         </TableCell>
                         <TableCell className={`text-xs font-mono text-right ${(pos.pnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                           {(pos.pnl || 0) >= 0 ? '+' : ''}{(pos.pnl || 0).toFixed(2)}

@@ -242,7 +242,7 @@ export async function POST(request: NextRequest) {
         data: {
           level: 'info',
           category: 'trading',
-          message: `Opened ${direction} ${pair} @ ${entryPrice}, lot: ${lotSize}, SL: ${stopLoss ?? 'N/A'}, TP: ${takeProfit ?? 'N/A'}`,
+          message: `Opened ${direction} ${pair} @ ${entryPrice}, lot: ${lotSize}, SL: ${stopLoss ?? 'N/A'}, TP: ${takeProfit ?? 'N/A'}${finalTrailingStop ? `, TS: ${finalTrailingStop}p` : ''}`,
           pair,
           metadata: JSON.stringify({ positionId: position.id, lotSize, strategy }),
         },
@@ -488,13 +488,32 @@ export async function PUT(request: NextRequest) {
       if (trailingStop === undefined) {
         return NextResponse.json({ error: 'trailingStop value is required' }, { status: 400 });
       }
+      // TS-07: Validate trailing stop value
+      if (typeof trailingStop !== 'number' || trailingStop < 1 || trailingStop > 100) {
+        return NextResponse.json({ error: 'trailingStop must be between 1 and 100 pips' }, { status: 400 });
+      }
       const updated = await db.tradingPosition.update({
         where: { id },
         data: {
           trailingStop,
-          trailingType: 'automatic',
+          trailingType: 'manual',
         },
       });
+
+      // TS-04: Log manual trailing stop change
+      try {
+        await db.activityLog.create({
+          data: {
+            level: 'info',
+            category: 'trailing_stop',
+            message: `Manual trailing stop set: ${existing.pair} ${trailingStop} pips`,
+            pair: existing.pair,
+            metadata: JSON.stringify({ positionId: id, trailingStop }),
+          },
+        });
+      } catch {
+        // Non-critical
+      }
 
       return NextResponse.json({ position: updated });
     }

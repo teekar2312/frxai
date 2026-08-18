@@ -612,6 +612,18 @@ export async function POST(request: NextRequest) {
       // Non-critical
     }
 
+    // AUDIT-AI-G1: Fetch recent AI analyses for this pair/strategy comparison
+    let aiComparison: Array<{ recommendation: string; confidence: number; strategyUsed: string; createdAt: Date }> = [];
+    try {
+      const recentAi = await db.aiAnalysis.findMany({
+        where: { pair: config.pair },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: { recommendation: true, confidence: true, strategyUsed: true, createdAt: true },
+      });
+      aiComparison = recentAi;
+    } catch { /* non-critical */ }
+
     return NextResponse.json({
       success: true,
       result: { ...stats, id: dbResult.id },
@@ -622,6 +634,13 @@ export async function POST(request: NextRequest) {
       equityCurve: equityCurve.map((eq, i) => ({
         time: candles[i + 60]?.time ? new Date(candles[i + 60].time).toISOString().slice(0, 10) : String(i),
         equity: parseFloat(eq.toFixed(2)),
+      })),
+      // AUDIT-AI-G1: Include AI analysis comparison
+      aiAnalysisComparison: aiComparison.map(a => ({
+        recommendation: a.recommendation,
+        confidence: a.confidence,
+        aiStrategy: a.strategyUsed,
+        date: a.createdAt.toISOString(),
       })),
     });
   } catch (error) {

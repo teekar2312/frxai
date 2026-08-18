@@ -4,6 +4,7 @@ import type { ForexPair, NewsArticle } from '@/lib/trading-types';
 import { FOREX_PAIRS } from '@/lib/trading-types';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
+import { enhanceSentimentWithAI } from '@/lib/ai-sentiment';
 import { fetchWithTimeout } from '@/lib/fetch-utils';
 
 const MARKETAUX_BASE = 'https://api.marketaux.com/v1/news/all';
@@ -282,6 +283,24 @@ export async function GET(request: NextRequest) {
 
     // Fetch fresh news (RC-002: dedup via shared promise)
  await fetchAndCacheNews(parseInt(searchParams.get('limit') || '20', 10));
+
+    // AUDIT-AI-G2: Re-analyze recent news sentiment with AI for higher accuracy
+    const aiEnhancedLimit = 3;
+    try {
+      const recentItems = await db.newsItem.findMany({
+        where: { publishedAt: { gte: cacheExpiry } },
+        orderBy: { publishedAt: 'desc' },
+        take: aiEnhancedLimit,
+      });
+      for (const item of recentItems) {
+        if (item.impact === 'high' || item.impact === 'medium') {
+          const enhanced = await enhanceSentimentWithAI(item.title, item.description || '', item.sentiment || 'neutral');
+          if (enhanced !== item.sentiment) {
+            await db.newsItem.update({ where: { id: item.id }, data: { sentiment: enhanced } });
+          }
+        }
+      }
+    } catch { /* non-critical */ }
 
     // Return from DB after fetch
     const freshNews = await db.newsItem.findMany({

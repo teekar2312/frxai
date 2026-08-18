@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Play, RefreshCw, BarChart3, Trash2 } from 'lucide-react';
+import { Play, RefreshCw, BarChart3, Trash2, Brain } from 'lucide-react';
 import { AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -36,6 +36,7 @@ export function BacktestingPanel() {
   const [backtestLoading, setBacktestLoading] = useState(false);
   const [backtestHistory, setBacktestHistory] = useState<BacktestResult[]>([]);
   const [backtestEquity, setBacktestEquity] = useState<{ time: string; equity: number }[]>([]);
+  const [aiComparison, setAiComparison] = useState<Array<{recommendation: string; confidence: number; aiStrategy: string; date: string}>>([]);
 
   // Fetch backtest history
   const fetchBacktestHistory = useCallback(async () => {
@@ -58,6 +59,7 @@ export function BacktestingPanel() {
   const handleRunBacktest = async () => {
     setBacktestLoading(true);
     setBacktestResult(null);
+      setAiComparison([]);
     try {
       const res = await fetch('/api/backtest', {
         method: 'POST',
@@ -69,6 +71,7 @@ export function BacktestingPanel() {
         if (data.result) {
           setBacktestResult(data.result as BacktestResult);
           setBacktestEquity(data.equityCurve || []);
+          setAiComparison(data.aiAnalysisComparison || []);
           toast.success(`Backtest complete: ${data.result.totalTrades} trades, ${data.result.winRate}% win rate`);
           fetchBacktestHistory();
         }
@@ -236,6 +239,23 @@ export function BacktestingPanel() {
                   </figure>
                 </div>
               </CardContent>
+              {/* AUDIT-AI-G1: AI Analysis Comparison */}
+              {aiComparison.length > 0 && (
+                <div className="mt-3 p-3 bg-zinc-800/30 rounded-lg border border-zinc-700/30">
+                  <p className="text-[10px] text-zinc-400 mb-2 flex items-center gap-1.5"><Brain className="w-3 h-3 text-emerald-400" /> Recent AI Signals for {backtestResult.pair}</p>
+                  <div className="space-y-1">
+                    {aiComparison.slice(0, 3).map((ai, i) => (
+                      <div key={i} className="flex items-center justify-between text-[10px]">
+                        <span className="text-zinc-500">{new Date(ai.date).toLocaleDateString('id-ID', {day: '2-digit', month: 'short'})}</span>
+                        <span className={ai.recommendation === 'BUY' ? 'text-emerald-400' : ai.recommendation === 'SELL' ? 'text-rose-400' : 'text-zinc-400'}>{ai.recommendation}</span>
+                        <span className="text-zinc-400 font-mono">{(ai.confidence * 100).toFixed(0)}%</span>
+                        <span className="text-zinc-500">{ai.aiStrategy || '-'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
             </Card>
           )}
         </>

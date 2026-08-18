@@ -590,9 +590,9 @@ export async function POST(request: NextRequest) {
       trades,
       candlesUsed: candles.length,
       // FIX STRATEGY-004: Format equity curve as {time, equity} objects for chart rendering
-      // API-AUDIT-049: Fix time mapping — equity values start from minLookback, not index 0
+      // API-AUDIT-049: Fix time mapping — equity values start from indicator lookback, not index 0
       equityCurve: equityCurve.map((eq, i) => ({
-        time: candles[i + minLookback]?.time ? new Date(candles[i + minLookback].time).toISOString().slice(0, 10) : String(i),
+        time: candles[i + 60]?.time ? new Date(candles[i + 60].time).toISOString().slice(0, 10) : String(i),
         equity: parseFloat(eq.toFixed(2)),
       })),
     });

@@ -1,14 +1,70 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { getToken } from 'next-auth/jwt';
 
-export function middleware(request: NextRequest) {
-  const response = NextResponse.next();
+// Public paths that don't require authentication
+const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
+
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.some(p => pathname.startsWith(p));
+}
+
+export async function middleware(request: NextRequest) {
   const url = request.nextUrl;
+  const pathname = url.pathname;
+  const isProduction = process.env.NODE_ENV === 'production';
+
+  // ============================================================
+  // Authentication Check
+  // ============================================================
+  const token = await getToken({
+    req: request,
+    secret: process.env.NEXTAUTH_SECRET,
+  });
+
+  const isAuthenticated = !!token;
+
+  // Allow NextAuth routes and health check without auth
+  if (isPublicPath(pathname)) {
+    // If already authenticated and trying to access login, redirect to dashboard
+    if (pathname === '/login' && isAuthenticated) {
+      return NextResponse.redirect(new URL('/', request.url));
+    }
+    const response = NextResponse.next();
+    setSecurityHeaders(response, isProduction);
+    return response;
+  }
+
+  // Require authentication for all other routes
+  if (!isAuthenticated) {
+    // For API routes: return 401
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+    // For page routes: redirect to login
+    return NextResponse.redirect(new URL('/login', request.url));
+  }
+
+  // ============================================================
+  // Route Guards
+  // ============================================================
+  // Only allow / and /login page routes
+  if (!pathname.startsWith('/api/') && pathname !== '/') {
+    return NextResponse.redirect(new URL('/', request.url));
+  }
 
   // ============================================================
   // Security Headers
   // ============================================================
+  const response = NextResponse.next();
+  setSecurityHeaders(response, isProduction);
+  return response;
+}
 
+function setSecurityHeaders(response: NextResponse, isProduction: boolean) {
   // Prevent MIME type sniffing
   response.headers.set('X-Content-Type-Options', 'nosniff');
 
@@ -28,17 +84,21 @@ export function middleware(request: NextRequest) {
   );
 
   // HSTS — enforce HTTPS in production
-  if (process.env.NODE_ENV === 'production') {
+  if (isProduction) {
     response.headers.set(
       'Strict-Transport-Security',
       'max-age=31536000; includeSubDomains'
     );
   }
 
-  // Content-Security-Policy
+  // Content-Security-Policy — C-3 fix: remove unsafe-eval in production
+  const scriptSrc = isProduction
+    ? "script-src 'self' 'unsafe-inline'"
+    : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+
   const cspDirectives = [
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+    scriptSrc,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https: http:",
     "font-src 'self' data:",
@@ -48,15 +108,6 @@ export function middleware(request: NextRequest) {
     "form-action 'self'",
   ].join('; ');
   response.headers.set('Content-Security-Policy', cspDirectives);
-
-  // ============================================================
-  // Non-API routes: redirect to /
-  // ============================================================
-  if (!url.pathname.startsWith('/api/') && url.pathname !== '/') {
-    return NextResponse.redirect(new URL('/', request.url));
-  }
-
-  return response;
 }
 
 export const config = {

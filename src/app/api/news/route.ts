@@ -156,18 +156,18 @@ async function fetchAndCacheNews(limit: number): Promise<void> {
       const rawNews = data.data || [];
 
       // MTX-002/MTX-010: Batch DB write (skip duplicates)
-      const uuids = rawNews.slice(0, 10).map(a => a.uuid as string).filter(Boolean);
+      const uuids = rawNews.slice(0, 10).map((a: Record<string, unknown>) => a.uuid as string).filter(Boolean);
       if (uuids.length === 0) return;
 
       const existing = await db.newsItem.findMany({ where: { id: { in: uuids } }, select: { id: true } });
       const existingIds = new Set(existing.map(e => e.id));
-      const toCreate = rawNews.slice(0, 10).filter(a => a.uuid && !existingIds.has(a.uuid as string));
+      const toCreate = rawNews.slice(0, 10).filter((a: Record<string, unknown>) => a.uuid && !existingIds.has(a.uuid as string));
 
       if (toCreate.length > 0) {
         // API-AUDIT-004: Wrap createMany in try-catch; fall back to individual creates on unique constraint error (SQLite doesn't support skipDuplicates)
         try {
           await db.newsItem.createMany({
-            data: toCreate.map(article => {
+            data: toCreate.map((article: Record<string, unknown>) => {
               const title = (article.title as string) || '';
               const description = (article.description as string) || '';
               const pair = matchPairToNews(title, description);

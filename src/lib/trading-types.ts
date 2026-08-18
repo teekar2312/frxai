@@ -71,6 +71,8 @@ export interface NewsArticle {
 }
 
 export interface AiAnalysisResult {
+  id?: string;
+  createdAt?: string;
   pair: ForexPair;
   marketCondition: MarketCondition;
   confidence: number;

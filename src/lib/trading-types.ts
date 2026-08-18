@@ -46,6 +46,8 @@ export interface TradingSignal {
   lotSize: number;
   confidence: number;
   marketCondition: MarketCondition;
+  riskLevel: 'low' | 'medium' | 'high';
+  recommendation: 'BUY' | 'SELL' | 'HOLD' | 'AVOID';
   indicators: string[];
   reasoning: string;
   timestamp: number;

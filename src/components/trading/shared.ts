@@ -33,6 +33,12 @@ export interface Position {
   pnl: number;
   pips: number;
   strategy: StrategyName | null;
+  marketCondition?: string | null;
+  aiConfidence?: number | null;
+  riskLevel?: string | null;
+  aiRecommendation?: string | null;
+  riskAmount?: number | null;
+  rewardAmount?: number | null;
   trailingStop: number | null;
   trailingPips: number;
   isOpen: boolean;

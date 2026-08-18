@@ -111,18 +111,28 @@ interface ChatMessage {
   content: string;
 }
 
-/** Call ZAI (z-ai-web-dev-sdk) */
+/** Call ZAI (z-ai-web-dev-sdk) — AUDIT-AI-14: Added timeout + temperature + max_tokens */
 async function callZai(
   messages: ChatMessage[],
   model: string,
+  maxTokens = 2000,
 ): Promise<string> {
-  const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    model: model || undefined,
-    messages,
-    thinking: { type: 'disabled' },
-  });
-  return completion.choices?.[0]?.message?.content || '';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const zai = await ZAI.create();
+    const completion = await zai.chat.completions.create({
+      model: model || undefined,
+      messages,
+      thinking: { type: 'disabled' },
+      temperature: 0.3,
+      // @ts-expect-error — max_tokens passed through to underlying model
+      max_tokens: maxTokens,
+    });
+    return completion.choices?.[0]?.message?.content || '';
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Call an OpenAI-compatible API (Groq, OpenAI, together, Tinyfish, Lokal AI) */
@@ -143,7 +153,8 @@ async function callOpenAiCompatible(
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
       },
-      body: JSON.stringify({ model, messages, temperature: 0.3 }),
+      // AUDIT-AI-14: Added max_tokens to prevent unbounded token usage
+      body: JSON.stringify({ model, messages, temperature: 0.3, max_tokens: 2000 }),
       signal: controller.signal,
     });
 
@@ -176,10 +187,34 @@ export async function aiComplete(
 ): Promise<AiCompletionResult> {
   const provider = AI_PROVIDERS[providerId];
 
-  // ZAI path (special SDK)
+  // ZAI path (special SDK) — AUDIT-AI-14: Add fallback to first available non-ZAI provider
   if (providerId === 'zai') {
-    const content = await callZai(messages, modelId);
-    return { content, provider: 'zai', model: modelId || 'default' };
+    try {
+      const content = await callZai(messages, modelId);
+      return { content, provider: 'zai', model: modelId || 'default' };
+    } catch (zaiError) {
+      const fallback = getAvailableProviders().find(p => p.id !== 'zai');
+      if (fallback) {
+        safeLog({
+          level: 'warn',
+          route: 'AI-Provider',
+          message: `ZAI failed, falling back to ${fallback.name}`,
+          error: zaiError instanceof Error ? zaiError.message : String(zaiError),
+        });
+        const apiKey = fallback.id === 'lokal_ai'
+          ? (process.env[fallback.apiKeyEnvVar] || 'ollama')
+          : process.env[fallback.apiKeyEnvVar];
+        if (apiKey) {
+          try {
+            const content = await callOpenAiCompatible(fallback.baseUrl, apiKey, fallback.models[0]?.id || 'default', messages);
+            return { content, provider: fallback.id, model: fallback.models[0]?.id || 'default' };
+          } catch {
+            // fall through to throw original ZAI error
+          }
+        }
+      }
+      throw zaiError;
+    }
   }
 
   // OpenAI-compatible path (Groq, OpenAI, together, Tinyfish, Lokal AI)

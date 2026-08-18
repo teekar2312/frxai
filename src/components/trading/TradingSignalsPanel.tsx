@@ -17,7 +17,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import {
   type ForexPair, type TradingSignal, type StrategyName, type AiAnalysisResult,
-  FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS,
+  FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS, MARKET_CONDITION_LABELS,
 } from '@/lib/trading-types';
 import { useTradingStore } from '@/lib/trading-store';
 import { fmtPrice, STRATEGY_DESCS } from './shared';
@@ -33,6 +33,8 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean, autoTrai
     strategy: signal.strategy,
     marketCondition: signal.marketCondition,
     aiConfidence: signal.confidence,
+    riskLevel: signal.riskLevel,
+    aiRecommendation: signal.recommendation,
   };
 
   if (isMt5Live) {
@@ -77,7 +79,8 @@ export function TradingSignalsPanel() {
 
   const [signalFilter, setSignalFilter] = useState<{ pair: string; strategy: string; direction: string }>({ pair: 'all', strategy: 'all', direction: 'all' });
   const [signalsLoading, setSignalsLoading] = useState(false);
-  const [autoTradeResults, setAutoTradeResults] = useState<Record<number, { success: boolean; ticket?: number; error?: string }>>({});
+  // AUDIT-AI-17: Key by signal.id instead of array index to survive filtering
+  const [autoTradeResults, setAutoTradeResults] = useState<Record<string, { success: boolean; ticket?: number; error?: string }>>({});
   const [autoTrading, setAutoTrading] = useState(false);
   const executedSignalIds = useRef(new Set<string>());
 
@@ -242,7 +245,8 @@ export function TradingSignalsPanel() {
     setAutoTrading(true);
     toast.info(`Auto-trading: executing ${eligible.length} signal(s)...`);
 
-    const results: Record<number, { success: boolean; ticket?: number; error?: string }> = {};
+    // AUDIT-AI-17: Use signal.id as key for results
+    const results: Record<string, { success: boolean; ticket?: number; error?: string }> = {};
     let successCount = 0;
     let failCount = 0;
 
@@ -257,14 +261,14 @@ export function TradingSignalsPanel() {
 
       try {
         const result = await executeSignal(signal, isMt5Live, serverConfig?.autoTrailingStop ?? false, serverConfig?.trailingStopPips ?? 10);
-        results[i] = result;
+        results[signal.id] = result;
         if (result.success) {
           successCount++;
         } else {
           failCount++;
         }
       } catch {
-        results[i] = { success: false, error: 'Network error' };
+        results[signal.id] = { success: false, error: 'Network error' };
         failCount++;
       }
 
@@ -359,10 +363,11 @@ export function TradingSignalsPanel() {
         </Card>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-          {filteredSignals.map((signal, i) => {
-            const autoResult = autoTradeResults[i];
+          {filteredSignals.map((signal) => {
+            // AUDIT-AI-17: Look up by signal.id instead of array index
+            const autoResult = autoTradeResults[signal.id];
             return (
-              <Card key={i} className={`bg-zinc-900 border-zinc-800 p-4 ${autoResult ? (autoResult.success ? 'border-emerald-500/30' : 'border-rose-500/30') : ''}`}>
+              <Card key={signal.id} className={`bg-zinc-900 border-zinc-800 p-4 ${autoResult ? (autoResult.success ? 'border-emerald-500/30' : 'border-rose-500/30') : ''}`}>
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-white">{PAIR_DISPLAY[signal.pair]}</span>
@@ -388,6 +393,15 @@ export function TradingSignalsPanel() {
                   <div className="flex justify-between">
                     <span className="text-zinc-500">Strategy</span>
                     <span className="text-zinc-300">{STRATEGY_LABELS[signal.strategy]}</span>
+                  </div>
+                  {/* AUDIT-AI-18: Show market condition on signal cards */}
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Market</span>
+                    <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-400 px-1.5">{MARKET_CONDITION_LABELS[signal.marketCondition]}</Badge>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-zinc-500">Risk</span>
+                    <span className={`font-medium ${signal.riskLevel === 'low' ? 'text-emerald-400' : signal.riskLevel === 'high' ? 'text-rose-400' : 'text-amber-400'}`}>{signal.riskLevel}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-zinc-500">Entry</span>

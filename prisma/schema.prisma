@@ -39,6 +39,8 @@ model TradingPosition {
   strategy      String?
   marketCondition String?
   aiConfidence  Float?
+  riskLevel     String?   // AUDIT-AI-09: low, medium, high from AI analysis
+  aiRecommendation String? // AUDIT-AI-09: BUY, SELL, HOLD, AVOID from AI
   leverage      Int      @default(100)
   commission    Float    @default(1)
   openedAt      DateTime @default(now())

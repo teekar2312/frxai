@@ -5,7 +5,7 @@ import { PAIR_PIP_VALUES, STRATEGY_LABELS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
-import { aiComplete, resolveAiConfig, AI_PROVIDERS } from '@/lib/ai-provider';
+import { aiComplete, resolveAiConfig } from '@/lib/ai-provider';
 import { generateSimulatedCandles } from '@/lib/sim-candles';
 import {
   ema, rsi, macd, atr, bollingerBands, supertrend,
@@ -185,6 +185,8 @@ function buildSignalFromAnalysis(
     lotSize,
     confidence: analysis.confidence * 100,
     marketCondition: analysis.marketCondition,
+    riskLevel: analysis.riskLevel,
+    recommendation: analysis.recommendation,
     indicators: analysis.indicators.map(ind => ind.name),
     reasoning: analysis.reasoning,
     timestamp: Date.now(),
@@ -358,9 +360,13 @@ export async function POST(request: NextRequest) {
       });
     } catch { /* non-critical */ }
 
-    // FIX MKT-ANALYSIS-008: Cleanup expired analysis records (best-effort)
+    // FIX MKT-ANALYSIS-008: Cleanup expired analysis records (AUDIT-AI-16: throttled to once per minute)
     try {
-      await db.aiAnalysis.deleteMany({ where: { expiresAt: { lt: new Date() } } });
+      const now = Date.now();
+      if (!globalThis._lastAnalysisCleanup || now - globalThis._lastAnalysisCleanup > 60_000) {
+        globalThis._lastAnalysisCleanup = now;
+        db.aiAnalysis.deleteMany({ where: { expiresAt: { lt: new Date() } } }).catch(() => {});
+      }
     } catch { /* non-critical */ }
 
     return NextResponse.json({

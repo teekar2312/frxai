@@ -612,11 +612,17 @@ export async function POST(request: NextRequest) {
       // Non-critical
     }
 
-    // AUDIT-AI-G1: Fetch recent AI analyses for this pair/strategy comparison
+    // AUDIT-AI-G1/AUDIT-AI-21: Fetch AI analyses within backtest date range for meaningful comparison
     let aiComparison: Array<{ recommendation: string; confidence: number; strategyUsed: string; createdAt: Date }> = [];
     try {
       const recentAi = await db.aiAnalysis.findMany({
-        where: { pair: config.pair },
+        where: {
+          pair: config.pair,
+          createdAt: {
+            gte: new Date(config.startDate),
+            lte: new Date(config.endDate),
+          },
+        },
         orderBy: { createdAt: 'desc' },
         take: 5,
         select: { recommendation: true, confidence: true, strategyUsed: true, createdAt: true },

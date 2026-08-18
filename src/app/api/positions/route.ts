@@ -60,6 +60,8 @@ export async function POST(request: NextRequest) {
       marketCondition,
       aiConfidence,
       riskAmount,
+      riskLevel,
+      aiRecommendation,
     } = body as {
       pair: ForexPair;
       direction: 'BUY' | 'SELL';
@@ -71,6 +73,8 @@ export async function POST(request: NextRequest) {
       marketCondition?: string;
       aiConfidence?: number;
       riskAmount?: number;
+      riskLevel?: string;
+      aiRecommendation?: string;
     };
 
     // AUDIT-TRADE-11: Extract trailingStop from raw body
@@ -230,6 +234,8 @@ export async function POST(request: NextRequest) {
         strategy: strategy ?? null,
         marketCondition: marketCondition ?? null,
         aiConfidence: aiConfidence ?? null,
+        riskLevel: riskLevel ?? null,
+        aiRecommendation: aiRecommendation ?? null,
         leverage: config.leverage,
         commission: config.commissionPerLot * lotSize,
         status: 'open',

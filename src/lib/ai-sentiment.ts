@@ -17,8 +17,10 @@ export async function enhanceSentimentWithAI(
       { role: 'system', content: 'You are a forex news sentiment analyzer. Respond with ONLY one word: positive, negative, or neutral.' },
       { role: 'user', content: `Title: ${title}\nDescription: ${(description || '').slice(0, 200)}` },
     ]);
+    // AUDIT-AI-20: Use regex to extract sentiment from potentially verbose responses
     const cleaned = result.content.trim().toLowerCase();
-    if (['positive', 'negative', 'neutral'].includes(cleaned)) return cleaned;
+    const match = cleaned.match(/\b(positive|negative|neutral)\b/);
+    if (match) return match[1];
   } catch (err) {
     safeLog({ level: 'warn', route: 'News', message: 'AI sentiment enhancement failed, using keyword fallback', error: err instanceof Error ? err.message : String(err) });
   }

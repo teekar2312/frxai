@@ -34,6 +34,7 @@ export function SettingsPanel() {
   const [emailStatus, setEmailStatus] = useState<Record<string, string | boolean> | null>(null);
 
   // AUDIT-TRADE-01: Sync config to Zustand store
+  // AUDIT-AI-19: Include AI provider/model in store sync
   const syncConfigToStore = useCallback((cfg: TradingConfig) => {
     setServerConfig({
       autoTrading: cfg.autoTrading,
@@ -44,6 +45,8 @@ export function SettingsPanel() {
       leverage: cfg.leverage,
       trailingStopPips: cfg.trailingStopPips,
       autoTrailingStop: cfg.autoTrailingStop,
+      aiProvider: cfg.aiProvider,
+      aiModel: cfg.aiModel,
     });
   }, [setServerConfig]);
 

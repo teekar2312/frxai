@@ -131,6 +131,7 @@ export function AiAnalysisPanel() {
                     currentAnalysis.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' :
                     currentAnalysis.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' :
                     currentAnalysis.recommendation === 'HOLD' ? 'bg-amber-500/20 text-amber-400' :
+                    currentAnalysis.recommendation === 'AVOID' ? 'bg-red-900/40 text-red-300' :
                     'bg-zinc-700 text-zinc-400'
                   }`}>
                     {currentAnalysis.recommendation === 'BUY' && <ArrowUpCircle className="w-3 h-3 mr-1" />}
@@ -251,13 +252,13 @@ export function AiAnalysisPanel() {
                       <div key={a.id || `${a.pair}-${a.createdAt}`} className="bg-zinc-800/50 rounded-lg p-2.5 space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-medium text-zinc-200">{PAIR_DISPLAY[a.pair]}</span>
-                          <Badge className={`text-[10px] ${a.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : a.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' : 'bg-zinc-700 text-zinc-400'}`}>
+                          <Badge className={`text-[10px] ${a.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : a.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' : a.recommendation === 'AVOID' ? 'bg-red-900/40 text-red-300' : 'bg-zinc-700 text-zinc-400'}`}>
                             {a.recommendation}
                           </Badge>
                         </div>
                         <div className="flex items-center justify-between text-[10px] text-zinc-500">
                           <span>{STRATEGY_LABELS[a.bestStrategy]}</span>
-                          <span>{a.confidence.toFixed(0)}%</span>
+                          <span>{(a.confidence * 100).toFixed(0)}%</span>
                         </div>
                       </div>
                     ))}

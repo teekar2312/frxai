@@ -52,8 +52,11 @@ interface TradingStore {
     leverage: number;
     trailingStopPips: number;
     autoTrailingStop: boolean;
+    // AUDIT-AI-19: Include AI provider/model for UI display
+    aiProvider: string;
+    aiModel: string;
   } | null;
-  setServerConfig: (config: { autoTrading: boolean; avoidNewsTrading: boolean; maxOpenPositions: number; dailyTargetMax: number; accountBalance: number; leverage: number; trailingStopPips: number; autoTrailingStop: boolean }) => void;
+  setServerConfig: (config: { autoTrading: boolean; avoidNewsTrading: boolean; maxOpenPositions: number; dailyTargetMax: number; accountBalance: number; leverage: number; trailingStopPips: number; autoTrailingStop: boolean; aiProvider: string; aiModel: string }) => void;
 
   // Account balance
   accountBalance: number;

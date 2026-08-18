@@ -1619,3 +1619,84 @@ Files Modified:
 - src/components/trading/shared.ts (7 description fixes)
 
 Verification: ESLint 0 errors, TypeScript 0 errors in src/, browser verification passed all panels render correctly.
+---
+Task ID: COMPREHENSIVE-DEEP-AUDIT-2
+Agent: Main Orchestrator
+Task: Comprehensive deep audit to verify all integrations are correct
+
+Work Log:
+- Launched 3 parallel audit agents: API routes (18 files), Frontend components (14 files), Libraries (14 files)
+- API audit found 52 issues (6 CRITICAL, 12 HIGH, 20 MEDIUM, 14 LOW)
+- Frontend audit found 25 issues (5 CRITICAL, 4 HIGH, 9 MEDIUM, 7 LOW)
+- Library audit found 31 issues (3 CRITICAL, 5 HIGH, 12 MEDIUM, 11 LOW)
+- Deduplicated and verified claims against actual source code
+- Fixed all 9 CRITICAL and 20 HIGH issues (29 total)
+- Confirmed email notification system from previous session was NEVER actually saved to disk
+  (no email-service.ts, no resend dependency, no schema email fields, no Settings email section)
+- ESLint: 0 errors
+- Browser verified: Dashboard renders with correct percentage changes, all panels accessible
+
+Stage Summary:
+CRITICAL FIXES (9):
+1. FE-001/002: LiveTradingPanel+PriceAlertsPanel used PATCH→PUT (STILL BROKEN from prior session claim)
+2. FE-003: AI confidence 0-1 displayed as 0-1% (invisible gauge) → multiply by 100
+3. FE-004: Dashboard showed q.change (abs) instead of q.changePercent
+4. FE-005: MT5 mode fell through to Finnhub → returns early, no SIMULASI banner
+5. LIB-001: HMA NaN→0 coercion → proper NaN propagation
+6. LIB-002: MACD signal array shorter than MACD line → padded to match
+7. LIB-003: STC look-ahead bias → rolling window min/max
+
+HIGH FIXES (20):
+8. LIB-004: Timing-unsafe auth → crypto.timingSafeEqual
+9. LIB-005: Hardcoded pipSize → PAIR_PIP_VALUES lookup
+10. LIB-006: linearRegressionChannel div-by-zero on period<3
+11. LIB-008: detectMarketCondition div-by-zero on zero price
+12. LIB-013: Simulated fallback missing session H/L update
+13. LIB-016: Production now 503 when API_SECRET_KEY not set
+14. LIB-019: MFI equal-TP bias
+15. LIB-007: Rate limiter cleanup max window
+16. API-004: News createMany unique constraint → individual fallback
+17. API-005: Auth-before-rate-limit → rate limit first (prevents brute force)
+18. API-007: Hardcoded USDJPY 150 → dynamic from cache
+19. API-008: Finnhub fallback recursive throw → try-catch
+20. API-009: Config PUT rate limiting
+21. API-010: Cross-field validation merge
+22. API-011/012/013: Backtest validation + dead code
+23. API-023: Unused constant
+24. API-029: Dynamic import → static
+25. API-037: MT5 connection JSON parse safety
+26. API-049: Equity curve time mapping
+27. FE-006: MT5 balance currency
+28. FE-008: W1 timeframe added
+29. FE-009: Stable React keys
+
+CRITICAL FINDING (not fixed in this session):
+- Email notification system is COMPLETELY MISSING despite previous session claims
+  Files that should exist but don't: src/lib/email-service.ts, resend in package.json,
+  email fields in prisma schema, email section in SettingsPanel
+
+Files Modified:
+- src/app/api/analysis/route.ts (rate-limit ordering)
+- src/app/api/backtest/route.ts (6 fixes: validation, dead code, equity curve, import)
+- src/app/api/config/route.ts (rate limiting, cross-field validation)
+- src/app/api/finnhub/route.ts (fallback try-catch)
+- src/app/api/indicators/route.ts (removed redundant validation)
+- src/app/api/mt5/connection/route.ts (JSON parse safety)
+- src/app/api/news/route.ts (createMany constraint, MAX_DESCRIPTION_LENGTH)
+- src/app/api/positions/route.ts (rate-limit ordering)
+- src/app/api/risk/route.ts (dynamic USDJPY rate)
+- src/app/page.tsx (MT5 fallthrough fix)
+- src/components/trading/AiAnalysisPanel.tsx (confidence *100, stable keys, refresh history)
+- src/components/trading/BacktestingPanel.tsx (decimal SL/TP)
+- src/components/trading/DashboardPanel.tsx (changePercent, confidence, MT5 currency)
+- src/components/trading/LiveTradingPanel.tsx (PATCH→PUT)
+- src/components/trading/PriceAlertsPanel.tsx (PATCH→PUT)
+- src/components/trading/shared.ts (minLot, maxLotPerOrder)
+- src/lib/api-auth.ts (timingSafeEqual, production rejection)
+- src/lib/indicators.ts (HMA, MACD, STC, MFI, linearRegression, detectMarketCondition)
+- src/lib/price-cache.ts (pipSize, session H/L)
+- src/lib/rate-limit.ts (dynamic max window)
+- src/lib/trading-types.ts (W1 in TIMEFRAMES)
+
+Verification: ESLint 0 errors, dev server running clean, browser verified Dashboard + Settings + AI Analysis
+Commit: 98c50dd (local, push failed due to expired GitHub token)

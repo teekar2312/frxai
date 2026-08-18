@@ -60,7 +60,7 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean): Promise
 }
 
 export function TradingSignalsPanel() {
-  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus, mt5Positions, selectedTimeframe } = useTradingStore();
+  const { quotes, signals, setSignals, setAiAnalysis, isAutoTrading, tradingMode, mt5ConnectionStatus, mt5Positions, selectedTimeframe, serverConfig } = useTradingStore();
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
   const [signalFilter, setSignalFilter] = useState<{ pair: string; strategy: string; direction: string }>({ pair: 'all', strategy: 'all', direction: 'all' });
@@ -124,14 +124,73 @@ export function TradingSignalsPanel() {
           return;
         }
 
+        // AUDIT-TRADE-06: Check avoidNewsTrading from server config
+        if (serverConfig?.avoidNewsTrading) {
+          // Check if there are any high-impact news in the last 2 hours or next 2 hours
+          try {
+            const newsRes = await fetch('/api/news');
+            if (newsRes.ok) {
+              const newsData = await newsRes.json();
+              const recentNews = (newsData.news || []) as { impact: string; publishedAt: string }[];
+              const now = Date.now();
+              const twoHours = 2 * 60 * 60 * 1000;
+              const highImpactNearby = recentNews.some(n =>
+                n.impact === 'high' &&
+                Math.abs(new Date(n.publishedAt).getTime() - now) < twoHours
+              );
+              if (highImpactNearby) {
+                toast.warning('Auto-trading skipped: High-impact news event nearby (avoidNewsTrading enabled)');
+                return;
+              }
+            }
+          } catch {
+            // non-critical — continue with auto-trading if news check fails
+          }
+        }
+
+        // AUDIT-TRADE-07: Check maxOpenPositions before auto-trading
+        const maxPositions = serverConfig?.maxOpenPositions ?? 3;
+        const currentPositions = isMt5Live ? mt5Positions.length : (await fetch('/api/positions?status=open').then(r => r.ok ? r.json().then(d => (d.positions || []).length) : 0).catch(() => 0));
+        const availableSlots = maxPositions - currentPositions;
+        if (availableSlots <= 0) {
+          toast.warning(`Auto-trading skipped: Max positions reached (${currentPositions}/${maxPositions})`);
+          return;
+        }
+        const eligibleToExecute = eligible.slice(0, availableSlots);
+        if (eligibleToExecute.length < eligible.length) {
+          toast.info(`Auto-trading: Only ${eligibleToExecute.length} of ${eligible.length} signals can be executed (max positions limit)`);
+        }
+
+        // AUDIT-TRADE-19: Check daily profit target
+        if (serverConfig && serverConfig.dailyTargetMax > 0) {
+          try {
+            const posRes = await fetch('/api/positions?status=closed');
+            if (posRes.ok) {
+              const posData = await posRes.json();
+              const todayClosed = (posData.positions || []) as { pnl: number; closedAt: string }[];
+              const todayStart = new Date();
+              todayStart.setHours(0, 0, 0, 0);
+              const todayProfit = todayClosed
+                .filter(p => new Date(p.closedAt) >= todayStart && p.pnl > 0)
+                .reduce((sum, p) => sum + p.pnl, 0);
+              const dailyTargetAmount = (serverConfig.dailyTargetMax / 100) * (serverConfig.accountBalance || 10000);
+              if (todayProfit >= dailyTargetAmount) {
+                toast.info(`Auto-trading skipped: Daily profit target reached ($${todayProfit.toFixed(2)} of $${dailyTargetAmount.toFixed(2)})`);
+                return;
+              }
+            }
+          } catch {
+            // non-critical
+          }
+        }
+
         // H5: Risk management pre-check before auto-trading
         if (isMt5Live) {
-          const currentMt5Positions = mt5Positions.length;
-          const totalRiskAmount = eligible.reduce((sum, s) => sum + (Math.abs(s.entryPrice - s.stopLoss) * s.lotSize * 10000), 0);
+          const totalRiskAmount = eligibleToExecute.reduce((sum, s) => sum + (Math.abs(s.entryPrice - s.stopLoss) * s.lotSize * 10000), 0);
           const riskWarning: string[] = [];
 
-          if (currentMt5Positions + eligible.length > 50) {
-            riskWarning.push(`${currentMt5Positions + eligible.length} total positions (current: ${currentMt5Positions} + new: ${eligible.length})`);
+          if (currentPositions + eligibleToExecute.length > maxPositions) {
+            riskWarning.push(`${currentPositions + eligibleToExecute.length} total positions (current: ${currentPositions} + new: ${eligibleToExecute.length})`);
           }
           if (totalRiskAmount > 5000) {
             riskWarning.push(`Total risk exposure: $${totalRiskAmount.toFixed(2)}`);
@@ -142,12 +201,12 @@ export function TradingSignalsPanel() {
           }
 
           // C1: Show confirmation dialog for MT5 auto-trading
-          setPendingAutoSignals(eligible);
+          setPendingAutoSignals(eligibleToExecute);
           return;
         }
 
         // Simulation: execute directly
-        await autoExecuteSignals(eligible);
+        await autoExecuteSignals(eligibleToExecute);
       }
     } catch {
       toast.error('Failed to generate signals');

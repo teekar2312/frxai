@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
 import { logApiError, safeLog } from '@/lib/safe-log';
+// AUDIT-TRADE-12: Add auth for MT5 connection POST
+import { requireAuthForMutation } from '@/lib/api-auth';
 
 async function getBridgeStatus() {
   try {
@@ -40,6 +42,9 @@ export async function GET() {
 
 // POST - Enable/disable/check MT5 connection
 export async function POST(request: NextRequest) {
+  // AUDIT-TRADE-12: Require auth for MT5 connection mutations
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
   // API-AUDIT-037: Wrap request.json() in try-catch for invalid JSON
   let body: { action?: string };
   try {

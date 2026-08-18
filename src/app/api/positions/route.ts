@@ -73,6 +73,9 @@ export async function POST(request: NextRequest) {
       riskAmount?: number;
     };
 
+    // AUDIT-TRADE-11: Extract trailingStop from raw body
+    const trailingStop = (body.trailingStop as number | null | undefined) ?? null;
+
     // L14: entryPrice is optional for simulation (can be fetched from market data)
     let entryPrice: number = body.entryPrice || 0;
 
@@ -100,6 +103,16 @@ export async function POST(request: NextRequest) {
     // POS-01: Fetch TradingConfig from DB instead of using hardcoded FINEX_CONFIG
     let config = await db.tradingConfig.findFirst();
     if (!config) config = await db.tradingConfig.create({ data: { riskPerTrade: 0.75, stopLossMin: 5, stopLossMax: 15, riskRewardRatio: 1.5, maxOpenPositions: 3, dailyRiskLimit: 2.5, dailyTargetMin: 1, dailyTargetMax: 3, leverage: 100, spreadPip: 0.5, commissionPerLot: 1, marginCallLevel: 50, stopOutLevel: 20, autoTrading: false, autoTrailingStop: false, trailingStopPips: 10, avoidNewsTrading: true, accountBalance: 10000 } });
+
+    // AUDIT-TRADE-03: Server-side auto-trading enforcement
+    // If request has both strategy and aiConfidence, it's an auto-traded signal
+    const isAutoTradedSignal = !!strategy && typeof aiConfidence === 'number';
+    if (isAutoTradedSignal && !config.autoTrading) {
+      return NextResponse.json(
+        { error: 'Auto-trading is disabled in settings' },
+        { status: 403 }
+      );
+    }
 
     if (!entryPrice || entryPrice === 0) {
       const mid = await getCurrentMidPrice(pair);
@@ -196,6 +209,10 @@ export async function POST(request: NextRequest) {
     const calcRiskAmount = stopLoss ? Math.abs(entryPrice - stopLoss) / pipConfig.pipSize * pipValue : null;
     const calcRewardAmount = takeProfit ? Math.abs(takeProfit - entryPrice) / pipConfig.pipSize * pipValue : null;
 
+    // AUDIT-TRADE-11: Process trailingStop from request body
+    const finalTrailingStop = typeof trailingStop === 'number' && trailingStop > 0 ? trailingStop : null;
+    const finalTrailingType = finalTrailingStop ? 'automatic' : 'manual';
+
     const position = await db.tradingPosition.create({
       data: {
         pair,
@@ -205,6 +222,8 @@ export async function POST(request: NextRequest) {
         currentPrice: entryPrice,
         stopLoss: stopLoss ?? null,
         takeProfit: takeProfit ?? null,
+        trailingStop: finalTrailingStop,
+        trailingType: finalTrailingType,
         pipValue,
         riskAmount: calcRiskAmount,
         rewardAmount: calcRewardAmount,

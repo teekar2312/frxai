@@ -25,7 +25,7 @@ import {
 } from '@/components/ui/dialog';
 import { type ForexPair, FOREX_PAIRS, PAIR_DISPLAY } from '@/lib/trading-types';
 import { type PriceAlert, fmtPrice } from './shared';
-import { useTradingStore } from './trading-store';
+import { useTradingStore } from '@/lib/trading-store';
 
 const CONDITION_LABELS: Record<string, { label: string; color: string }> = {
   above: { label: 'Above', color: 'text-emerald-400' },

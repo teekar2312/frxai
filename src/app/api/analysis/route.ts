@@ -142,23 +142,35 @@ CRITICAL RULES:
 
 /**
  * FIX MKT-ANALYSIS-002: Build TradingSignal from AI analysis result
+ * AUDIT-TRADE-02: Read balance and risk from TradingConfig instead of hardcoding
  */
 function buildSignalFromAnalysis(
   analysis: AiAnalysisResult,
   quote: QuoteData | undefined,
   pair: ForexPair,
+  serverConfig: { accountBalance: number; riskPerTrade: number } | null,
 ): TradingSignal | null {
   if (!analysis.entryPrice || !analysis.stopLoss || !analysis.takeProfit) return null;
   if (analysis.recommendation !== 'BUY' && analysis.recommendation !== 'SELL') return null;
+
+  // AUDIT-TRADE-17: Validate AI-generated SL/TP directional correctness
+  if (analysis.recommendation === 'BUY') {
+    if (analysis.stopLoss >= analysis.entryPrice) return null;
+    if (analysis.takeProfit <= analysis.entryPrice) return null;
+  } else {
+    if (analysis.stopLoss <= analysis.entryPrice) return null;
+    if (analysis.takeProfit >= analysis.entryPrice) return null;
+  }
 
   const pipConfig = PAIR_PIP_VALUES[pair] || { standard: 10, pipSize: 0.0001 };
   const entryPrice = analysis.entryPrice;
   const stopLoss = analysis.stopLoss;
   const takeProfit = analysis.takeProfit;
 
-  // Calculate lot size based on 1% risk
-  const balance = 10000;
-  const riskAmount = balance * 0.01;
+  // AUDIT-TRADE-02: Use server config for balance and risk instead of hardcoding
+  const balance = serverConfig?.accountBalance ?? 10000;
+  const riskPct = (serverConfig?.riskPerTrade ?? 0.75) / 100;
+  const riskAmount = balance * riskPct;
   const slPips = Math.abs(entryPrice - stopLoss) / pipConfig.pipSize;
   const lotSize = slPips > 0 ? Math.max(0.01, parseFloat((riskAmount / (slPips * pipConfig.standard)).toFixed(2))) : 0.01;
 
@@ -306,7 +318,7 @@ export async function POST(request: NextRequest) {
     // FIX MKT-ANALYSIS-002: Generate signals when requested
     let signals: TradingSignal[] = [];
     if (generateSignals) {
-      const signal = buildSignalFromAnalysis(analysisResult, quote, pair);
+      const signal = buildSignalFromAnalysis(analysisResult, quote, pair, config ? { accountBalance: config.accountBalance, riskPerTrade: config.riskPerTrade } : null);
       if (signal) signals.push(signal);
     }
 

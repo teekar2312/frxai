@@ -39,7 +39,21 @@ interface TradingStore {
 
   // Auto trading
   isAutoTrading: boolean;
+  setAutoTrading: (enabled: boolean) => void;
   toggleAutoTrading: () => void;
+
+  // Server-side trading config (synced from /api/config)
+  serverConfig: {
+    autoTrading: boolean;
+    avoidNewsTrading: boolean;
+    maxOpenPositions: number;
+    dailyTargetMax: number;
+    accountBalance: number;
+    leverage: number;
+    trailingStopPips: number;
+    autoTrailingStop: boolean;
+  } | null;
+  setServerConfig: (config: { autoTrading: boolean; avoidNewsTrading: boolean; maxOpenPositions: number; dailyTargetMax: number; accountBalance: number; leverage: number; trailingStopPips: number; autoTrailingStop: boolean }) => void;
 
   // Account balance
   accountBalance: number;
@@ -132,7 +146,17 @@ export const useTradingStore = create<TradingStore>()(
         })),
 
       isAutoTrading: false,
+      setAutoTrading: (enabled) => set({ isAutoTrading: enabled }),
       toggleAutoTrading: () => set((state) => ({ isAutoTrading: !state.isAutoTrading })),
+
+      // Server-side trading config (AUDIT-TRADE-01: synced from /api/config)
+      serverConfig: null,
+      setServerConfig: (config) => set({
+        serverConfig: config,
+        // AUDIT-TRADE-01: Sync isAutoTrading and accountBalance from server config
+        isAutoTrading: config.autoTrading,
+        accountBalance: config.accountBalance,
+      }),
 
       accountBalance: 10000,
       setAccountBalance: (balance) => set({ accountBalance: balance }),

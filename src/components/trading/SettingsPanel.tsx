@@ -26,12 +26,26 @@ interface AiProviderInfo {
 }
 
 export function SettingsPanel() {
-  const { tradingMode } = useTradingStore();
+  const { tradingMode, setServerConfig } = useTradingStore();
   const [config, setConfig] = useState<TradingConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [emailStatus, setEmailStatus] = useState<Record<string, string | boolean> | null>(null);
+
+  // AUDIT-TRADE-01: Sync config to Zustand store
+  const syncConfigToStore = useCallback((cfg: TradingConfig) => {
+    setServerConfig({
+      autoTrading: cfg.autoTrading,
+      avoidNewsTrading: cfg.avoidNewsTrading,
+      maxOpenPositions: cfg.maxOpenPositions,
+      dailyTargetMax: cfg.dailyTargetMax,
+      accountBalance: cfg.accountBalance,
+      leverage: cfg.leverage,
+      trailingStopPips: cfg.trailingStopPips,
+      autoTrailingStop: cfg.autoTrailingStop,
+    });
+  }, [setServerConfig]);
 
   // Fetch config
   const fetchConfig = useCallback(async () => {
@@ -40,7 +54,10 @@ export function SettingsPanel() {
       const res = await fetch('/api/config');
       if (res.ok) {
         const data = await res.json();
-        if (data.config) setConfig(data.config as TradingConfig);
+        if (data.config) {
+          setConfig(data.config as TradingConfig);
+          syncConfigToStore(data.config as TradingConfig);
+        }
         if (data.emailStatus) setEmailStatus(data.emailStatus);
       }
     } catch {
@@ -48,7 +65,7 @@ export function SettingsPanel() {
     } finally {
       setConfigLoading(false);
     }
-  }, []);
+  }, [syncConfigToStore]);
 
   // Fetch AI providers
   const fetchAiProviders = useCallback(async () => {
@@ -79,7 +96,11 @@ export function SettingsPanel() {
         body: JSON.stringify(config),
       });
       if (res.ok) {
+        const savedData = await res.json().catch(() => ({}));
         toast.success('Configuration saved');
+        // AUDIT-TRADE-01: Re-sync store after save
+        if (savedData.config) syncConfigToStore(savedData.config as TradingConfig);
+        fetchConfig();
       } else {
         const errData = await res.json().catch(() => ({}));
         toast.error(errData.error || 'Failed to save configuration');

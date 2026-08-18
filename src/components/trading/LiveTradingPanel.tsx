@@ -31,12 +31,12 @@ import {
   FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS,
 } from '@/lib/trading-types';
 import { useTradingStore } from '@/lib/trading-store';
-import { type Position, type EquityPoint, fmtPrice } from './shared';
+import { type Position, type EquityPoint, type TradingConfig, fmtPrice } from './shared';
 
 export function LiveTradingPanel() {
   const {
-    accountBalance, isAutoTrading, toggleAutoTrading,
-    tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
+    accountBalance, isAutoTrading, toggleAutoTrading, setServerConfig,
+    tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions, serverConfig,
     setDailyPnl, setOpenPositionsCount,
   } = useTradingStore();
 
@@ -64,9 +64,36 @@ export function LiveTradingPanel() {
     trailingStop: boolean;
   } | null>(null);
 
+  // AUDIT-TRADE-01: Fetch server config to sync autoTrading and accountBalance
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const res = await fetch('/api/config');
+        if (res.ok) {
+          const data = await res.json();
+          if (data.config) {
+            setServerConfig({
+              autoTrading: data.config.autoTrading,
+              avoidNewsTrading: data.config.avoidNewsTrading,
+              maxOpenPositions: data.config.maxOpenPositions,
+              dailyTargetMax: data.config.dailyTargetMax,
+              accountBalance: data.config.accountBalance,
+              leverage: data.config.leverage,
+              trailingStopPips: data.config.trailingStopPips,
+              autoTrailingStop: data.config.autoTrailingStop,
+            });
+          }
+        }
+      } catch {
+        // non-critical
+      }
+    };
+    loadConfig();
+  }, [setServerConfig]);
+
   // L2: Sync simulation state to store (sidebar uses these values)
   useEffect(() => {
-    if (isMt5Live) return; // MT5 mode reads from mt5AccountInfo/mt5Positions directly
+    if (isMt5Live) return;
     const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
     setDailyPnl(totalPnl);
     setOpenPositionsCount(positions.length);
@@ -91,6 +118,19 @@ export function LiveTradingPanel() {
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  // AUDIT-TRADE-09: Populate equity history from positions data
+  useEffect(() => {
+    if (isMt5Live || positions.length === 0) return;
+    const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
+    setEquityHistory(prev => {
+      const now = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const entry: EquityPoint = { time: now, equity: parseFloat((accountBalance + totalPnl).toFixed(2)), balance: accountBalance };
+      // Keep last 60 points
+      const next = [...prev, entry];
+      return next.length > 60 ? next.slice(-60) : next;
+    });
+  }, [positions, isMt5Live, accountBalance]);
 
   // Fetch positions (for manual refresh after actions)
   const refreshPositions = async () => {
@@ -143,6 +183,8 @@ export function LiveTradingPanel() {
         return;
       } else {
         // Simulation mode - local
+        // AUDIT-TRADE-11: Send trailingStop pips value from config
+        const trailingStopValue = trailingStopEnabled ? (serverConfig?.trailingStopPips ?? 10) : null;
         const res = await fetch('/api/positions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -153,7 +195,7 @@ export function LiveTradingPanel() {
             stopLoss: newTrade.stopLoss || null,
             takeProfit: newTrade.takeProfit || null,
             strategy: newTrade.strategy,
-            trailingStop: trailingStopEnabled,
+            trailingStop: trailingStopValue,
           }),
         });
         if (res.ok) {
@@ -189,7 +231,8 @@ export function LiveTradingPanel() {
 
   const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
   const CONTRACT_SIZE = 100000; // Standard lot size in units
-  const leverage = 100; // BAPPEBTI compliant default; in production read from config
+  // AUDIT-TRADE-08: Read leverage from server config instead of hardcoding
+  const leverage = serverConfig?.leverage ?? 100;
   const marginUsed = positions.reduce((sum, p) => sum + (p.lotSize * CONTRACT_SIZE / leverage), 0);
   const displayBalance = isMt5Live && mt5AccountInfo ? mt5AccountInfo.balance : accountBalance;
   const displayEquity = isMt5Live && mt5AccountInfo ? mt5AccountInfo.equity : (accountBalance + totalPnl);

@@ -50,22 +50,44 @@ export async function POST(request: NextRequest) {
     }
 
     // O-01: Validate SL/TP directional correctness
-    const entryPrice = (body as Record<string, unknown>).entryPrice;
-    if (stopLoss !== undefined && stopLoss !== null && typeof stopLoss === 'number') {
-      const entryRef = typeof entryPrice === 'number' ? entryPrice : 0;
-      if (direction === 'BUY' && stopLoss >= entryRef && entryRef > 0) {
+    // AUDIT-TRADE-04: Use current price from MT5 bridge when entryPrice is not provided
+    const rawEntryPrice = (body as Record<string, unknown>).entryPrice;
+    let entryRef = typeof rawEntryPrice === 'number' ? rawEntryPrice : 0;
+    if (!entryRef || entryRef <= 0) {
+      try {
+        const priceRes = await fetch(`${MT5_BRIDGE_URL}/api/prices`, {
+          headers: BRIDGE_HEADERS,
+          signal: AbortSignal.timeout(5000),
+        });
+        if (priceRes.ok) {
+          const priceData = await priceRes.json();
+          const prices = priceData.prices ?? priceData;
+          const pairPrice = prices[pair as string];
+          if (pairPrice && typeof pairPrice === 'object') {
+            const bid = Number((pairPrice as Record<string, unknown>).bid);
+            const ask = Number((pairPrice as Record<string, unknown>).ask);
+            if (bid > 0 && ask > 0) {
+              entryRef = direction === 'BUY' ? ask : bid;
+            }
+          }
+        }
+      } catch {
+        // Non-critical — SL/TP validation will be skipped if price unavailable
+      }
+    }
+    if (stopLoss !== undefined && stopLoss !== null && typeof stopLoss === 'number' && entryRef > 0) {
+      if (direction === 'BUY' && stopLoss >= entryRef) {
         return NextResponse.json({ error: 'Stop loss must be below entry price for BUY orders' }, { status: 400 });
       }
-      if (direction === 'SELL' && stopLoss <= entryRef && entryRef > 0) {
+      if (direction === 'SELL' && stopLoss <= entryRef) {
         return NextResponse.json({ error: 'Stop loss must be above entry price for SELL orders' }, { status: 400 });
       }
     }
-    if (takeProfit !== undefined && takeProfit !== null && typeof takeProfit === 'number') {
-      const entryRef = typeof entryPrice === 'number' ? entryPrice : 0;
-      if (direction === 'BUY' && takeProfit <= entryRef && entryRef > 0) {
+    if (takeProfit !== undefined && takeProfit !== null && typeof takeProfit === 'number' && entryRef > 0) {
+      if (direction === 'BUY' && takeProfit <= entryRef) {
         return NextResponse.json({ error: 'Take profit must be above entry price for BUY orders' }, { status: 400 });
       }
-      if (direction === 'SELL' && takeProfit >= entryRef && entryRef > 0) {
+      if (direction === 'SELL' && takeProfit >= entryRef) {
         return NextResponse.json({ error: 'Take profit must be below entry price for SELL orders' }, { status: 400 });
       }
     }

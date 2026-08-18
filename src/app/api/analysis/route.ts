@@ -390,10 +390,18 @@ export async function POST(request: NextRequest) {
 
 /**
  * FIX MKT-ANALYSIS-005: Map DB field names to frontend-compatible names
+ * AUDIT-AI-04: Support ?pair= filtering
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const pairFilter = searchParams.get('pair');
+    const where = pairFilter && VALID_PAIRS.includes(pairFilter as ForexPair)
+      ? { pair: pairFilter as ForexPair }
+      : {};
+
     const analyses = await db.aiAnalysis.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       take: 20,
     });

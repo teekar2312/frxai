@@ -31,9 +31,10 @@ export function AiAnalysisPanel() {
   const [lastModel, setLastModel] = useState<string>('');
 
   // Fetch analysis history
+  // AUDIT-AI-05: Filter by selected pair for focused history
   const fetchAnalysisHistory = useCallback(async () => {
     try {
-      const res = await fetch('/api/analysis?history=true');
+      const res = await fetch(`/api/analysis?pair=${selectedPair}`);
       if (res.ok) {
         const data = await res.json();
         setAnalysisHistory(data.analyses || []);
@@ -41,7 +42,7 @@ export function AiAnalysisPanel() {
     } catch {
       // silent
     }
-  }, []);
+  }, [selectedPair]);
 
   useEffect(() => {
     fetchAnalysisHistory();
@@ -119,16 +120,24 @@ export function AiAnalysisPanel() {
             <CardHeader className="p-0 pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm text-white">Analysis: {PAIR_DISPLAY[currentAnalysis.pair]}</CardTitle>
-                <Badge className={`text-xs ${
-                  currentAnalysis.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' :
-                  currentAnalysis.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' :
-                  currentAnalysis.recommendation === 'HOLD' ? 'bg-amber-500/20 text-amber-400' :
-                  'bg-zinc-700 text-zinc-400'
-                }`}>
-                  {currentAnalysis.recommendation === 'BUY' && <ArrowUpCircle className="w-3 h-3 mr-1" />}
-                  {currentAnalysis.recommendation === 'SELL' && <ArrowDownCircle className="w-3 h-3 mr-1" />}
-                  {currentAnalysis.recommendation}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  {/* AUDIT-AI-03: Show analysis age and expiry */}
+                  {currentAnalysis.createdAt && (
+                    <Badge variant="outline" className="text-[9px] border-zinc-700 text-zinc-500">
+                      {new Date(currentAnalysis.createdAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                    </Badge>
+                  )}
+                  <Badge className={`text-xs ${
+                    currentAnalysis.recommendation === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' :
+                    currentAnalysis.recommendation === 'SELL' ? 'bg-rose-500/20 text-rose-400' :
+                    currentAnalysis.recommendation === 'HOLD' ? 'bg-amber-500/20 text-amber-400' :
+                    'bg-zinc-700 text-zinc-400'
+                  }`}>
+                    {currentAnalysis.recommendation === 'BUY' && <ArrowUpCircle className="w-3 h-3 mr-1" />}
+                    {currentAnalysis.recommendation === 'SELL' && <ArrowDownCircle className="w-3 h-3 mr-1" />}
+                    {currentAnalysis.recommendation}
+                  </Badge>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="p-0 space-y-4">

@@ -27,7 +27,7 @@ export function DashboardPanel() {
     quotes, news, aiAnalysis, marketConditions,
     accountBalance, openPositionsCount, dailyPnl, todayRiskUsed, setTodayRiskUsed,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
-    serverConfig,
+    serverConfig, setActiveTab,
   } = useTradingStore();
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
 
@@ -253,7 +253,14 @@ export function DashboardPanel() {
             ) : (
               <div className="text-center py-4">
                 <Brain className="w-8 h-8 text-zinc-600 mx-auto mb-2" />
-                <p className="text-xs text-zinc-500">No analysis yet. Go to AI Analysis tab to run.</p>
+                <p className="text-xs text-zinc-500">No analysis yet.</p>
+                {/* AUDIT-AI-06: Link to AI Analysis panel */}
+                <button
+                  onClick={() => setActiveTab('ai-analysis')}
+                  className="text-[11px] text-emerald-400 hover:text-emerald-300 mt-1 underline underline-offset-2"
+                >
+                  Run AI Analysis
+                </button>
               </div>
             )}
           </CardContent>

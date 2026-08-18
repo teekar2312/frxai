@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Plus, Square, LineChart, Cable, Loader2 } from 'lucide-react';
+import { Plus, Square, LineChart, Cable, Loader2, Brain } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AreaChart, Area, CartesianGrid, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer } from 'recharts';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -38,6 +38,7 @@ export function LiveTradingPanel() {
     accountBalance, isAutoTrading, toggleAutoTrading, setServerConfig,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions, serverConfig,
     setDailyPnl, setOpenPositionsCount,
+    selectedPair, aiAnalysis,
   } = useTradingStore();
 
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
@@ -295,6 +296,32 @@ export function LiveTradingPanel() {
               <DialogTitle className="text-white">New Trade</DialogTitle>
               <DialogDescription className="text-zinc-400">Open a new trading position</DialogDescription>
             </DialogHeader>
+            {/* AUDIT-AI-02: Apply AI recommendation to trade form */}
+            {aiAnalysis[selectedPair] ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 text-xs"
+                onClick={() => {
+                  const ai = aiAnalysis[selectedPair];
+                  if (!ai) return;
+                  setNewTrade(t => ({
+                    ...t,
+                    pair: selectedPair,
+                    direction: (ai.recommendation === 'BUY' || ai.recommendation === 'SELL') ? ai.recommendation as TradingDirection : t.direction,
+                    stopLoss: ai.stopLoss || 0,
+                    takeProfit: ai.takeProfit || 0,
+                    lotSize: ai.lotSize || t.lotSize,
+                    strategy: ai.bestStrategy,
+                  }));
+                  toast.info('Applied AI recommendation for ' + PAIR_DISPLAY[selectedPair]);
+                }}
+              >
+                <Brain className="w-3 h-3 mr-1" />
+                <span>{'Apply AI Recommendation (' + PAIR_DISPLAY[selectedPair] + ' - ' + aiAnalysis[selectedPair].recommendation + ')'}</span>
+              </Button>
+            ) : null}
             <div className="space-y-4 py-2">
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">

@@ -2006,3 +2006,35 @@ Stage Summary:
   - RISK-014: spreadPip not used in MT5 live risk assessment (minor — broker handles)
   - RISK-015: No max drawdown circuit breaker in live trading (architectural enhancement)
 - ESLint: 0 errors (179 pre-existing warnings unchanged)
+
+---
+Task ID: 1
+Agent: main
+Task: Deep audit of AI Analysis integration across all features
+
+Work Log:
+- Scanned entire codebase for AI analysis related files (13 primary + 9 provider-related)
+- Read and analyzed all core files: ai-provider.ts, analysis/route.ts, AiAnalysisPanel.tsx, TradingSignalsPanel.tsx, LiveTradingPanel.tsx, DashboardPanel.tsx, trading-store.ts, trading-types.ts, shared.ts, config/route.ts, positions/route.ts, risk/route.ts, backtest/route.ts, news/route.ts, SettingsPanel.tsx, BacktestingPanel.tsx, ActivityLogPanel.tsx, RiskManagementPanel.tsx, ai-providers/route.ts, prisma/schema.prisma
+- Traced AI analysis data flow through 12 integration points
+- Identified 10 findings across CRITICAL/HIGH/MEDIUM/LOW severity levels
+- Applied 6 fixes (AUDIT-AI-01 through AUDIT-AI-06)
+- Verified zero lint errors after all fixes
+
+Stage Summary:
+- **CRITICAL (Fixed)**: Auto-trading signals missing aiConfidence/marketCondition in position creation (AUDIT-AI-01)
+- **HIGH (Fixed)**: Manual trade dialog had no AI recommendation integration (AUDIT-AI-02)
+- **HIGH (Known Gap)**: Backtesting uses purely indicator-based strategies, no AI validation
+- **MEDIUM (Fixed)**: Analysis history didn't show creation time (AUDIT-AI-03)
+- **MEDIUM (Fixed)**: Analysis history GET endpoint lacked pair filtering (AUDIT-AI-04)
+- **MEDIUM (Fixed)**: Analysis history on frontend didn't filter by selected pair (AUDIT-AI-05)
+- **MEDIUM (Fixed)**: Dashboard Quick AI Analysis had no link to full panel (AUDIT-AI-06)
+- **LOW (Known Gap)**: News sentiment uses keyword matching, not AI
+- **LOW (Known Gap)**: Price Alerts don't leverage AI for level suggestions
+- **INFO (Known Gap)**: MT5 bridge has no AI analysis integration
+
+Files Modified:
+- src/components/trading/TradingSignalsPanel.tsx (AUDIT-AI-01)
+- src/components/trading/LiveTradingPanel.tsx (AUDIT-AI-02)
+- src/components/trading/AiAnalysisPanel.tsx (AUDIT-AI-03, AUDIT-AI-05)
+- src/app/api/analysis/route.ts (AUDIT-AI-04)
+- src/components/trading/DashboardPanel.tsx (AUDIT-AI-06)

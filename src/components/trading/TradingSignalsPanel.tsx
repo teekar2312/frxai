@@ -28,6 +28,13 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean, autoTrai
   // TS-02: Include trailing stop in auto-trading signal execution
   const trailingStop = autoTrailingStop ? trailingStopPips : null;
 
+  // AUDIT-AI-01: Pass AI analysis metadata for traceability
+  const aiMeta = {
+    strategy: signal.strategy,
+    marketCondition: signal.marketCondition,
+    aiConfidence: signal.confidence,
+  };
+
   if (isMt5Live) {
     const res = await fetch('/api/mt5/orders', {
       method: 'POST',
@@ -38,7 +45,7 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean, autoTrai
         lotSize: signal.lotSize,
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
-        comment: `FINEX-AUTO-${signal.strategy}`,
+        comment: `FINEX-AUTO-${signal.strategy} (${signal.confidence.toFixed(0)}%)`,
       }),
     });
     const data = await res.json();
@@ -53,7 +60,7 @@ async function executeSignal(signal: TradingSignal, isMt5Live: boolean, autoTrai
         lotSize: signal.lotSize,
         stopLoss: signal.stopLoss,
         takeProfit: signal.takeProfit,
-        strategy: signal.strategy,
+        ...aiMeta,
         // TS-02: Pass trailingStop from server config
         trailingStop,
       }),

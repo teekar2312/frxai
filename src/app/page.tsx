@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import { Menu, TrendingUp, Wifi, WifiOff, Globe, CircleDot, Cable, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -107,6 +108,12 @@ export default function TradingDashboard() {
         });
       }
       // FNH-005: Only set connected=true when real data, show simulation mode otherwise
+      // Show toast for alerts triggered during price tick
+      if (data.triggeredAlerts?.length > 0) {
+        for (const ta of data.triggeredAlerts) {
+          toast.success(`🔔 ${ta.pair} ${ta.condition.replace('_', ' ')} ${ta.targetPrice}`);
+        }
+      }
       const sim = !!data.simulated;
       setIsSimulated(sim);
       setConnected(!sim || isMt5Live);

@@ -45,11 +45,14 @@ export interface PriceAlert {
   pair: ForexPair;
   condition: 'above' | 'below' | 'crosses_above' | 'crosses_below';
   targetPrice: number;
+  currentPrice?: number | null;
   isActive: boolean;
   isTriggered: boolean;
   triggeredAt: string | null;
+  note?: string | null;
   emailNotify: boolean;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface TradingConfig {

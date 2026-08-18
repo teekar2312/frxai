@@ -81,7 +81,7 @@ function sendPriceAlertHtml(pair: string, condition: string, targetPrice: number
     crosses_above: 'Menyeberang Ke Atas', crosses_below: 'Menyeberang Ke Bawah',
   };
   return emailBaseHtml(`
-    <p style="color:#a1a1aa;font-size:14px;margin:0 0 16px;">Price alert terpicau</p>
+    <p style="color:#a1a1aa;font-size:14px;margin:0 0 16px;">Price alert terpicu</p>
     <div style="background:#27272a;border-radius:8px;padding:16px;margin-bottom:16px;">
       <p style="color:#f4f4f5;font-size:18px;font-weight:600;margin:0 0 4px;">${pair}</p>
       <p style="color:#10b981;font-size:14px;margin:0;">${condLabel[condition] || condition} ${targetPrice}</p>

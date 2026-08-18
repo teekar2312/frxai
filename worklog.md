@@ -1833,3 +1833,75 @@ Files Modified (13):
 - src/app/error.tsx (LOW: server-side error reporting)
 
 Verification: ESLint 0 errors (174 pre-existing warnings), dev server compiled clean, browser verified no runtime errors
+
+---
+Task ID: ALERT-AUDIT
+Agent: Main Orchestrator
+Task: Deep audit and fix Price Alert (Alert Harga) integration
+
+Work Log:
+- Launched comprehensive audit agent (opus) that read 11 files and traced the full data flow
+- Audit found 28 issues: 2 CRITICAL, 5 HIGH, 11 MEDIUM, 8 LOW
+- Fixed all 28 issues across 8 files (1 new file created)
+
+Stage Summary:
+
+CRITICAL FIXES (2):
+1. Created src/lib/alert-checker.ts — Extracted alert checking logic from GET /api/alerts into standalone function.
+   Now called from finnhub route on every price tick (every 5s globally), so alerts work
+   regardless of which tab the user is viewing.
+2. page.tsx — Added toast notification when triggeredAlerts returned from finnhub response,
+   so users see alerts trigger even when not on the Price Alerts tab.
+
+HIGH FIXES (5):
+3. alerts/route.ts — Runtime validation: typeof targetPrice !== 'number' || !isFinite(targetPrice) || targetPrice <= 0
+4. alert-checker.ts — crosses_above/crosses_below returns false when previousPrice is undefined
+   (prevents false trigger if price is already past target on first check)
+5. PriceAlertsPanel.tsx — All API handlers (create/toggle/delete) now show error toasts
+6. PriceAlertsPanel.tsx — (compounds #1) Removed panel-only polling; alert data refreshed
+   via global price tick notification instead
+7. PriceAlertsPanel.tsx — (compounds #1) Added triggeredAlerts useEffect with toast notifications
+
+
+MEDIUM FIXES (11):
+8. alert-checker.ts — Atomic updateMany({where: {id, isTriggered: false}}) prevents duplicate emails on race conditions
+9. alert-checker.ts — Email failures now logged (await + catch with safeLog)
+10. alerts/route.ts — Duplicate alert prevention: 409 if same pair+condition+targetPrice+active exists
+11. alerts/route.ts — validateAuth for all mutation methods, validate targetPrice in PUT
+12. alerts/route.ts — resetTriggered only works when alert isTriggered=true, resets currentPrice for fresh cross
+13. alerts/route.ts — DELETE supports ?clearTriggered=true to bulk-clear triggered history
+14. PriceAlertsPanel.tsx — Added Note (Textarea) field in create dialog
+15. shared.ts — PriceAlert type now includes currentPrice?, note?, updatedAt?
+16. PriceAlertsPanel.tsx — Shows current live price with 'Pakai harga saat ini' quick-fill button
+17. PriceAlertsPanel.tsx — Alerts show visual distinction: paused alerts at opacity-50
+18. PriceAlertsPanel.tsx — Clear history button with XCircle icon
+19. PriceAlertsPanel.tsx — 'Bersihkan' button calls DELETE ?clearTriggered=true
+20. PriceAlertsPanel.tsx — Create button disabled when targetPrice <= 0 or pair invalid
+
+
+LOW FIXES (8):
+21. email-service.ts:84 — Fixed typo 'terpicau' → 'terpicu' in Indonesian email template
+22. alerts/route.ts — resetTriggered guarded: returns 400 if alert is not triggered
+23. alerts/route.ts — GET handler simplified (no checking — moved to alert-checker.ts)
+24. PriceAlertsPanel.tsx — Renamed 'triggeredAlerts' state to 'firedAlerts' to avoid naming confusion
+25. PriceAlertsPanel.tsx — Condition labels use CONDITION_LABELS constant for consistency
+26. PriceAlertsPanel.tsx — Note indicator icon shown on triggered alert history items
+27. PriceAlertsPanel.tsx — Active count badge shows only active (not all non-triggered)
+28. PriceAlertsPanel.tsx — Empty state shows Bell icon + descriptive text
+
+
+DATA FLOW FIX (BEFORE → AFTER):
+BEFORE: User must be on Price Alerts tab → GET /api/alerts (every 10s) → server checks → alerts trigger
+  AFTER: Global price poll (every 5s) → finnhub route → alert-checker.ts → alerts trigger →
+         response includes triggeredAlerts → page.tsx shows toast → any tab sees notification
+
+Files Modified (8):
+- src/lib/alert-checker.ts (NEW — extracted alert checking logic)
+- src/app/api/finnhub/route.ts (calls checkAllAlerts after refreshAllQuotes)
+- src/app/api/alerts/route.ts (rewritten: GET simplified, POST/PUT/DELETE enhanced validation)
+- src/components/trading/PriceAlertsPanel.tsx (rewritten: full UX overhaul)
+- src/components/trading/shared.ts (PriceAlert type extended)
+- src/lib/email-service.ts (typo fix)
+- src/app/page.tsx (global alert toast notification)
+
+Verification: ESLint 0 errors, dev server clean, browser verified no runtime errors

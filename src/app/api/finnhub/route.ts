@@ -10,6 +10,7 @@ import { fetchWithTimeout } from '@/lib/fetch-utils';
 import { generateSimulatedCandles } from '@/lib/sim-candles';
 import { logApiError } from '@/lib/safe-log';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
+import { checkAllAlerts } from '@/lib/alert-checker';
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 
@@ -91,6 +92,9 @@ export async function GET(request: NextRequest) {
     // Default: fetch all forex quotes via centralized cache (C-001)
     const { quotes, simulated } = await refreshAllQuotes();
 
+    // CRITICAL FIX: Check all price alerts on every price tick (not just when alerts tab is open)
+    const triggeredAlerts = await checkAllAlerts();
+
     // RB-003: Add Cache-Control header (quotes don't change faster than ~1s)
     return new NextResponse(
       JSON.stringify({
@@ -99,6 +103,7 @@ export async function GET(request: NextRequest) {
         simulated,
         cacheAgeMs: getCacheAge(),
         anySimulated: isAnySimulated(),
+        triggeredAlerts: triggeredAlerts.length > 0 ? triggeredAlerts : undefined,
       }),
       {
         status: 200,

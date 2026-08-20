@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Settings, RefreshCw, Cable, Shield, FileText, Info, Brain, CheckCircle2, XCircle, Mail } from 'lucide-react';
+import { Settings, RefreshCw, Shield, FileText, Info, Brain, CheckCircle2, XCircle, Mail, ShieldCheck } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -26,7 +26,7 @@ interface AiProviderInfo {
 }
 
 export function SettingsPanel() {
-  const { tradingMode, setServerConfig } = useTradingStore();
+  const { tradingMode, setServerConfig, userRole } = useTradingStore();
   const [config, setConfig] = useState<TradingConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
@@ -162,6 +162,57 @@ export function SettingsPanel() {
 
   return (
     <div className="space-y-4">
+      {/* Admin Panel (only for admin users) */}
+      {userRole === 'admin' && (
+        <Card className="bg-zinc-900 border-amber-500/30 p-4">
+          <CardHeader className="p-0 pb-3">
+            <CardTitle className="text-sm text-amber-400 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4" /> Panel Admin
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                <span className="text-xs font-medium text-amber-400">Mode Admin Aktif</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <FileText className="w-3.5 h-3.5 text-zinc-400" />
+                    <span className="text-xs font-medium text-white">Manajemen Pengguna</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 leading-relaxed">
+                    Kelola akun pengguna, atur peran (admin/user), dan pantau aktivitas login.
+                  </p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Settings className="w-3.5 h-3.5 text-zinc-400" />
+                    <span className="text-xs font-medium text-white">Konfigurasi Sistem</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 leading-relaxed">
+                    Konfigurasi global server, API keys, batas sistem, dan parameter operasional.
+                  </p>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Shield className="w-3.5 h-3.5 text-zinc-400" />
+                    <span className="text-xs font-medium text-white">Log Audit Sistem</span>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 leading-relaxed">
+                    Pantau seluruh aktivitas sistem, perubahan konfigurasi, dan jejak audit.
+                  </p>
+                </div>
+              </div>
+              <p className="text-[10px] text-zinc-600">
+                Endpoint API: /api/auth/register · Gunakan dengan hati-hati. Semua aksi dicatat.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* MT5 Integration */}
       <Mt5ConnectionPanel />
 

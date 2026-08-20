@@ -22,7 +22,7 @@ interface CandlestickChartProps {
   entryPrice?: number;
   stopLoss?: number;
   takeProfit?: number;
-  onTimeframeChange?: (tf: string) => void;
+  onTimeframeChange?: (_tf: string) => void;
 }
 
 const PAIR_COLORS: Record<string, string> = {

@@ -16,7 +16,7 @@ import {
   AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import {
-  type ForexPair, type TradingSignal, type StrategyName, type AiAnalysisResult,
+  type TradingSignal, type StrategyName, type AiAnalysisResult,
   FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS, MARKET_CONDITION_LABELS,
 } from '@/lib/trading-types';
 import { useTradingStore } from '@/lib/trading-store';

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { ForexPair, QuoteData, CandleData } from '@/lib/trading-types';
+import type { ForexPair, CandleData } from '@/lib/trading-types';
 import {
-  PAIR_TO_FINNHUB_SYMBOL, FOREX_PAIRS, PAIR_PIP_VALUES, FINEX_CONFIG,
-  SIMULATED_BASES, RESOLUTION_TO_SECONDS, VALID_FINNHUB_RESOLUTIONS,
+  PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, VALID_FINNHUB_RESOLUTIONS,
   toFinnhubResolution,
 } from '@/lib/trading-types';
-import { refreshAllQuotes, getCachedQuote, isAnySimulated, getCacheAge } from '@/lib/price-cache';
+import { refreshAllQuotes, isAnySimulated, getCacheAge } from '@/lib/price-cache';
 import { fetchWithTimeout } from '@/lib/fetch-utils';
 import { generateSimulatedCandles } from '@/lib/sim-candles';
 import { logApiError } from '@/lib/safe-log';

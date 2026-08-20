@@ -2,7 +2,7 @@
 
 import {
   LayoutDashboard, Brain, Zap, Activity, Shield, Bell,
-  History, FileText, Settings, TrendingUp, TrendingDown,
+  History, FileText, Settings, TrendingUp,
   BarChart3, CalendarDays, ListTodo, Users, Share2, Eye,
 } from 'lucide-react';
 import type { ForexPair, StrategyName, TradingDirection } from '@/lib/trading-types';
@@ -103,22 +103,22 @@ export interface EquityPoint {
 // ============================================================
 
 export const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, emoji: '📊' },
-  { id: 'chart', label: 'Charts', icon: TrendingUp, emoji: '📈' },
-  { id: 'ai-analysis', label: 'AI Analysis', icon: Brain, emoji: '🤖' },
-  { id: 'trading-signals', label: 'Trading Signals', icon: Zap, emoji: '⚡' },
-  { id: 'live-trading', label: 'Live Trading', icon: Activity, emoji: '💹' },
-  { id: 'pending-orders', label: 'Pending Orders', icon: ListTodo, emoji: '📋' },
-  { id: 'risk-management', label: 'Risk Management', icon: Shield, emoji: '🛡️' },
-  { id: 'price-alerts', label: 'Price Alerts', icon: Bell, emoji: '🔔' },
-  { id: 'economic-calendar', label: 'Economic Calendar', icon: CalendarDays, emoji: '📅' },
-  { id: 'trade-analytics', label: 'Analytics', icon: BarChart3, emoji: '📊' },
-  { id: 'backtesting', label: 'Backtesting', icon: History, emoji: '⏪' },
-  { id: 'correlation', label: 'Correlation', icon: Share2, emoji: '🔗' },
-  { id: 'watchlist', label: 'Watchlist', icon: Eye, emoji: '👁️' },
-  { id: 'signal-sharing', label: 'Community', icon: Users, emoji: '👥' },
-  { id: 'activity-log', label: 'Activity Log', icon: FileText, emoji: '📝' },
-  { id: 'settings', label: 'Settings', icon: Settings, emoji: '⚙️' },
+  { id: 'dashboard', label: 'Dashboard', labelKey: 'nav.dashboard', icon: LayoutDashboard, emoji: '📊' },
+  { id: 'chart', label: 'Charts', labelKey: 'nav.charts', icon: TrendingUp, emoji: '📈' },
+  { id: 'ai-analysis', label: 'AI Analysis', labelKey: 'nav.aiAnalysis', icon: Brain, emoji: '🤖' },
+  { id: 'trading-signals', label: 'Trading Signals', labelKey: 'nav.tradingSignals', icon: Zap, emoji: '⚡' },
+  { id: 'live-trading', label: 'Live Trading', labelKey: 'nav.liveTrading', icon: Activity, emoji: '💹' },
+  { id: 'pending-orders', label: 'Pending Orders', labelKey: 'nav.pendingOrders', icon: ListTodo, emoji: '📋' },
+  { id: 'risk-management', label: 'Risk Management', labelKey: 'nav.riskManagement', icon: Shield, emoji: '🛡️' },
+  { id: 'price-alerts', label: 'Price Alerts', labelKey: 'nav.priceAlerts', icon: Bell, emoji: '🔔' },
+  { id: 'economic-calendar', label: 'Economic Calendar', labelKey: 'nav.economicCalendar', icon: CalendarDays, emoji: '📅' },
+  { id: 'trade-analytics', label: 'Analytics', labelKey: 'nav.analytics', icon: BarChart3, emoji: '📊' },
+  { id: 'backtesting', label: 'Backtesting', labelKey: 'nav.backtesting', icon: History, emoji: '⏪' },
+  { id: 'correlation', label: 'Correlation', labelKey: 'nav.correlation', icon: Share2, emoji: '🔗' },
+  { id: 'watchlist', label: 'Watchlist', labelKey: 'nav.watchlist', icon: Eye, emoji: '👁️' },
+  { id: 'signal-sharing', label: 'Community', labelKey: 'nav.community', icon: Users, emoji: '👥' },
+  { id: 'activity-log', label: 'Activity Log', labelKey: 'nav.activityLog', icon: FileText, emoji: '📝' },
+  { id: 'settings', label: 'Settings', labelKey: 'nav.settings', icon: Settings, emoji: '⚙️' },
 ] as const;
 
 // Strategy descriptions for reference

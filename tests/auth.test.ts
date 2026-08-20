@@ -16,7 +16,6 @@ vi.mock('bcryptjs', () => ({
   },
 }));
 
-import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
 
 // We test the auth logic patterns rather than the full NextAuth integration

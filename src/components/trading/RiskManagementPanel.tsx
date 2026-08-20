@@ -2,8 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
-import { Shield, Crosshair, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
-import { Skeleton } from '@/components/ui/skeleton';
+import { Shield, Crosshair, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -25,10 +24,10 @@ import { useTradingStore } from '@/lib/trading-store';
 import { type Position } from './shared';
 
 export function RiskManagementPanel() {
-  const { accountBalance, todayRiskUsed } = useTradingStore();
+  const { accountBalance: _accountBalance, todayRiskUsed } = useTradingStore();
 
   const [positions, setPositions] = useState<Position[]>([]);
-  const [positionsLoading, setPositionsLoading] = useState(true);
+  const [_positionsLoading, setPositionsLoading] = useState(true);
   const [riskCalc, setRiskCalc] = useState<RiskCalculation | null>(null);
   const [riskForm, setRiskForm] = useState({ accountBalance: 10000, pair: 'EURUSD' as ForexPair, stopLossPips: 10, riskPerTrade: 1 });
   const [fetchedConfig, setFetchedConfig] = useState<TradingConfig | null>(null);

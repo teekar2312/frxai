@@ -55,8 +55,10 @@ export async function POST(request: NextRequest) {
       stopLossPips,
       riskPerTrade,
       dailyRiskLimit,
-      currentPositions = 0,
-      todayRiskUsed = 0,
+      currentPositions: _currentPositions = 0,
+      todayRiskUsed: _todayRiskUsed = 0,
+      aiConfidence,
+      riskLevel,
     } = body as {
       accountBalance: number;
       pair: ForexPair;
@@ -65,6 +67,8 @@ export async function POST(request: NextRequest) {
       dailyRiskLimit?: number;
       currentPositions?: number;
       todayRiskUsed?: number;
+      aiConfidence?: number;
+      riskLevel?: 'low' | 'medium' | 'high';
     };
 
     // RISK-01/02/03: Use server-side values instead of client-provided
@@ -111,8 +115,10 @@ export async function POST(request: NextRequest) {
     // Remaining daily risk
     const remainingDailyRisk = Math.max(0, (finalDailyLimit / 100) * finalBalance - finalTodayRisk);
 
-    // Check if daily risk limit would be exceeded
-    const canTrade = remainingDailyRisk >= riskAmount;
+    // AI confidence-based lot size scaling
+    let confidenceFactor = 1.0;
+    const aiAdjusted = aiConfidence !== undefined || riskLevel !== undefined;
+    let canTrade = remainingDailyRisk >= riskAmount;
 
     // Lot size calculation based on FINEX Indonesia specs
     // Formula: Risk Amount / (Stop Loss Pips * Pip Value per Standard Lot)
@@ -122,21 +128,38 @@ export async function POST(request: NextRequest) {
     // Apply FINEX constraints
     lotSize = Math.max(FINEX_CONFIG.minLot, lotSize);
     lotSize = Math.min(FINEX_CONFIG.maxLotPerOrder, lotSize);
+
+    if (aiConfidence !== undefined) {
+      if (aiConfidence < 0.6) {
+        confidenceFactor = 0;
+        canTrade = false;
+      } else if (aiConfidence < 0.7) {
+        confidenceFactor = 0.5;
+      } else if (aiConfidence < 0.8) {
+        confidenceFactor = 0.75;
+      } else if (aiConfidence < 0.9) {
+        confidenceFactor = 0.9;
+      } else {
+        confidenceFactor = 1.0;
+      }
+    }
+
+    // Apply confidence factor to lot size
+    if (confidenceFactor === 0) {
+      lotSize = FINEX_CONFIG.minLot;
+    } else {
+      lotSize = lotSize * confidenceFactor;
+      lotSize = Math.max(FINEX_CONFIG.minLot, lotSize);
+      lotSize = Math.min(FINEX_CONFIG.maxLotPerOrder, lotSize);
+    }
     // Round to 2 decimal places
     lotSize = parseFloat(lotSize.toFixed(2));
 
-    // Actual pip value for the calculated lot size
+    // Recalculate pip value and potential loss/profit with adjusted lot size
     const pipValue = pipConfig.standard * lotSize;
-
-    // Potential loss = Stop Loss Pips * Pip Value
     const potentialLoss = stopLossPips * pipValue;
-
-    // Suggested take profit based on risk:reward ratio
-    // R-01: Use serverConfig.riskRewardRatio instead of hardcoded 1.5
     const suggestedTPPips = Math.round(stopLossPips * serverConfig.riskRewardRatio);
     const potentialProfit = suggestedTPPips * pipValue;
-
-    // Risk:Reward ratio
     const riskRewardRatio = potentialLoss > 0 ? potentialProfit / potentialLoss : 0;
 
     // R-03/RISK-003: Fix margin formula — use correct contract size per pair
@@ -180,10 +203,16 @@ export async function POST(request: NextRequest) {
       stopOutLevel: serverConfig.stopOutLevel,
       pipSize: pipConfig.pipSize,
       warnings: [] as string[],
+      aiRiskAdjustment: aiAdjusted ? {
+        confidenceFactor,
+        riskLevel: riskLevel ?? null,
+      } : null,
     };
 
     // Generate warnings
-    if (!canTrade) {
+    if (!canTrade && aiConfidence !== undefined && aiConfidence < 0.6) {
+      extras.warnings.push(`AI confidence too low (${aiConfidence}) — trading not recommended`);
+    } else if (!canTrade) {
       extras.warnings.push(`Daily risk limit: only $${remainingDailyRisk.toFixed(2)} remaining`);
     }
     if (marginPct > 50) {
@@ -198,11 +227,20 @@ export async function POST(request: NextRequest) {
     if (lotSize === FINEX_CONFIG.minLot && riskAmount > stopLossPips * pipConfig.standard * FINEX_CONFIG.minLot) {
       extras.warnings.push(`Lot size at minimum (${FINEX_CONFIG.minLot}) - risk reduced from ${finalRiskPct}%`);
     }
+    // AI risk level warnings
+    if (riskLevel === 'high') {
+      extras.warnings.push('⚠️ AI menilai risiko tinggi — pertimbangkan untuk mengurangi ukuran posisi');
+    } else if (riskLevel === 'medium') {
+      extras.warnings.push('ℹ️ AI menilai risiko sedang — gunakan manajemen risiko ketat');
+    }
 
     return NextResponse.json({
       success: true,
       risk: result,
       details: extras,
+      aiAdjusted,
+      aiConfidenceUsed: aiConfidence ?? null,
+      riskLevelUsed: riskLevel ?? null,
     });
   } catch (error) {
     // S-8E-01: Replace console.error with logApiError

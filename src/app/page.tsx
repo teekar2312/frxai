@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
 import { Menu, TrendingUp, Wifi, WifiOff, Globe, CircleDot, Cable, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -10,9 +10,10 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet';
-import { FOREX_PAIRS, type QuoteData } from '@/lib/trading-types';
+import { FOREX_PAIRS, type QuoteData, type ForexPair } from '@/lib/trading-types';
 import { useTradingStore } from '@/lib/trading-store';
 import { safeLog } from '@/lib/safe-log';
+import { t, initI18n } from '@/lib/i18n';
 import { SidebarContent } from '@/components/trading/Sidebar';
 import { DashboardPanel } from '@/components/trading/DashboardPanel';
 import { ChartPanel } from '@/components/trading/ChartPanel';
@@ -38,11 +39,14 @@ export default function TradingDashboard() {
   const [connected, setConnected] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
-  const [priceSourceWarning, setPriceSourceWarning] = useState(false);
+  const [_priceSourceWarning, _setPriceSourceWarning] = useState(false);
   const [isSimulated, setIsSimulated] = useState(true);
-  const [newsSimulated, setNewsSimulated] = useState(true);
+  const [_newsSimulated, setNewsSimulated] = useState(true);
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
   const [isVisible, setIsVisible] = useState(true);
+
+  // Initialize i18n on mount
+  useEffect(() => { initI18n(); }, []);
 
   // Track tab visibility
   useEffect(() => {
@@ -128,6 +132,104 @@ export default function TradingDashboard() {
     return () => clearInterval(interval);
   }, [fetchPrices, isVisible]);
 
+  // WebSocket auto-reconnect for real-time prices
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 1000;
+    const MAX_BACKOFF = 30000;
+    let mounted = true;
+    let intentionalClose = false;
+
+    const connect = () => {
+      if (!mounted || intentionalClose) return;
+
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/?XTransformPort=3005`;
+        ws = new WebSocket(wsUrl);
+
+        const connectionTimeout = setTimeout(() => {
+          if (ws && ws.readyState === WebSocket.CONNECTING) {
+            ws.close();
+            fallbackToPolling();
+          }
+        }, 3000);
+
+        ws.onopen = () => {
+          clearTimeout(connectionTimeout);
+          if (!mounted) return;
+          backoffMs = 1000; // Reset backoff
+          setConnected(true);
+          setIsSimulated(false);
+          safeLog({ level: 'info', route: 'WS', message: 'WebSocket connected to price service' });
+        };
+
+        ws.onmessage = (event) => {
+          if (!mounted) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'price' && data.pair && data.bid && data.ask) {
+              const pair = data.pair as ForexPair;
+              if (!FOREX_PAIRS.includes(pair)) return;
+              const mid = (data.bid + data.ask) / 2;
+              const spread = data.ask - data.bid;
+              const pipSize = pair === 'USDJPY' || pair === 'XAUUSD' ? 0.01 : 0.0001;
+              const spreadPips = spread / pipSize;
+              const prev = useTradingStore.getState().quotes[pair];
+              const change = prev ? mid - prev.mid : 0;
+              const changePercent = prev?.mid ? (change / prev.mid) * 100 : 0;
+              setQuote(pair, {
+                pair, bid: data.bid, ask: data.ask, mid, spread: spreadPips,
+                change, changePercent,
+                high: Math.max(prev?.high ?? mid, mid),
+                low: Math.min(prev?.low ?? mid, mid),
+                timestamp: data.timestamp || Date.now(),
+              });
+            }
+          } catch { /* ignore parse errors */ }
+        };
+
+        ws.onclose = () => {
+          clearTimeout(connectionTimeout);
+          if (!mounted || intentionalClose) return;
+          safeLog({ level: 'info', route: 'WS', message: `WebSocket disconnected, reconnecting in ${backoffMs}ms` });
+          scheduleReconnect();
+        };
+
+        ws.onerror = () => {
+          clearTimeout(connectionTimeout);
+          if (!mounted || intentionalClose) return;
+        };
+      } catch {
+        if (!mounted) return;
+        fallbackToPolling();
+      }
+    };
+
+    const fallbackToPolling = () => {
+      safeLog({ level: 'info', route: 'WS', message: 'WebSocket unavailable, using HTTP polling fallback' });
+    };
+
+    const scheduleReconnect = () => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (!mounted) return;
+        connect();
+      }, backoffMs);
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF);
+    };
+
+    connect();
+
+    return () => {
+      mounted = false;
+      intentionalClose = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) ws.close();
+    };
+  }, [setQuote]);
+
   // Fetch news every 120 seconds
   const fetchNews = useCallback(async () => {
     try {
@@ -187,20 +289,20 @@ export default function TradingDashboard() {
                 <WifiOff className="w-3 h-3 text-rose-400" />
               )}
               <span className={connected ? 'text-emerald-400' : 'text-rose-400'}>
-                {connected ? 'Connected' : 'Disconnected'}
+                {connected ? t('status.connected') : t('status.disconnected')}
               </span>
             </div>
             <div className="flex items-center gap-1.5">
               <CircleDot className={`w-3 h-3 ${isAutoTrading ? 'text-emerald-400' : 'text-zinc-500'}`} />
               <span className={isAutoTrading ? 'text-emerald-400' : 'text-zinc-500'}>
-                Auto: {isAutoTrading ? 'ON' : 'OFF'}
+                {t(isAutoTrading ? 'status.autoOn' : 'status.autoOff')}
               </span>
             </div>
             {tradingMode === 'mt5_live' && (
               <div className="flex items-center gap-1.5">
                 <Cable className={`w-3 h-3 ${mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/50'}`} />
                 <span className={mt5ConnectionStatus === 'connected' ? 'text-amber-400' : 'text-amber-400/70'}>
-                  MT5 {mt5ConnectionStatus === 'connected' ? 'LIVE' : '...'}
+                  {mt5ConnectionStatus === 'connected' ? t('status.mt5Live') : t('status.mt5Standby')}
                 </span>
               </div>
             )}
@@ -217,21 +319,21 @@ export default function TradingDashboard() {
 
         {/* Risk Disclosure Banner (REG-003) */}
         <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 text-[10px] text-amber-400/80 text-center">
-          ⚠️ Perdagangan berjangka memiliki risiko tinggi. Anda dapat mengalami kerugian melebihi investasi awal. Pastikan Anda memahami risiko sebelum bertransaksi.
+          {t('risk.banner')}
         </div>
 
         {/* Simulation Mode Banner (FNH-005) */}
         {isSimulated && !isMt5Live && (
           <div className="bg-rose-500/10 border-b border-rose-500/20 px-3 py-1.5 text-[10px] text-rose-400/90 text-center flex items-center justify-center gap-1.5">
             <AlertTriangle className="w-3 h-3" />
-            MODE SIMULASI — Harga dan data bukan data pasar nyata. Untuk data live, konfigurasi FINNHUB_API_KEY.
+            {t('risk.simulation')}
           </div>
         )}
 
         {/* MT5 Price Fallback Warning (P-03) */}
         {priceSourceWarning && (
           <div className="bg-amber-500/10 border-b border-amber-500/20 px-3 py-1.5 text-[10px] text-amber-400/80 text-center">
-            ⚠️ Sumber harga MT5 tidak tersedia, menggunakan data cadangan
+            {t('risk.mt5Fallback')}
           </div>
         )}
 
@@ -286,13 +388,13 @@ export default function TradingDashboard() {
                 <div className="flex items-center gap-2">
                   <span className="font-medium">FINEX Indonesia</span>
                   <Separator orientation="vertical" className="h-3 bg-zinc-700" />
-                  <span>Diawasi BAPPEBTI</span>
+                  <span>{t('footer.regulated')}</span>
                   <Separator orientation="vertical" className="h-3 bg-zinc-700" />
-                  <span>Dana klien disegregasi</span>
+                  <span>{t('footer.segregated')}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className={`w-1.5 h-1.5 rounded-full ${connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />
-                  <span>{connected ? 'Connected' : 'Disconnected'}</span>
+                  <span>{connected ? t('status.connected') : t('status.disconnected')}</span>
                   {tradingMode === 'mt5_live' && (
                     <>
                       <Separator orientation="vertical" className="h-3 bg-zinc-700" />
@@ -303,7 +405,7 @@ export default function TradingDashboard() {
                 </div>
               </div>
               <div className="text-[9px] text-zinc-600 mt-0.5">
-                Dana klien disimpan terpisah pada bank penampung yang diawasi BAPPEBTI · © {new Date().getFullYear()} FINEX Indonesia
+                {t('footer.disclaimer')} · © {new Date().getFullYear()} FINEX Indonesia
               </div>
             </footer>
           </main>

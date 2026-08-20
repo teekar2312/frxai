@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 // Test API authentication patterns
 vi.mock('@/lib/api-auth', () => ({
@@ -34,26 +34,22 @@ describe('API Protection', () => {
 
   describe('Middleware Public Paths', () => {
     it('should allow /api/auth without authentication', () => {
-      const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
       const isAuth = '/api/auth/callback/credentials'.startsWith('/api/auth');
       expect(isAuth).toBe(true);
     });
 
     it('should allow /api/health without authentication', () => {
-      const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
-      const isHealth = PUBLIC_PATHS.some(p => '/api/health'.startsWith(p));
+      const isHealth = ['/api/auth', '/api/health', '/login'].some(p => '/api/health'.startsWith(p));
       expect(isHealth).toBe(true);
     });
 
     it('should require auth for /api/positions', () => {
-      const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
-      const isPublic = PUBLIC_PATHS.some(p => '/api/positions'.startsWith(p));
+      const isPublic = ['/api/auth', '/api/health', '/login'].some(p => '/api/positions'.startsWith(p));
       expect(isPublic).toBe(false);
     });
 
     it('should require auth for /api/mt5/account', () => {
-      const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
-      const isPublic = PUBLIC_PATHS.some(p => '/api/mt5/account'.startsWith(p));
+      const isPublic = ['/api/auth', '/api/health', '/login'].some(p => '/api/mt5/account'.startsWith(p));
       expect(isPublic).toBe(false);
     });
   });

@@ -25,7 +25,7 @@ export function DashboardPanel() {
   const {
     selectedPair, setSelectedPair,
     quotes, news, aiAnalysis, marketConditions,
-    accountBalance, openPositionsCount, dailyPnl, todayRiskUsed, setTodayRiskUsed,
+    accountBalance, openPositionsCount: _openPositionsCount, dailyPnl, todayRiskUsed, setTodayRiskUsed,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
     serverConfig, setActiveTab,
   } = useTradingStore();

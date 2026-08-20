@@ -142,7 +142,7 @@ export async function POST(request: NextRequest) {
 
     const currentPrice = closes[closes.length - 1];
     const prevPrice = closes.length > 1 ? closes[closes.length - 2] : currentPrice;
-    const priceChange = currentPrice - prevPrice;
+    const _priceChange = currentPrice - prevPrice;
 
     // Build comprehensive result
     const result: Record<string, unknown> = {

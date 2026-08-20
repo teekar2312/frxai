@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     // H-4: Validate status query param
     const status = searchParams.get('status');
     const VALID_STATUSES = ['open', 'closed', 'cancelled'] as const;
-    let where: Record<string, string> = {};
+    const where: Record<string, string> = {};
     if (status) {
       if (!VALID_STATUSES.includes(status as typeof VALID_STATUSES[number])) {
         return NextResponse.json({ error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` }, { status: 400 });
@@ -312,7 +312,7 @@ async function checkMarginCall() {
     // Calculate total margin used (simplified: notional / leverage)
     let totalMarginUsed = 0;
     for (const pos of openPositions) {
-      const pipCfg = PAIR_PIP_VALUES[pos.pair as ForexPair] || { pipSize: 0.0001 };
+      const _pipCfg = PAIR_PIP_VALUES[pos.pair as ForexPair] || { pipSize: 0.0001 };
       const exchangeRate = pos.pair === 'USDJPY' ? (pos.currentPrice || pos.entryPrice) : 1;
       // RISK-003: XAUUSD contract size is 100 oz, not 100,000
       const contractSize = pos.pair === 'XAUUSD' ? 100 : 100000;

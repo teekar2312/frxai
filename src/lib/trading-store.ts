@@ -11,35 +11,35 @@ export type TradingSessionId = 'Sydney' | 'Tokyo' | 'London' | 'New York' | 'all
 interface TradingStore {
   // Active tab
   activeTab: string;
-  setActiveTab: (tab: string) => void;
+  setActiveTab: (_tab: string) => void;
 
   // Selected pair
   selectedPair: ForexPair;
-  setSelectedPair: (pair: ForexPair) => void;
+  setSelectedPair: (_pair: ForexPair) => void;
 
   // Live quotes
   quotes: Record<ForexPair, QuoteData | null>;
-  setQuote: (pair: ForexPair, quote: QuoteData) => void;
+  setQuote: (_pair: ForexPair, _quote: QuoteData) => void;
 
   // News
   news: NewsArticle[];
-  setNews: (news: NewsArticle[]) => void;
+  setNews: (_news: NewsArticle[]) => void;
 
   // AI Analysis
   aiAnalysis: Record<ForexPair, AiAnalysisResult | null>;
-  setAiAnalysis: (pair: ForexPair, analysis: AiAnalysisResult) => void;
+  setAiAnalysis: (_pair: ForexPair, _analysis: AiAnalysisResult) => void;
 
   // Trading signals
   signals: TradingSignal[];
-  setSignals: (signals: TradingSignal[]) => void;
+  setSignals: (_signals: TradingSignal[]) => void;
 
   // Market condition
   marketConditions: Record<ForexPair, MarketCondition>;
-  setMarketCondition: (pair: ForexPair, condition: MarketCondition) => void;
+  setMarketCondition: (_pair: ForexPair, _condition: MarketCondition) => void;
 
   // Auto trading
   isAutoTrading: boolean;
-  setAutoTrading: (enabled: boolean) => void;
+  setAutoTrading: (_enabled: boolean) => void;
   toggleAutoTrading: () => void;
 
   // Server-side trading config (synced from /api/config)
@@ -56,48 +56,52 @@ interface TradingStore {
     aiProvider: string;
     aiModel: string;
   } | null;
-  setServerConfig: (config: { autoTrading: boolean; avoidNewsTrading: boolean; maxOpenPositions: number; dailyTargetMax: number; accountBalance: number; leverage: number; trailingStopPips: number; autoTrailingStop: boolean; aiProvider: string; aiModel: string }) => void;
+  setServerConfig: (_config: { autoTrading: boolean; avoidNewsTrading: boolean; maxOpenPositions: number; dailyTargetMax: number; accountBalance: number; leverage: number; trailingStopPips: number; autoTrailingStop: boolean; aiProvider: string; aiModel: string }) => void;
 
   // Account balance
   accountBalance: number;
-  setAccountBalance: (balance: number) => void;
+  setAccountBalance: (_balance: number) => void;
 
   // Activity logs
   logs: { id: string; level: string; category: string; message: string; timestamp: string }[];
-  addLog: (log: { id: string; level: string; category: string; message: string; timestamp: string }) => void;
+  addLog: (_log: { id: string; level: string; category: string; message: string; timestamp: string }) => void;
   clearLogs: () => void;
 
   // Loading states
   isLoading: Record<string, boolean>;
-  setLoading: (key: string, loading: boolean) => void;
+  setLoading: (_key: string, _loading: boolean) => void;
 
   // Open positions count
   openPositionsCount: number;
-  setOpenPositionsCount: (count: number) => void;
+  setOpenPositionsCount: (_count: number) => void;
 
   // Daily PnL
   dailyPnl: number;
-  setDailyPnl: (pnl: number) => void;
+  setDailyPnl: (_pnl: number) => void;
 
   // Today's risk used
   todayRiskUsed: number;
-  setTodayRiskUsed: (risk: number) => void;
+  setTodayRiskUsed: (_risk: number) => void;
 
   // MT5 Integration
   tradingMode: TradingMode;
-  setTradingMode: (mode: TradingMode) => void;
+  setTradingMode: (_mode: TradingMode) => void;
   mt5ConnectionStatus: Mt5ConnectionStatus;
-  setMt5ConnectionStatus: (status: Mt5ConnectionStatus) => void;
+  setMt5ConnectionStatus: (_status: Mt5ConnectionStatus) => void;
   mt5AccountInfo: Mt5AccountInfo | null;
-  setMt5AccountInfo: (info: Mt5AccountInfo | null) => void;
+  setMt5AccountInfo: (_info: Mt5AccountInfo | null) => void;
   mt5Positions: Mt5Position[];
-  setMt5Positions: (positions: Mt5Position[]) => void;
+  setMt5Positions: (_positions: Mt5Position[]) => void;
 
   // Timeframe & Session selection
   selectedTimeframe: TimeframeId;
-  setSelectedTimeframe: (tf: TimeframeId) => void;
+  setSelectedTimeframe: (_tf: TimeframeId) => void;
   selectedSession: TradingSessionId;
-  setSelectedSession: (session: TradingSessionId) => void;
+  setSelectedSession: (_session: TradingSessionId) => void;
+
+  // User role (NOT persisted — comes from server auth)
+  userRole: 'admin' | 'user';
+  setUserRole: (_role: 'admin' | 'user') => void;
 }
 
 export const useTradingStore = create<TradingStore>()(
@@ -198,6 +202,10 @@ export const useTradingStore = create<TradingStore>()(
       setSelectedTimeframe: (tf) => set({ selectedTimeframe: tf }),
       selectedSession: 'all' as TradingSessionId,
       setSelectedSession: (session) => set({ selectedSession: session }),
+
+      // User role (NOT persisted — comes from server auth)
+      userRole: 'user' as const,
+      setUserRole: (role) => set({ userRole: role }),
     }),
     {
       name: 'frxai-trading-store',

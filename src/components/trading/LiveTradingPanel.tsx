@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { Plus, Square, LineChart, Cable, Loader2, Brain } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -31,7 +31,7 @@ import {
   FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS,
 } from '@/lib/trading-types';
 import { useTradingStore } from '@/lib/trading-store';
-import { type Position, type EquityPoint, type TradingConfig, fmtPrice } from './shared';
+import { type Position, type EquityPoint, fmtPrice } from './shared';
 
 export function LiveTradingPanel() {
   const {

@@ -46,7 +46,7 @@ interface PendingCommand {
   data: Record<string, unknown>;
   createdAt: number;
   timeoutAt: number;
-  resolve?: (value: unknown) => void;
+  resolve?: (_value: unknown) => void;
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -67,10 +67,10 @@ let eaConnectionMethod: "ws" | "http" | null = null;
 let mt5Ws: ServerWebSocket | null = null;
 let accountInfo: Mt5AccountInfo | null = null;
 let positions: Mt5Position[] = [];
-let prices: Record<string, { bid: number; ask: number; timestamp: number }> = {};
-let pendingRequests: Map<string, { resolve: (value: unknown) => void; timer: ReturnType<typeof setTimeout> }> = new Map();
+const prices: Record<string, { bid: number; ask: number; timestamp: number }> = {};
+const pendingRequests: Map<string, { resolve: (_value: unknown) => void; timer: ReturnType<typeof setTimeout> }> = new Map();
 let commandQueue: PendingCommand[] = [];
-let startTime = Date.now();
+const startTime = Date.now();
 let lastPing: number | null = null;
 let lastHttpSync: number | null = null;
 // Connection tracking
@@ -606,7 +606,7 @@ Bun.serve({
       }
     },
 
-    drain(ws: ServerWebSocket) {
+    drain(_ws: ServerWebSocket) {
       // Backpressure handled by Bun automatically
     },
   },

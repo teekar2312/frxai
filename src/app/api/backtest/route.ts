@@ -109,7 +109,7 @@ function generateSignal(
   switch (strategy) {
     case 'MA_RIBBON': {
       const ema5 = indicators.ema5 as number[];
-      const ema9 = indicators.ema9 as number[];
+      const _ema9 = indicators.ema9 as number[];
       const ema21 = indicators.ema21 as number[];
       const ema50 = indicators.ema50 as number[];
       if (!ema5 || !ema21 || !ema50) return { direction: null, strength: 0 };
@@ -237,7 +237,8 @@ function precomputeIndicators(candles: OHLCV[]): Record<string, unknown> {
 function runBacktestSimulation(
   candles: OHLCV[],
   config: BacktestConfig,
-  pipConfig: { standard: number; pipSize: number }
+  pipConfig: { standard: number; pipSize: number },
+  aiSuggestion: { confidence: number } | null = null,
 ): { trades: BacktestTrade[]; equityCurve: number[] } {
   const indicators = precomputeIndicators(candles);
   const atrValues = indicators.atr as number[];
@@ -248,7 +249,7 @@ function runBacktestSimulation(
   let tradeId = 0;
   const minLookback = 60; // Minimum candles before trading starts
   // FIX STRATEGY-006: Use config value instead of hardcoded 1
-  const maxOpenPositions = config.maxPositions || 1;
+  const _maxOpenPositions = config.maxPositions || 1;
   // RISK-008: Track daily risk for backtest circuit breaker
   const dailyRiskLimitAmount = config.initialBalance * (config.riskPerTrade * 3 / 100); // ~3x single-trade risk as daily limit
   const maxDrawdownPct = 30; // Stop backtest if 30% drawdown reached
@@ -338,13 +339,22 @@ function runBacktestSimulation(
         // FIX STRATEGY-005: Use user's takeProfitPips config instead of hardcoded 1.5x
         const tpPips = config.takeProfitPips || Math.round(slPips * 1.5);
         const riskAmount = balance * (config.riskPerTrade / 100);
-        const lotSize = Math.max(
+        let lotSize = Math.max(
           FINEX_CONFIG.minLot,
           Math.min(
             FINEX_CONFIG.maxLotPerOrder,
             parseFloat((riskAmount / (slPips * pipConfig.standard)).toFixed(2))
           )
         );
+
+        // AI-CORR-002: Adjust lot size based on AI confidence
+        if (aiSuggestion) {
+          if (aiSuggestion.confidence > 0.8) {
+            lotSize = Math.min(FINEX_CONFIG.maxLotPerOrder, parseFloat((lotSize * 1.1).toFixed(2)));
+          } else if (aiSuggestion.confidence < 0.6) {
+            lotSize = Math.max(FINEX_CONFIG.minLot, parseFloat((lotSize * 0.8).toFixed(2)));
+          }
+        }
 
         const entryPrice = candle.close;
         let stopLoss: number, takeProfit: number;
@@ -489,7 +499,30 @@ export async function POST(request: NextRequest) {
   }
   try {
     const body = await request.json();
-    const config = body as BacktestConfig;
+    let strategy = body.strategy as StrategyName;
+    const config = { ...body, strategy } as BacktestConfig;
+
+    // AI-CORR-001: Check for AI analysis to suggest default strategy
+    let aiSuggestion: { strategy: string; confidence: number; recommendation: string } | null = null;
+    try {
+      const cachedAnalysis = await db.aiAnalysis.findFirst({
+        where: { pair: config.pair, expiresAt: { gt: new Date() } },
+        orderBy: { createdAt: 'desc' },
+        select: { strategyUsed: true, confidence: true, recommendation: true },
+      });
+      if (cachedAnalysis && cachedAnalysis.strategyUsed) {
+        aiSuggestion = {
+          strategy: cachedAnalysis.strategyUsed,
+          confidence: cachedAnalysis.confidence,
+          recommendation: cachedAnalysis.recommendation,
+        };
+        // If no strategy specified by user, use AI suggestion
+        if (!body.strategy) {
+          strategy = cachedAnalysis.strategyUsed as StrategyName;
+          config.strategy = strategy;
+        }
+      }
+    } catch { /* non-critical */ }
 
     // M-3: Validate pair, strategy, and timeframe against allowed lists
     // API-AUDIT-029: FOREX_PAIRS is now imported statically at the top of file
@@ -570,7 +603,7 @@ export async function POST(request: NextRequest) {
     const pipConfig = PAIR_PIP_VALUES[config.pair] || { standard: 10, pipSize: 0.0001 };
 
     // Run the simulation
-    const { trades, equityCurve } = runBacktestSimulation(ohlcv, config, pipConfig);
+    const { trades, equityCurve } = runBacktestSimulation(ohlcv, config, pipConfig, aiSuggestion ? { confidence: aiSuggestion.confidence } : null);
 
     // Calculate statistics
     const stats = calculateBacktestStats(trades, equityCurve, config);
@@ -648,6 +681,13 @@ export async function POST(request: NextRequest) {
         aiStrategy: a.strategyUsed,
         date: a.createdAt.toISOString(),
       })),
+      aiCorrelation: aiSuggestion ? {
+        suggestedStrategy: aiSuggestion.strategy,
+        confidence: aiSuggestion.confidence,
+        recommendation: aiSuggestion.recommendation,
+        strategyUsed: strategy,
+        usedAiSuggestion: !body.strategy,
+      } : null,
     });
   } catch (error) {
     logApiError('Backtest', error);

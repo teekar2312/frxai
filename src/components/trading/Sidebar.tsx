@@ -1,9 +1,12 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { TrendingUp, ChevronRight, Cable } from 'lucide-react';
+import { TrendingUp, ChevronRight, Cable, Users, Settings, FileText } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { useTradingStore } from '@/lib/trading-store';
+import { t } from '@/lib/i18n';
 import { NAV_ITEMS } from './shared';
 
 export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
@@ -12,6 +15,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     accountBalance,
     dailyPnl, openPositionsCount,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
+    userRole,
   } = useTradingStore();
 
   // H2: Compute MT5-aware sidebar values
@@ -34,9 +38,16 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
             <TrendingUp className="w-5 h-5 text-white" />
           </div>
-          <div>
-            <h1 className="font-bold text-sm text-white">FINEX Indonesia</h1>
-            <p className="text-[10px] text-zinc-400">Platform Trading AI</p>
+          <div className="flex items-center gap-2">
+            <div>
+              <h1 className="font-bold text-sm text-white">FINEX Indonesia</h1>
+              <p className="text-[10px] text-zinc-400">Platform Trading AI</p>
+            </div>
+            {userRole === 'admin' && (
+              <Badge className="bg-amber-500/15 text-amber-400 border-amber-500/30 text-[9px] px-1.5 py-0 h-4">
+                Admin
+              </Badge>
+            )}
           </div>
         </div>
       </div>
@@ -93,11 +104,46 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
                 }`}
               >
                 <Icon className="w-4 h-4 shrink-0" />
-                <span className="truncate">{item.label}</span>
+                <span className="truncate">{t(item.labelKey)}</span>
                 {isActive && <ChevronRight className="w-3 h-3 ml-auto shrink-0" />}
               </button>
             );
           })}
+
+          {/* Admin-only nav items */}
+          {userRole === 'admin' && (
+            <>
+              <Separator className="my-2 bg-zinc-700/50" />
+              <div className="px-3 py-1">
+                <span className="text-[10px] font-medium text-zinc-500 uppercase tracking-wider">Admin</span>
+              </div>
+              {([
+                { id: 'admin-users', labelKey: 'admin.userManagement', icon: Users },
+                { id: 'admin-config', labelKey: 'admin.systemConfig', icon: Settings },
+                { id: 'admin-audit', labelKey: 'admin.auditLog', icon: FileText },
+              ] as const).map((item) => {
+                const Icon = item.icon;
+                const isActive = activeTab === 'settings';
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setActiveTab('settings');
+                      onNavigate?.();
+                    }}
+                    className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+                      isActive
+                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+                        : 'text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 border border-transparent'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{t(item.labelKey)}</span>
+                  </button>
+                );
+              })}
+            </>
+          )}
         </nav>
       </ScrollArea>
 

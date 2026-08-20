@@ -293,7 +293,7 @@ export function bollingerBands(data: number[], period: number = 20, stdDev: numb
   return { upper, middle, lower };
 }
 
-export function keltnerChannel(emaData: number[], atrValues: number[], emaPeriod: number = 20, multiplier: number = 1.5): { upper: number[]; middle: number[]; lower: number[] } {
+export function keltnerChannel(emaData: number[], atrValues: number[], _emaPeriod: number = 20, multiplier: number = 1.5): { upper: number[]; middle: number[]; lower: number[] } {
   return {
     upper: emaData.map((v, i) => isNaN(v) || isNaN(atrValues[i]) ? NaN : v + multiplier * atrValues[i]!),
     middle: emaData,

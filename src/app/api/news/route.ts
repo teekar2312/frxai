@@ -19,7 +19,7 @@ const DEFAULT_FILTER_ENTITIES = 'forex, EUR/USD, USD/JPY, GBP/USD, XAU/USD, Fede
 const DEFAULT_COUNTRIES = 'us,gb,eu,jp';
 
 // MTX-003: Pair-specific filters
-const PAIR_FILTER_MAP: Record<ForexPair, string[]> = {
+const _PAIR_FILTER_MAP: Record<ForexPair, string[]> = {
   EURUSD: ['EUR/USD', 'Euro', 'ECB', 'Eurozone'],
   USDJPY: ['USD/JPY', 'Yen', 'BOJ', 'Japan'],
   GBPUSD: ['GBP/USD', 'Pound', 'Sterling', 'BOE', 'Bank of England'],
@@ -285,20 +285,29 @@ export async function GET(request: NextRequest) {
  await fetchAndCacheNews(parseInt(searchParams.get('limit') || '20', 10));
 
     // AUDIT-AI-G2: Re-analyze recent news sentiment with AI for higher accuracy
-    const aiEnhancedLimit = 3;
+    const aiEnhancedLimit = 10;
     try {
       const recentItems = await db.newsItem.findMany({
         where: { publishedAt: { gte: cacheExpiry } },
         orderBy: { publishedAt: 'desc' },
         take: aiEnhancedLimit,
       });
-      for (const item of recentItems) {
-        if (item.impact === 'high' || item.impact === 'medium') {
-          const enhanced = await enhanceSentimentWithAI(item.title, item.description || '', item.sentiment || 'neutral');
-          if (enhanced !== item.sentiment) {
-            await db.newsItem.update({ where: { id: item.id }, data: { sentiment: enhanced } });
-          }
-        }
+      const highImpactItems = recentItems.filter(item => item.impact === 'high' || item.impact === 'medium');
+      const enhanceResults = await Promise.allSettled(
+        highImpactItems.map(item =>
+          enhanceSentimentWithAI(item.title, item.description || '', item.sentiment || 'neutral')
+            .then(async (enhanced) => {
+              if (enhanced !== item.sentiment) {
+                await db.newsItem.update({ where: { id: item.id }, data: { sentiment: enhanced } });
+              }
+              return { id: item.id, enhanced };
+            })
+        )
+      );
+      // Log any failures
+      const failures = enhanceResults.filter(r => r.status === 'rejected');
+      if (failures.length > 0) {
+        safeLog({ level: 'warn', route: 'News', message: `${failures.length}/${highImpactItems.length} AI sentiment enhancements failed` });
       }
     } catch { /* non-critical */ }
 

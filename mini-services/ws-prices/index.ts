@@ -12,7 +12,7 @@ const clients = new Set<import('bun').ServerWebSocket<{ pair: string | null }>>(
 const prices: Record<string, { bid: number; ask: number; mid: number; timestamp: number }> = {} as any;
 let wsConnected = false;
 let finnhubWs: WebSocket | null = null;
-let httpPollInterval: ReturnType<typeof setInterval> | null = null;
+let _httpPollInterval: ReturnType<typeof setInterval> | null = null;
 
 function initPrices() {
   for (const [pair, cfg] of Object.entries(PAIRS)) {
@@ -75,7 +75,7 @@ function connectFinnhubWs() {
 
 function startHttpPolling() {
   if (FINNHUB_API_KEY) return; // Only poll when no WS key
-  httpPollInterval = setInterval(() => {
+  _httpPollInterval = setInterval(() => {
     for (const [pair, cfg] of Object.entries(PAIRS)) {
       const vol = pair === 'XAUUSD' ? 3.5 : (pair === 'USDJPY' ? 0.15 : 0.0003);
       const change = (Math.random() - 0.5) * vol;
@@ -95,7 +95,7 @@ function startHttpPolling() {
   }, 2000);
 }
 
-const server = Bun.serve<{ pair: string | null }>({
+Bun.serve<{ pair: string | null }>({
   port: PORT,
   fetch(req, server) {
     const url = new URL(req.url);

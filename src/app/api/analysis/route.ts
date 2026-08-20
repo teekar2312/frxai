@@ -318,7 +318,7 @@ export async function POST(request: NextRequest) {
     };
 
     // FIX MKT-ANALYSIS-002: Generate signals when requested
-    let signals: TradingSignal[] = [];
+    const signals: TradingSignal[] = [];
     if (generateSignals) {
       const signal = buildSignalFromAnalysis(analysisResult, quote, pair, config ? { accountBalance: config.accountBalance, riskPerTrade: config.riskPerTrade } : null);
       if (signal) signals.push(signal);

@@ -21,7 +21,6 @@ interface CacheEntry {
 
 const cache = new Map<ForexPair, CacheEntry>();
 let lastFetchAllAt = 0;
-let isFetchingAll = false;
 
 // RB-002: Track session high/low per pair
 const sessionHighLow = new Map<ForexPair, { high: number; low: number; date: string }>();

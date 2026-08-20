@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import type { CandleData } from '@/lib/trading-types';
+import { db } from '@/lib/db';
+import type { ForexPair, CandleData } from '@/lib/trading-types';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 import { detectMarketCondition } from '@/lib/indicators';
@@ -10,7 +11,7 @@ export async function POST(request: NextRequest) {
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
   try {
     const body = await request.json();
-    const { candles } = body as { candles: CandleData[] };
+    const { candles, pair } = body as { candles: CandleData[]; pair?: ForexPair };
 
     if (!candles || !Array.isArray(candles) || candles.length < 5) {
       return NextResponse.json(
@@ -34,6 +35,38 @@ export async function POST(request: NextRequest) {
     }));
 
     const condition = detectMarketCondition(ohlcv);
+
+    // If pair is provided, look for AI analysis
+    if (pair) {
+      try {
+        const aiAnalysis = await db.aiAnalysis.findFirst({
+          where: { pair, expiresAt: { gt: new Date() } },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (aiAnalysis) {
+          const technicalCondition = condition;
+          const aiCondition = aiAnalysis.marketCondition;
+          const agree = technicalCondition === aiCondition;
+          const combinedCondition = agree ? technicalCondition : technicalCondition;
+
+          return NextResponse.json({
+            success: true,
+            technicalCondition,
+            aiCondition,
+            combinedCondition,
+            disagreement: !agree,
+            aiConfidence: aiAnalysis.confidence,
+            aiRecommendation: aiAnalysis.recommendation,
+            aiReasoning: (aiAnalysis.reasoning || '').slice(0, 200),
+            candlesAnalyzed: candles.length,
+            timestamp: Date.now(),
+          });
+        }
+      } catch {
+        // Non-critical — fall through to technical-only response
+      }
+    }
 
     return NextResponse.json({
       success: true,

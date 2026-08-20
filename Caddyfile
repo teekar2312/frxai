@@ -12,6 +12,9 @@
         @allowed_transform_port {
                 query XTransformPort=3004
         }
+        @allowed_transform_port {
+                query XTransformPort=3005
+        }
 
         handle @allowed_transform_port {
                 reverse_proxy 127.0.0.1:{query.XTransformPort} {

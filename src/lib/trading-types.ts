@@ -364,3 +364,101 @@ export const INDICATOR_POOL = [
   'Standard Deviation', 'Chaikin Volatility', 'Volatility Ratio',
   'Volume Profile', 'Accumulation Distribution',
 ] as const;
+
+// ============================================================
+// Extended pair list for custom watchlist
+// ============================================================
+export const EXTENDED_PAIRS: string[] = [
+  'EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD',
+  'USDCHF', 'AUDUSD', 'NZDUSD', 'USDCAD',
+  'EURGBP', 'EURJPY', 'GBPJPY', 'AUDJPY',
+];
+
+export const EXTENDED_PAIR_DISPLAY: Record<string, string> = {
+  EURUSD: 'EUR/USD', USDJPY: 'USD/JPY', GBPUSD: 'GBP/USD', XAUUSD: 'XAU/USD',
+  USDCHF: 'USD/CHF', AUDUSD: 'AUD/USD', NZDUSD: 'NZD/USD', USDCAD: 'USD/CAD',
+  EURGBP: 'EUR/GBP', EURJPY: 'EUR/JPY', GBPJPY: 'GBP/JPY', AUDJPY: 'AUD/JPY',
+};
+
+export const EXTENDED_PAIR_PIP_VALUES: Record<string, { standard: number; pipSize: number }> = {
+  EURUSD: { standard: 10, pipSize: 0.0001 },
+  USDJPY: { standard: 6.5, pipSize: 0.01 },
+  GBPUSD: { standard: 10, pipSize: 0.0001 },
+  XAUUSD: { standard: 1, pipSize: 0.01 },
+  USDCHF: { standard: 11.5, pipSize: 0.0001 },
+  AUDUSD: { standard: 6.5, pipSize: 0.0001 },
+  NZDUSD: { standard: 6.5, pipSize: 0.0001 },
+  USDCAD: { standard: 7.5, pipSize: 0.0001 },
+  EURGBP: { standard: 13, pipSize: 0.0001 },
+  EURJPY: { standard: 6.8, pipSize: 0.01 },
+  GBPJPY: { standard: 7.3, pipSize: 0.01 },
+  AUDJPY: { standard: 6.5, pipSize: 0.01 },
+};
+
+export const EXTENDED_PAIR_FINNHUB: Record<string, string> = {
+  EURUSD: 'OANDA:EUR_USD', USDJPY: 'OANDA:USD_JPY', GBPUSD: 'OANDA:GBP_USD', XAUUSD: 'OANDA:XAU_USD',
+  USDCHF: 'OANDA:USD_CHF', AUDUSD: 'OANDA:AUD_USD', NZDUSD: 'OANDA:NZD_USD', USDCAD: 'OANDA:USD_CAD',
+  EURGBP: 'OANDA:EUR_GBP', EURJPY: 'OANDA:EUR_JPY', GBPJPY: 'OANDA:GBP_JPY', AUDJPY: 'OANDA:AUD_JPY',
+};
+
+export type PendingOrderType = 'buy_limit' | 'sell_limit' | 'buy_stop' | 'sell_stop';
+
+export interface PendingOrder {
+  id: string;
+  pair: string;
+  direction: 'BUY' | 'SELL';
+  orderType: PendingOrderType;
+  lotSize: number;
+  price: number;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  status: 'pending' | 'executed' | 'cancelled' | 'expired';
+  strategy: string | null;
+  aiConfidence: number | null;
+  riskLevel: string | null;
+  aiRecommendation: string | null;
+  triggeredAt: string | null;
+  createdAt: string;
+}
+
+export interface InAppNotification {
+  id: string;
+  type: 'signal' | 'alert' | 'position_open' | 'position_close' | 'system' | 'auto_trade';
+  title: string;
+  message: string;
+  pair?: string;
+  data?: Record<string, unknown>;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface EconomicEvent {
+  id: string;
+  date: string;
+  time: string;
+  currency: string;
+  impact: 'high' | 'medium' | 'low';
+  title: string;
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+  category: string | null;
+}
+
+export interface TradeAnalytics {
+  totalTrades: number;
+  winRate: number;
+  totalPnl: number;
+  avgWin: number;
+  avgLoss: number;
+  profitFactor: number;
+  maxDrawdown: number;
+  sharpeRatio: number;
+  bestPair: string;
+  worstPair: string;
+  pnlByPair: Record<string, number>;
+  pnlByDay: { date: string; pnl: number }[];
+  pnlByHour: { hour: number; pnl: number }[];
+  winRateByPair: Record<string, number>;
+  equityCurve: { date: string; equity: number }[];
+}

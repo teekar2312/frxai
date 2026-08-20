@@ -4,7 +4,7 @@ import { getToken } from 'next-auth/jwt';
 import { safeLog } from '@/lib/safe-log';
 
 // Public paths that don't require authentication
-const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login'];
+const PUBLIC_PATHS = ['/api/auth', '/api/health', '/login', '/register', '/manifest.json'];
 
 function isPublicPath(pathname: string): boolean {
   return PUBLIC_PATHS.some(p => pathname.startsWith(p));
@@ -67,7 +67,7 @@ export async function middleware(request: NextRequest) {
   // Route Guards
   // ============================================================
   // Only allow / and /login page routes
-  if (!pathname.startsWith('/api/') && pathname !== '/') {
+  if (!pathname.startsWith('/api/') && pathname !== '/' && pathname !== '/register') {
     return NextResponse.redirect(new URL('/', request.url));
   }
 

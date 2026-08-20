@@ -2078,3 +2078,31 @@ Stage Summary:
 - Files Modified: 14 files
 - ESLint: 0 errors (177 pre-existing warnings)
 - Commit: 731f767 pushed to main
+
+---
+Task ID: 5
+Agent: Backend API Builder
+Task: Create ALL backend API routes for the 17 new features
+
+Work Log:
+- Created 16 API route files covering 12 distinct endpoint groups
+- User Registration API with bcryptjs hashing, email validation, ALLOW_REGISTRATION env gate
+- 2FA Setup/Verify/Disable APIs using otplib + qrcode with session-based auth
+- Pending Orders CRUD with directional price validation (buy_limit < current, etc.)
+- Economic Calendar with 32 realistic recurring events across USD/EUR/GBP/JPY
+- In-App Notifications CRUD with unread count endpoint
+- Trade Analytics with winRate, profitFactor, maxDrawdown, sharpeRatio, equityCurve
+- Export/Reports with CSV download support (Content-Disposition)
+- Watchlist CRUD with conflict detection (409)
+- Auto-Execution Engine that checks TradingConfig, fetches AI analyses, creates positions
+- Multi-Timeframe Analysis (M15/H1/H4/D1) with AI combined recommendation
+- Correlation Matrix using Pearson formula on H1 candle returns
+- Shared Signals with like support and nested comments
+- All routes follow project patterns: requireAuthForMutation, validateAuth, checkRateLimit, logApiError
+- Proper HTTP status codes throughout
+- Lint: 0 new errors, only warnings consistent with existing code
+
+Stage Summary:
+- 16 route files created across 12 API endpoint groups
+- All Prisma models used: User, UserTwoFactor, PendingOrder, Notification, EconomicEvent, WatchlistPair, SharedSignal, SignalComment, AiAnalysis, TradingPosition, TradingConfig, ActivityLog
+- Database schema already in sync

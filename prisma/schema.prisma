@@ -15,6 +15,18 @@ model User {
   role          String   @default("user") // admin, user
   isActive      Boolean  @default(true)
   lastLoginAt   DateTime?
+  twoFactor     UserTwoFactor?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model UserTwoFactor {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  secret        String   // TOTP secret (encrypted at rest)
+  enabled       Boolean  @default(false)
+  verifiedAt    DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -52,6 +64,32 @@ model TradingPosition {
   @@index([pair])
   @@index([createdAt])
   @@index([status, closedAt])
+}
+
+model PendingOrder {
+  id            String   @id @default(cuid())
+  pair          String
+  direction     String   // BUY or SELL
+  orderType     String   // limit, stop, buy_stop, sell_stop, buy_limit, sell_limit
+  lotSize       Float
+  price         Float   // Target price for the order
+  stopLoss      Float?
+  takeProfit    Float?
+  status        String   @default("pending") // pending, executed, cancelled, expired
+  strategy      String?
+  aiConfidence  Float?
+  riskLevel     String?
+  aiRecommendation String?
+  triggeredAt   DateTime?
+  cancelledAt   DateTime?
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([status])
+  @@index([pair])
+  @@index([orderType])
+  @@index([createdAt])
 }
 
 model PriceAlert {
@@ -103,6 +141,7 @@ model AiAnalysis {
   lotSize         Float?
   aiProvider      String?  // AI-009: which provider generated this
   aiModel         String?  // AI-009: which model was used
+  timeframes      String?  // JSON array of timeframes used for MTF analysis
   expiresAt       DateTime?
   createdAt       DateTime @default(now())
 
@@ -188,4 +227,83 @@ model TradingConfig {
   emailOnPositionClose  Boolean  @default(false)
   emailOnAlertTrigger   Boolean  @default(true)
   updatedAt             DateTime @updatedAt
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  userId      String?
+  type        String   // signal, alert, position_open, position_close, system, auto_trade
+  title       String
+  message     String
+  pair        String?
+  data        String?  // JSON string for additional data
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead, createdAt])
+  @@index([type])
+  @@index([createdAt])
+}
+
+model EconomicEvent {
+  id          String   @id @default(cuid())
+  date        DateTime
+  time        String   // HH:mm format
+  currency    String   // USD, EUR, GBP, JPY, etc.
+  impact      String   // high, medium, low
+  title       String
+  forecast    String?  // Forecast value
+  previous    String?  // Previous value
+  actual      String?  // Actual value (filled after event)
+  category    String?  // GDP, CPI, Employment, Interest Rate, etc.
+  source      String   @default("investing")
+  fetchedAt   DateTime @default(now())
+
+  @@index([date])
+  @@index([currency])
+  @@index([impact])
+  @@index([date, currency])
+}
+
+model WatchlistPair {
+  id        String   @id @default(cuid())
+  pair      String   @unique
+  addedAt   DateTime @default(now())
+  sortOrder Int      @default(0)
+}
+
+model SharedSignal {
+  id            String   @id @default(cuid())
+  signalId      String?  // Reference to the original signal if stored
+  pair          String
+  direction     String   // BUY or SELL
+  entryPrice    Float
+  stopLoss      Float?
+  takeProfit    Float?
+  confidence    Float?
+  reasoning     String?
+  strategy      String?
+  sharedBy      String?  // User who shared
+  likes         Int      @default(0)
+  commentCount  Int      @default(0)
+  comments      SignalComment[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([pair])
+  @@index([createdAt])
+}
+
+model SignalComment {
+  id          String   @id @default(cuid())
+  signalId    String
+  signal      SharedSignal @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  author      String?
+  content     String
+  createdAt   DateTime @default(now())
+
+  @@index([signalId])
+  @@index([createdAt])
 }

@@ -3,6 +3,7 @@
 import {
   LayoutDashboard, Brain, Zap, Activity, Shield, Bell,
   History, FileText, Settings, TrendingUp, TrendingDown,
+  BarChart3, CalendarDays, ListTodo, Users, Share2, Eye,
 } from 'lucide-react';
 import type { ForexPair, StrategyName, TradingDirection } from '@/lib/trading-types';
 
@@ -81,14 +82,12 @@ export interface TradingConfig {
   trailingStopPips: number;
   avoidNewsTrading: boolean;
   accountBalance: number;
-  aiProvider: string;  // AI-006
-  aiModel: string;     // AI-006
-  // Email notification settings
+  aiProvider: string;
+  aiModel: string;
   notifyEmail: string | null;
   emailOnPositionOpen: boolean;
   emailOnPositionClose: boolean;
   emailOnAlertTrigger: boolean;
-  // FE-019: Lot size constraints from server config
   minLot: number;
   maxLotPerOrder: number;
 }
@@ -101,26 +100,28 @@ export interface EquityPoint {
 
 // ============================================================
 // Navigation items for sidebar
-// NOTE: Labels are intentionally kept in English as they represent
-// standard trading/technical terms. Indonesian translations are
-// provided contextually in other parts of the UI (e.g., error pages,
-// regulatory disclaimers, and accessible labels).
 // ============================================================
 
 export const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, emoji: '📊' },
+  { id: 'chart', label: 'Charts', icon: TrendingUp, emoji: '📈' },
   { id: 'ai-analysis', label: 'AI Analysis', icon: Brain, emoji: '🤖' },
-  { id: 'trading-signals', label: 'Trading Signals', icon: Zap, emoji: '📈' },
+  { id: 'trading-signals', label: 'Trading Signals', icon: Zap, emoji: '⚡' },
   { id: 'live-trading', label: 'Live Trading', icon: Activity, emoji: '💹' },
+  { id: 'pending-orders', label: 'Pending Orders', icon: ListTodo, emoji: '📋' },
   { id: 'risk-management', label: 'Risk Management', icon: Shield, emoji: '🛡️' },
   { id: 'price-alerts', label: 'Price Alerts', icon: Bell, emoji: '🔔' },
+  { id: 'economic-calendar', label: 'Economic Calendar', icon: CalendarDays, emoji: '📅' },
+  { id: 'trade-analytics', label: 'Analytics', icon: BarChart3, emoji: '📊' },
   { id: 'backtesting', label: 'Backtesting', icon: History, emoji: '⏪' },
-  { id: 'activity-log', label: 'Activity Log', icon: FileText, emoji: '📋' },
+  { id: 'correlation', label: 'Correlation', icon: Share2, emoji: '🔗' },
+  { id: 'watchlist', label: 'Watchlist', icon: Eye, emoji: '👁️' },
+  { id: 'signal-sharing', label: 'Community', icon: Users, emoji: '👥' },
+  { id: 'activity-log', label: 'Activity Log', icon: FileText, emoji: '📝' },
   { id: 'settings', label: 'Settings', icon: Settings, emoji: '⚙️' },
 ] as const;
 
 // Strategy descriptions for reference
-// FIX STRATEGY-008: Corrected strategy descriptions to match actual implementations
 export const STRATEGY_DESCS: Record<StrategyName, string> = {
   MA_RIBBON: 'Uses multiple moving averages (5/9/21/50 EMA) to identify trend direction and momentum. Best in trending markets.',
   MOMENTUM_SCALPING: 'Combines RSI, Momentum, and MACD histogram for quick scalping entries. Best during high-volume sessions.',

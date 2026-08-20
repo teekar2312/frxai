@@ -11,6 +11,7 @@ services:
       - API_SECRET_KEY=${API_SECRET_KEY}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
       - NEXTAUTH_URL=${NEXTAUTH_URL:-}
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
       # Market Data
       - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
       - MARKETAUX_API_KEY=${MARKETAUX_API_KEY:-}
@@ -22,14 +23,19 @@ services:
       - LOKAL_AI_BASE_URL=${LOKAL_AI_BASE_URL:-}
       - LOKAL_AI_API_KEY=${LOKAL_AI_API_KEY:-}
       # MT5 Bridge
-      - MT5_BRIDGE_URL=${MT5_BRIDGE_URL:-http://mt5-bridge:3002}
+      - MT5_BRIDGE_URL=${MT5_BRIDGE_URL:-http://mt5-bridge:3004}
       - MT5_BRIDGE_SECRET=${MT5_BRIDGE_SECRET:-}
+      # WebSocket Prices
+      - WS_PRICES_URL=${WS_PRICES_URL:-http://ws-prices:3005}
       # Email Notifications
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - NOTIFICATION_EMAIL_FROM=${NOTIFICATION_EMAIL_FROM:-}
       - NOTIFICATION_EMAIL_TO=${NOTIFICATION_EMAIL_TO:-}
     volumes:
       - finex-data:/app/data
+    depends_on:
+      ws-prices:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -46,6 +52,30 @@ services:
     networks:
       - finex-net
 
+  ws-prices:
+    build:
+      context: ./mini-services/ws-prices
+      dockerfile: Dockerfile
+    container_name: finex-ws-prices
+    restart: unless-stopped
+    ports:
+      - "3005:3005"
+    environment:
+      - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3005/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - finex-net
+
   mt5-bridge:
     build:
       context: ./mini-services/mt5-bridge
@@ -53,9 +83,10 @@ services:
     container_name: finex-mt5-bridge
     restart: unless-stopped
     ports:
-      - "3002:3002"
+      - "3004:3004"
     environment:
       - MT5_BRIDGE_SECRET=${MT5_BRIDGE_SECRET:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
     deploy:
       resources:
         limits:
@@ -63,6 +94,12 @@ services:
           cpus: '0.5'
     profiles:
       - mt5
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3004/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - finex-net
 

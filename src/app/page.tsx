@@ -15,15 +15,23 @@ import { useTradingStore } from '@/lib/trading-store';
 import { safeLog } from '@/lib/safe-log';
 import { SidebarContent } from '@/components/trading/Sidebar';
 import { DashboardPanel } from '@/components/trading/DashboardPanel';
+import { ChartPanel } from '@/components/trading/ChartPanel';
 import { AiAnalysisPanel } from '@/components/trading/AiAnalysisPanel';
 import { TradingSignalsPanel } from '@/components/trading/TradingSignalsPanel';
 import { LiveTradingPanel } from '@/components/trading/LiveTradingPanel';
+import { PendingOrdersPanel } from '@/components/trading/PendingOrdersPanel';
 import { RiskManagementPanel } from '@/components/trading/RiskManagementPanel';
 import { PriceAlertsPanel } from '@/components/trading/PriceAlertsPanel';
+import { EconomicCalendarPanel } from '@/components/trading/EconomicCalendarPanel';
+import { TradeAnalyticsPanel } from '@/components/trading/TradeAnalyticsPanel';
 import { BacktestingPanel } from '@/components/trading/BacktestingPanel';
+import { CorrelationMatrixPanel } from '@/components/trading/CorrelationMatrixPanel';
+import { WatchlistPanel } from '@/components/trading/WatchlistPanel';
+import { SignalSharingPanel } from '@/components/trading/SignalSharingPanel';
 import { ActivityLogPanel } from '@/components/trading/ActivityLogPanel';
 import { SettingsPanel } from '@/components/trading/SettingsPanel';
 import { TimeframeSessionBar } from '@/components/trading/TimeframeSessionBar';
+import { NotificationBell } from '@/components/trading/NotificationCenter';
 
 export default function TradingDashboard() {
   const { activeTab, setQuote, setNews, isAutoTrading, tradingMode, mt5ConnectionStatus } = useTradingStore();
@@ -31,14 +39,12 @@ export default function TradingDashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
   const [priceSourceWarning, setPriceSourceWarning] = useState(false);
-  // FNH-005/MTX-011: Track simulation mode for UI indicator
   const [isSimulated, setIsSimulated] = useState(true);
   const [newsSimulated, setNewsSimulated] = useState(true);
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
-  // FNH-012: Pause polling when tab is hidden
   const [isVisible, setIsVisible] = useState(true);
 
-  // FNH-012: Track tab visibility
+  // Track tab visibility
   useEffect(() => {
     const handler = () => setIsVisible(!document.hidden);
     document.addEventListener('visibilitychange', handler);
@@ -57,11 +63,10 @@ export default function TradingDashboard() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch prices every 5 seconds — uses MT5 prices when in MT5 live mode (#4)
+  // Fetch prices every 5 seconds
   const fetchPrices = useCallback(async () => {
     try {
       if (isMt5Live) {
-        // Use MT5 live prices from bridge
         const res = await fetch('/api/mt5/prices');
         if (res.ok) {
           const mt5Prices = await res.json() as Record<string, { bid: number; ask: number; timestamp: number }>;
@@ -70,10 +75,8 @@ export default function TradingDashboard() {
             if (p && p.bid > 0 && p.ask > 0) {
               const mid = (p.bid + p.ask) / 2;
               const spread = p.ask - p.bid;
-              // Convert spread to pips based on pair
               const pipSize = pair === 'USDJPY' || pair === 'XAUUSD' ? 0.01 : 0.0001;
               const spreadPips = spread / pipSize;
-              // Get previous quote for change calculation
               const prev = useTradingStore.getState().quotes[pair];
               const change = prev ? mid - prev.mid : 0;
               const changePercent = prev?.mid ? (change / prev.mid) * 100 : 0;
@@ -94,11 +97,9 @@ export default function TradingDashboard() {
           setConnected(true);
           return;
         }
-        // MT5 prices failed — do NOT fall through to Finnhub to avoid showing SIMULASI in MT5 mode
         safeLog({ level: 'warn', route: 'Page', message: 'MT5 prices unavailable, skipping fetch cycle' });
         return;
       }
-      // Only fetch from Finnhub when NOT in MT5 live mode
       const res = await fetch('/api/finnhub');
       if (!res.ok) throw new Error('Failed to fetch prices');
       const data = await res.json();
@@ -107,8 +108,6 @@ export default function TradingDashboard() {
           if (data.quotes[pair]) setQuote(pair, data.quotes[pair] as QuoteData);
         });
       }
-      // FNH-005: Only set connected=true when real data, show simulation mode otherwise
-      // Show toast for alerts triggered during price tick
       if (data.triggeredAlerts?.length > 0) {
         for (const ta of data.triggeredAlerts) {
           toast.success(`🔔 ${ta.pair} ${ta.condition.replace('_', ' ')} ${ta.targetPrice}`);
@@ -122,7 +121,6 @@ export default function TradingDashboard() {
     }
   }, [setQuote, isMt5Live]);
 
-  // FNH-012: Only poll when tab is visible
   useEffect(() => {
     fetchPrices();
     if (!isVisible) return;
@@ -130,7 +128,7 @@ export default function TradingDashboard() {
     return () => clearInterval(interval);
   }, [fetchPrices, isVisible]);
 
-  // Fetch news every 60 seconds
+  // Fetch news every 120 seconds
   const fetchNews = useCallback(async () => {
     try {
       const res = await fetch('/api/news');
@@ -138,7 +136,6 @@ export default function TradingDashboard() {
         const data = await res.json();
         if (data.news) {
           setNews(data.news);
-          // MTX-011: Track news data source
           setNewsSimulated(!!data.simulated);
         }
       }
@@ -147,24 +144,30 @@ export default function TradingDashboard() {
     }
   }, [setNews]);
 
-  // FNH-012: Only poll news when tab is visible, and less frequently
   useEffect(() => {
     fetchNews();
     if (!isVisible) return;
-    const interval = setInterval(fetchNews, 120000); // MTX-001: Reduced from 60s to 120s
+    const interval = setInterval(fetchNews, 120000);
     return () => clearInterval(interval);
   }, [fetchNews, isVisible]);
 
-  // Panel router
+  // Panel router — 16 panels
   const renderPanel = () => {
     switch (activeTab) {
       case 'dashboard': return <DashboardPanel />;
+      case 'chart': return <ChartPanel />;
       case 'ai-analysis': return <AiAnalysisPanel />;
       case 'trading-signals': return <TradingSignalsPanel />;
       case 'live-trading': return <LiveTradingPanel />;
+      case 'pending-orders': return <PendingOrdersPanel />;
       case 'risk-management': return <RiskManagementPanel />;
       case 'price-alerts': return <PriceAlertsPanel />;
+      case 'economic-calendar': return <EconomicCalendarPanel />;
+      case 'trade-analytics': return <TradeAnalyticsPanel />;
       case 'backtesting': return <BacktestingPanel />;
+      case 'correlation': return <CorrelationMatrixPanel />;
+      case 'watchlist': return <WatchlistPanel />;
+      case 'signal-sharing': return <SignalSharingPanel />;
       case 'activity-log': return <ActivityLogPanel />;
       case 'settings': return <SettingsPanel />;
       default: return <DashboardPanel />;
@@ -203,11 +206,12 @@ export default function TradingDashboard() {
             )}
           </div>
           <div className="flex items-center gap-4">
+            <NotificationBell />
             <div className="flex items-center gap-1.5">
               <Globe className="w-3 h-3" />
               <span>WIB {jakartaTime}</span>
             </div>
-            <span className="text-zinc-500">FINEX Indonesia v1.0</span>
+            <span className="text-zinc-500">FINEX Indonesia v2.0</span>
           </div>
         </div>
 
@@ -216,7 +220,7 @@ export default function TradingDashboard() {
           ⚠️ Perdagangan berjangka memiliki risiko tinggi. Anda dapat mengalami kerugian melebihi investasi awal. Pastikan Anda memahami risiko sebelum bertransaksi.
         </div>
 
-        {/* FNH-005: Simulation Mode Banner */}
+        {/* Simulation Mode Banner (FNH-005) */}
         {isSimulated && !isMt5Live && (
           <div className="bg-rose-500/10 border-b border-rose-500/20 px-3 py-1.5 text-[10px] text-rose-400/90 text-center flex items-center justify-center gap-1.5">
             <AlertTriangle className="w-3 h-3" />
@@ -253,17 +257,20 @@ export default function TradingDashboard() {
             <TimeframeSessionBar />
 
             {/* Mobile header */}
-            <div className="lg:hidden flex items-center gap-3 px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
-              <Button variant="ghost" size="icon" className="text-zinc-400 hover:text-white hover:bg-zinc-800"
-                onClick={() => setSidebarOpen(true)}>
-                <Menu className="w-5 h-5" />
-              </Button>
-              <div className="flex items-center gap-2">
-                <div className="w-6 h-6 rounded bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
-                  <TrendingUp className="w-3.5 h-3.5 text-white" />
+            <div className="lg:hidden flex items-center justify-between px-4 py-3 border-b border-zinc-800 bg-zinc-900/50">
+              <div className="flex items-center gap-3">
+                <Button variant="ghost" size="icon" className="text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  onClick={() => setSidebarOpen(true)}>
+                  <Menu className="w-5 h-5" />
+                </Button>
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center">
+                    <TrendingUp className="w-3.5 h-3.5 text-white" />
+                  </div>
+                  <span className="text-sm font-semibold text-white">FINEX Indonesia</span>
                 </div>
-                <span className="text-sm font-semibold text-white">FINEX Indonesia</span>
               </div>
+              <NotificationBell />
             </div>
 
             {/* Content area */}

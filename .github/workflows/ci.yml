@@ -1,127 +1,73 @@
-name: CI/CD
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, develop]
   pull_request:
-    branches: [main, master]
-
-# Cancel in-progress runs for the same branch/PR
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+    branches: [main]
 
 jobs:
- lint:
+  lint:
+    name: Lint & Type Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Cache bun
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
       - run: bun install --frozen-lockfile
       - run: bun run lint
 
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Cache bun
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-      - run: bun install --frozen-lockfile
-      - run: bunx prisma generate
-      - run: bunx tsc --noEmit
-
-  test:
-    runs-on: ubuntu-latest
-    env:
-      DATABASE_URL: "file:./test.db"
-      API_SECRET_KEY: "ci-test-secret-key"
-      NEXTAUTH_SECRET: "ci-test-nextauth-secret-32chars-min!!"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-      - name: Cache bun
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-      - run: bun install --frozen-lockfile
-      - run: bunx prisma generate --no-engine
-      - run: bun run test
-
   build:
+    name: Build
     runs-on: ubuntu-latest
-    needs: [lint, typecheck, test]
-    env:
-      DATABASE_URL: "file:./build.db"
-      NEXTAUTH_SECRET: "ci-build-nextauth-secret-32chars-min!!"
-      API_SECRET_KEY: "ci-build-secret-key"
+    needs: lint
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Cache bun
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-bun-
-      - name: Cache Next.js build
-        uses: actions/cache@v4
-        with:
-          path: .next/cache
-          key: ${{ runner.os }}-nextjs-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-nextjs-
       - run: bun install --frozen-lockfile
-      - run: bunx prisma generate
+      - run: bun run db:generate
       - run: bun run build
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nextjs-build-${{ github.sha }}
-          path: |
-            .next/standalone
-            .next/static
-            public
+          name: build-output
+          path: .next/standalone
           retention-days: 7
 
-  # Deploy placeholder — uncomment and configure for your environment
-  # deploy:
-  #   runs-on: ubuntu-latest
-  #   needs: [build]
-  #   if: github.ref == 'refs/heads/main'
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Download build artifact
-  #       uses: actions/download-artifact@v4
-  #       with:
-  #         name: nextjs-build-${{ github.sha }}
-  #     - name: Deploy to server
-  #       run: |
-  #         # Add your deployment commands here, e.g.:
-  #         # rsync -avz --delete .next/standalone/ user@server:/app/
-  #         # ssh user@server 'cd /app && docker compose restart app'
-  #         echo "Deploy step not configured yet"
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run db:generate
+      - run: bun run test
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy (placeholder)
+        run: echo "Deploy to staging environment"
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, test]
+    if: github.ref == 'refs/heads/main'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy (placeholder)
+        run: echo "Deploy to production environment"

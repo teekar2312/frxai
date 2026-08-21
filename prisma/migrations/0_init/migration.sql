@@ -7,8 +7,22 @@ CREATE TABLE "User" (
     "role" TEXT NOT NULL DEFAULT 'user',
     "isActive" BOOLEAN NOT NULL DEFAULT true,
     "lastLoginAt" DATETIME,
+    "resetToken" TEXT,
+    "resetTokenExpires" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "UserTwoFactor" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "userId" TEXT NOT NULL,
+    "secret" TEXT NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT false,
+    "verifiedAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    CONSTRAINT "UserTwoFactor_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 -- CreateTable
@@ -32,10 +46,37 @@ CREATE TABLE "TradingPosition" (
     "strategy" TEXT,
     "marketCondition" TEXT,
     "aiConfidence" REAL,
+    "riskLevel" TEXT,
+    "aiRecommendation" TEXT,
     "leverage" INTEGER NOT NULL DEFAULT 100,
     "commission" REAL NOT NULL DEFAULT 1,
     "openedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "closedAt" DATETIME,
+    "closeReason" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "PendingOrder" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "pair" TEXT NOT NULL,
+    "direction" TEXT NOT NULL,
+    "orderType" TEXT NOT NULL,
+    "lotSize" REAL NOT NULL,
+    "price" REAL NOT NULL,
+    "stopLoss" REAL,
+    "takeProfit" REAL,
+    "status" TEXT NOT NULL DEFAULT 'pending',
+    "strategy" TEXT,
+    "aiConfidence" REAL,
+    "riskLevel" TEXT,
+    "aiRecommendation" TEXT,
+    "triggeredAt" DATETIME,
+    "cancelledAt" DATETIME,
+    "executedAt" DATETIME,
+    "executedPrice" REAL,
+    "expiresAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" DATETIME NOT NULL
 );
@@ -86,6 +127,7 @@ CREATE TABLE "AiAnalysis" (
     "lotSize" REAL,
     "aiProvider" TEXT,
     "aiModel" TEXT,
+    "timeframes" TEXT,
     "expiresAt" DATETIME,
     "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -165,8 +207,93 @@ CREATE TABLE "TradingConfig" (
     "updatedAt" DATETIME NOT NULL
 );
 
+-- CreateTable
+CREATE TABLE "Notification" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "userId" TEXT,
+    "type" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "message" TEXT NOT NULL,
+    "pair" TEXT,
+    "data" TEXT,
+    "isRead" BOOLEAN NOT NULL DEFAULT false,
+    "readAt" DATETIME,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Notification_userId_fkey" FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "EconomicEvent" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "date" DATETIME NOT NULL,
+    "time" TEXT NOT NULL,
+    "currency" TEXT NOT NULL,
+    "impact" TEXT NOT NULL,
+    "title" TEXT NOT NULL,
+    "forecast" TEXT,
+    "previous" TEXT,
+    "actual" TEXT,
+    "category" TEXT,
+    "source" TEXT NOT NULL DEFAULT 'investing',
+    "fetchedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- CreateTable
+CREATE TABLE "WatchlistPair" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "pair" TEXT NOT NULL,
+    "addedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "sortOrder" INTEGER NOT NULL DEFAULT 0
+);
+
+-- CreateTable
+CREATE TABLE "SharedSignal" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "signalId" TEXT,
+    "pair" TEXT NOT NULL,
+    "direction" TEXT NOT NULL,
+    "entryPrice" REAL NOT NULL,
+    "stopLoss" REAL,
+    "takeProfit" REAL,
+    "confidence" REAL,
+    "reasoning" TEXT,
+    "strategy" TEXT,
+    "sharedBy" TEXT,
+    "likes" INTEGER NOT NULL DEFAULT 0,
+    "commentCount" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL
+);
+
+-- CreateTable
+CREATE TABLE "SignalComment" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "signalId" TEXT NOT NULL,
+    "author" TEXT,
+    "content" TEXT NOT NULL,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "SignalComment_signalId_fkey" FOREIGN KEY ("signalId") REFERENCES "SharedSignal" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+-- CreateTable
+CREATE TABLE "Transaction" (
+    "id" TEXT NOT NULL PRIMARY KEY,
+    "type" TEXT NOT NULL,
+    "amount" REAL NOT NULL,
+    "currency" TEXT NOT NULL DEFAULT 'USD',
+    "balanceBefore" REAL NOT NULL,
+    "balanceAfter" REAL NOT NULL,
+    "description" TEXT,
+    "createdBy" TEXT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "Transaction_createdBy_fkey" FOREIGN KEY ("createdBy") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "User_email_key" ON "User"("email");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "UserTwoFactor_userId_key" ON "UserTwoFactor"("userId");
 
 -- CreateIndex
 CREATE INDEX "TradingPosition_status_idx" ON "TradingPosition"("status");
@@ -179,6 +306,18 @@ CREATE INDEX "TradingPosition_createdAt_idx" ON "TradingPosition"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "TradingPosition_status_closedAt_idx" ON "TradingPosition"("status", "closedAt");
+
+-- CreateIndex
+CREATE INDEX "PendingOrder_status_idx" ON "PendingOrder"("status");
+
+-- CreateIndex
+CREATE INDEX "PendingOrder_pair_idx" ON "PendingOrder"("pair");
+
+-- CreateIndex
+CREATE INDEX "PendingOrder_orderType_idx" ON "PendingOrder"("orderType");
+
+-- CreateIndex
+CREATE INDEX "PendingOrder_createdAt_idx" ON "PendingOrder"("createdAt");
 
 -- CreateIndex
 CREATE INDEX "PriceAlert_isActive_isTriggered_idx" ON "PriceAlert"("isActive", "isTriggered");
@@ -212,4 +351,43 @@ CREATE INDEX "NewsItem_pair_idx" ON "NewsItem"("pair");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "NewsItem_source_title_key" ON "NewsItem"("source", "title");
+
+-- CreateIndex
+CREATE INDEX "Notification_userId_idx" ON "Notification"("userId");
+
+-- CreateIndex
+CREATE INDEX "Notification_isRead_createdAt_idx" ON "Notification"("isRead", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "Notification_type_idx" ON "Notification"("type");
+
+-- CreateIndex
+CREATE INDEX "Notification_createdAt_idx" ON "Notification"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "EconomicEvent_date_idx" ON "EconomicEvent"("date");
+
+-- CreateIndex
+CREATE INDEX "EconomicEvent_currency_idx" ON "EconomicEvent"("currency");
+
+-- CreateIndex
+CREATE INDEX "EconomicEvent_impact_idx" ON "EconomicEvent"("impact");
+
+-- CreateIndex
+CREATE INDEX "EconomicEvent_date_currency_idx" ON "EconomicEvent"("date", "currency");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WatchlistPair_pair_key" ON "WatchlistPair"("pair");
+
+-- CreateIndex
+CREATE INDEX "SharedSignal_pair_idx" ON "SharedSignal"("pair");
+
+-- CreateIndex
+CREATE INDEX "SharedSignal_createdAt_idx" ON "SharedSignal"("createdAt");
+
+-- CreateIndex
+CREATE INDEX "SignalComment_signalId_idx" ON "SignalComment"("signalId");
+
+-- CreateIndex
+CREATE INDEX "SignalComment_createdAt_idx" ON "SignalComment"("createdAt");
 

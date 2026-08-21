@@ -1,11 +1,12 @@
 {
-  "name": "nextjs_tailwind_shadcn_ts",
-  "version": "1.0.0",
+  "name": "finex-indonesia",
+  "version": "2.3.0",
+  "description": "FINEX Indonesia — AI-Powered Forex Trading Dashboard (BAPPEBTI)",
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000 2>&1 | tee dev.log",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
-    "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
+    "start": "NODE_ENV=production node .next/standalone/server.js",
     "lint": "eslint .",
     "test": "vitest run",
     "db:push": "prisma db push",

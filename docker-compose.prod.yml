@@ -13,6 +13,7 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_URL=file:/app/data/custom.db
+      - ALLOW_REGISTRATION=${ALLOW_REGISTRATION:-false}
       - API_SECRET_KEY=${API_SECRET_KEY:?ERROR: API_SECRET_KEY is required}
       - NEXTAUTH_SECRET=${NEXTAUTH_SECRET:?ERROR: NEXTAUTH_SECRET is required}
       - NEXTAUTH_URL=https://${FINEX_DOMAIN:-localhost}
@@ -29,7 +30,7 @@ services:
       # WebSocket Price Service
       - WS_PRICES_URL=http://ws-prices:3005
       # MT5 Bridge
-      - MT5_BRIDGE_URL=${MT5_BRIDGE_URL:-http://finex-mt5-bridge:3002}
+      - MT5_BRIDGE_URL=${MT5_BRIDGE_URL:-http://mt5-bridge:3004}
       - MT5_BRIDGE_SECRET=${MT5_BRIDGE_SECRET:-}
       # Email Notifications
       - RESEND_API_KEY=${RESEND_API_KEY:-}

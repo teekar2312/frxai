@@ -29,6 +29,8 @@ export interface RateLimitConfig {
 }
 
 const DEFAULT_CONFIGS: Record<string, RateLimitConfig> = {
+  // Authentication endpoints: 10 req/min (brute-force protection)
+  auth: { maxRequests: 10, windowMs: 60_000 },
   // Trade execution: 10 req/min
   trade: { maxRequests: 10, windowMs: 60_000 },
   // AI analysis: 5 req/min

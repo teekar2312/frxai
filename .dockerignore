@@ -8,8 +8,9 @@ out
 # Development
 .devcontainer
 .vscode
+.z-ai-config
 
-# Database
+# Database (runtime)
 db/*.db
 db/*.db-journal
 
@@ -19,7 +20,6 @@ db/*.db-journal
 .env.production
 
 # Git
-git
 .git
 .gitignore
 
@@ -27,8 +27,9 @@ git
 tool-results
 agent-ctx
 worklog.md
+.zscripts
 
-# Screenshots & images
+# Screenshots
 screenshot-*.png
 ss-*.png
 *.png
@@ -39,24 +40,22 @@ tests
 examples
 skills
 
-# Mini-services (deployed separately)
-mini-services
+# Mini-services (deployed as separate containers)
+mini-services/mt5-bridge
+mini-services/ws-prices
 
 # Download artifacts
 download
 
 # Misc
 *.md
-!SECURITY.md
-SECURITY.md
 .DS_Store
 Thumbs.db
 *.log
-dev.log
-server.log
 Caddyfile
+Caddyfile.production
 postcss.config.mjs
 tailwind.config.ts
 components.json
-bun.lock
 package-lock.json
+vitest.config.ts

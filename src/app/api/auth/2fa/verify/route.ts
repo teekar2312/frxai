@@ -6,6 +6,7 @@ import { db } from '@/lib/db';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
+import { decryptTotpSecret } from '@/lib/auth/totp-encryption';
 
 // POST - Verify TOTP token and enable 2FA
 export async function POST(request: NextRequest) {
@@ -48,7 +49,8 @@ export async function POST(request: NextRequest) {
 
     // Validate token against stored secret
     authenticator.resetOptions(); // Ensure default options
-    const isValid = authenticator.verify({ token, secret: twoFactor.secret });
+    const decryptedSecret = decryptTotpSecret(twoFactor.secret);
+    const isValid = authenticator.verify({ token, secret: decryptedSecret });
 
     if (!isValid) {
       return NextResponse.json(

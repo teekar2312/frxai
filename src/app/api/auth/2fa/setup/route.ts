@@ -7,6 +7,7 @@ import { db } from '@/lib/db';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
+import { encryptTotpSecret } from '@/lib/auth/totp-encryption';
 
 // POST - Generate TOTP secret for 2FA setup
 export async function POST(request: NextRequest) {
@@ -31,17 +32,20 @@ export async function POST(request: NextRequest) {
     // Generate QR code as data URL
     const qrCodeUrl = await QRCode.toDataURL(otpauthUrl);
 
+    // Encrypt secret before storing
+    const encryptedSecret = encryptTotpSecret(secret);
+
     // Upsert UserTwoFactor record
     await db.userTwoFactor.upsert({
       where: { userId: session.user.id },
       update: {
-        secret,
+        secret: encryptedSecret,
         enabled: false,
         verifiedAt: null,
       },
       create: {
         userId: session.user.id,
-        secret,
+        secret: encryptedSecret,
         enabled: false,
       },
     });

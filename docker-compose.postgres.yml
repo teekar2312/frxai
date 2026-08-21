@@ -1,0 +1,77 @@
+# docker-compose.postgres.yml — PostgreSQL Overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# Adds PostgreSQL 16 to the stack, overriding the SQLite DATABASE_URL.
+# The app service's build args select the PG schema + entrypoint.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: finex-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-finex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?ERROR: POSTGRES_PASSWORD is required for PostgreSQL mode}
+      POSTGRES_DB: ${POSTGRES_DB:-finex}
+    volumes:
+      - finex-pgdata:/var/lib/postgresql/data
+      # Auto-run init SQL on first start (optional seed)
+      - ./prisma/migrations/postgres_init/migration.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finex} -d ${POSTGRES_DB:-finex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    networks:
+      - finex-net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+      args:
+        PRISMA_SCHEMA: schema.postgres.prisma
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-finex}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finex}?schema=public&connect_timeout=10
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ws-prices:
+        condition: service_healthy
+    # No /app/data volume needed for PG mode — data lives in postgres container
+    volumes: []
+
+  # Optional: pgAdmin for development/debugging
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: finex-pgadmin
+    restart: unless-stopped
+    profiles:
+      - debug
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@finex.local}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:?ERROR: PGADMIN_PASSWORD is required for pgAdmin}
+      PGADMIN_LISTEN_PORT: 80
+    volumes:
+      - finex-pgadmin:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - finex-net
+
+volumes:
+  finex-pgdata:
+  finex-pgadmin:

@@ -1,0 +1,81 @@
+# docker-compose.postgres.prod.yml — Production PostgreSQL Overlay
+# Usage: docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.prod.yml -f docker-compose.postgres.prod.yml up -d
+#
+# Prerequisites:
+#   1. Create .env.production with all required secrets (see .env.example)
+#   2. Set POSTGRES_PASSWORD to a strong random value
+#   3. Optionally set POSTGRES_USER and POSTGRES_DB
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: finex-postgres
+    restart: always
+    # No external port exposure in production — only accessible via internal network
+    expose:
+      - "5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-finex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?ERROR: POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-finex}
+    volumes:
+      - finex-pgdata:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-finex} -d ${POSTGRES_DB:-finex}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    networks:
+      - finex-net
+
+  app:
+    image: finex-app:latest
+    restart: always
+    build:
+      context: .
+      args:
+        PRISMA_SCHEMA: schema.postgres.prisma
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-finex}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-finex}?schema=public&connect_timeout=10&sslmode=prefer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ws-prices:
+        condition: service_healthy
+    # No SQLite data volume — all data in postgres
+    volumes: []
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - finex-net
+    expose:
+      - "3000"
+
+  caddy:
+    depends_on:
+      app:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+volumes:
+  finex-pgdata:

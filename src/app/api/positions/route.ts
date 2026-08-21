@@ -9,6 +9,7 @@ import { getCurrentBidAsk } from '@/lib/price-cache';
 import { logApiError, safeLog } from '@/lib/safe-log';
 import { sendPositionOpenEmail, sendPositionCloseEmail } from '@/lib/email-service';
 import { applyPnlToBalance, hasRecentHighImpactNews } from '@/lib/balance-sync';
+import { validateBody, CreatePositionSchema, ClosePositionSchema } from '@/lib/validation/schemas';
 
 // GET - Fetch positions (supports ?status=open|closed|cancelled filter)
 export async function GET(request: NextRequest) {
@@ -51,6 +52,10 @@ export async function POST(request: NextRequest) {
   }
   try {
     const body = await request.json();
+    const validation = validateBody(CreatePositionSchema, body);
+    if (!validation.success) {
+      return NextResponse.json(validation.error, { status: validation.status });
+    }
     const {
       pair,
       direction,
@@ -63,47 +68,15 @@ export async function POST(request: NextRequest) {
       riskAmount,
       riskLevel,
       aiRecommendation,
-    } = body as {
-      pair: ForexPair;
-      direction: 'BUY' | 'SELL';
-      lotSize?: number;
-      entryPrice?: number;
-      stopLoss?: number;
-      takeProfit?: number;
-      strategy?: string;
-      marketCondition?: string;
-      aiConfidence?: number;
-      riskAmount?: number;
-      riskLevel?: string;
-      aiRecommendation?: string;
-    };
+      trailingStop: rawTrailingStop,
+      entryPrice: rawEntryPrice,
+    } = validation.data;
 
-    // AUDIT-TRADE-11: Extract trailingStop from raw body
-    const trailingStop = (body.trailingStop as number | null | undefined) ?? null;
+    // AUDIT-TRADE-11: Extract trailingStop from validated data
+    const trailingStop = rawTrailingStop ?? null;
 
     // L14: entryPrice is optional for simulation (can be fetched from market data)
-    let entryPrice: number = body.entryPrice || 0;
-
-    // POS-05: Validate pair against allowed list
-    if (!pair || !FOREX_PAIRS.includes(pair as ForexPair)) {
-      return NextResponse.json(
-        { error: `Invalid pair. Must be one of: ${FOREX_PAIRS.join(', ')}` },
-        { status: 400 }
-      );
-    }
-    if (!direction) {
-      return NextResponse.json(
-        { error: 'direction is required' },
-        { status: 400 }
-      );
-    }
-
-    if (!['BUY', 'SELL'].includes(direction)) {
-      return NextResponse.json(
-        { error: 'direction must be BUY or SELL' },
-        { status: 400 }
-      );
-    }
+    let entryPrice: number = rawEntryPrice || 0;
 
     // POS-01: Fetch TradingConfig from DB instead of using hardcoded FINEX_CONFIG
     let config = await db.tradingConfig.findFirst();
@@ -603,11 +576,14 @@ export async function DELETE(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
 
-    if (!id) {
-      return NextResponse.json({ error: 'id query parameter is required' }, { status: 400 });
+    // Validate ID with ClosePositionSchema
+    const idValidation = validateBody(ClosePositionSchema, { id: id ?? '' });
+    if (!idValidation.success) {
+      return NextResponse.json(idValidation.error, { status: idValidation.status });
     }
+    const { id: validatedId } = idValidation.data;
 
-    const existing = await db.tradingPosition.findUnique({ where: { id } });
+    const existing = await db.tradingPosition.findUnique({ where: { id: validatedId } });
     if (!existing) {
       return NextResponse.json({ error: 'Position not found' }, { status: 404 });
     }
@@ -619,7 +595,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     const cancelled = await db.tradingPosition.update({
-      where: { id },
+      where: { id: validatedId },
       data: {
         status: 'cancelled',
         closedAt: new Date(),
@@ -633,7 +609,7 @@ export async function DELETE(request: NextRequest) {
           category: 'trading',
           message: `Cancelled ${existing.direction} ${existing.pair} position`,
           pair: existing.pair,
-          metadata: JSON.stringify({ positionId: id }),
+          metadata: JSON.stringify({ positionId: validatedId }),
         },
       });
     } catch {

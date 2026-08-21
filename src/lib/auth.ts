@@ -1,6 +1,7 @@
 import type { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
-import bcrypt from 'bcryptjs';
+import { verifyPassword } from '@/lib/auth/password';
+import { decryptTotpSecret } from '@/lib/auth/totp-encryption';
 import { db } from '@/lib/db';
 import { safeLog } from '@/lib/safe-log';
 
@@ -39,13 +40,16 @@ export const authOptions: NextAuthOptions = {
         }
 
         let isValid: boolean;
+        let needsRehash: boolean;
         try {
-          isValid = await bcrypt.compare(credentials.password, user.passwordHash);
+          const result = await verifyPassword(user.passwordHash, credentials.password);
+          isValid = result.valid;
+          needsRehash = result.needsRehash;
         } catch (error) {
           safeLog({
             level: 'error',
             route: 'Auth',
-            message: 'bcrypt.compare failed',
+            message: 'Password verification failed',
             error: error instanceof Error ? error.message : String(error),
           });
           return null;
@@ -53,6 +57,19 @@ export const authOptions: NextAuthOptions = {
 
         if (!isValid) {
           return null;
+        }
+
+        // Transparent re-hash: upgrade bcrypt to Argon2id in background
+        if (needsRehash) {
+          import('@/lib/auth/password').then(async ({ hashPassword }) => {
+            try {
+              const newHash = await hashPassword(credentials.password);
+              await db.user.update({ where: { id: user.id }, data: { passwordHash: newHash } });
+              safeLog({ level: 'info', route: 'Auth', message: `Password re-hashed (bcrypt → Argon2id) for user ${user.email}` });
+            } catch (e) {
+              safeLog({ level: 'warn', route: 'Auth', message: 'Background password re-hash failed', error: e instanceof Error ? e.message : String(e) });
+            }
+          });
         }
 
         // AUDIT-FIX-2: Enforce 2FA if enabled
@@ -80,9 +97,10 @@ export const authOptions: NextAuthOptions = {
           // Verify TOTP code
           try {
             const { authenticator } = await import('otplib');
+            const decryptedSecret = decryptTotpSecret(user.twoFactor.secret);
             const isTotpValid = authenticator.verify({
               token: code,
-              secret: user.twoFactor.secret,
+              secret: decryptedSecret,
             });
             if (!isTotpValid) {
               safeLog({

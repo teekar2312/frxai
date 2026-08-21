@@ -9,18 +9,6 @@ interface RateLimitEntry {
 
 const store = new Map<string, RateLimitEntry>();
 
-// Cleanup old entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  // LIB-007: Use the max window from all configs instead of hardcoded 60s
-  const maxWindowMs = Math.max(...Object.values(DEFAULT_CONFIGS).map(c => c.windowMs));
-  for (const [key, entry] of store) {
-    // Remove timestamps older than the largest configured window
-    entry.timestamps = entry.timestamps.filter(t => now - t < maxWindowMs);
-    if (entry.timestamps.length === 0) store.delete(key);
-  }
-}, 300_000);
-
 export interface RateLimitConfig {
   /** Number of requests allowed in the window */
   maxRequests: number;
@@ -37,6 +25,16 @@ const DEFAULT_CONFIGS: Record<string, RateLimitConfig> = {
   analysis: { maxRequests: 5, windowMs: 60_000 },
   // FIX MKT-ANALYSIS-007: Separate rate limit bucket for indicators
   indicators: { maxRequests: 10, windowMs: 60_000 },
+  // Backtest: 3 req/min (expensive computation)
+  backtest: { maxRequests: 3, windowMs: 60_000 },
+  // Auto-trade: 2 req/min (most sensitive action)
+  autoTrade: { maxRequests: 2, windowMs: 60_000 },
+  // Pending orders: 10 req/min
+  pendingOrder: { maxRequests: 10, windowMs: 60_000 },
+  // Market analysis: 8 req/min
+  mktAnalysis: { maxRequests: 8, windowMs: 60_000 },
+  // Correlation analysis: 5 req/min
+  correlation: { maxRequests: 5, windowMs: 60_000 },
   // General API: 60 req/min
   general: { maxRequests: 60, windowMs: 60_000 },
   // FNH-001: Finnhub quotes: 12 req/min (conserves 60/min Finnhub free tier)
@@ -44,6 +42,20 @@ const DEFAULT_CONFIGS: Record<string, RateLimitConfig> = {
   // MTX-001: MARKETAUX news: 3 req/min (conserves 100/day free tier)
   news: { maxRequests: 3, windowMs: 60_000 },
 };
+
+export { DEFAULT_CONFIGS };
+
+// Cleanup old entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  // LIB-007: Use the max window from all configs instead of hardcoded 60s
+  const maxWindowMs = Math.max(...Object.values(DEFAULT_CONFIGS).map(c => c.windowMs));
+  for (const [key, entry] of store) {
+    // Remove timestamps older than the largest configured window
+    entry.timestamps = entry.timestamps.filter(t => now - t < maxWindowMs);
+    if (entry.timestamps.length === 0) store.delete(key);
+  }
+}, 300_000);
 
 /**
  * Check if a request should be rate limited.
@@ -79,9 +91,22 @@ export function checkRateLimit(key: string, configName: string): { allowed: bool
  * Create a rate-limited handler wrapper for API routes.
  * Usage at the top of a route handler:
  *   const rateCheck = checkRateLimit(clientIp(request), 'trade');
- *   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+ *   if (!rateCheck.allowed) return rateLimitedResponse('trade', rateCheck.retryAfterMs);
+ *
+ * Backwards compatible: rateLimitedResponse(retryAfterMs) still works (legacy callers).
  */
-export function rateLimitedResponse(retryAfterMs?: number) {
+export function rateLimitedResponse(arg1?: string | number, arg2?: number) {
+  // Backwards compatible: if first arg is a number, treat as retryAfterMs (old signature)
+  let configName: string | undefined;
+  let retryAfterMs: number | undefined;
+  if (typeof arg1 === 'number') {
+    retryAfterMs = arg1;
+  } else {
+    configName = arg1;
+    retryAfterMs = arg2;
+  }
+
+  const config = configName ? DEFAULT_CONFIGS[configName] || DEFAULT_CONFIGS.general : DEFAULT_CONFIGS.general;
   return new Response(
     JSON.stringify({ error: 'Too many requests', retryAfterMs }),
     {
@@ -89,6 +114,9 @@ export function rateLimitedResponse(retryAfterMs?: number) {
       headers: {
         'Content-Type': 'application/json',
         'Retry-After': String(Math.ceil((retryAfterMs || 1000) / 1000)),
+        'X-RateLimit-Limit': String(config?.maxRequests || 60),
+        'X-RateLimit-Remaining': '0',
+        'X-RateLimit-Reset': String(Math.ceil((Date.now() + (retryAfterMs || 60000)) / 1000)),
       },
     }
   );

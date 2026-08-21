@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
+import { hashPassword } from '@/lib/auth/password';
 import { db } from '@/lib/db';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
@@ -64,9 +64,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Hash password
-    const salt = await bcrypt.genSalt(12);
-    const passwordHash = await bcrypt.hash(password, salt);
+    // Hash password with Argon2id
+    const passwordHash = await hashPassword(password);
 
     // Create user
     const user = await db.user.create({

@@ -1,0 +1,68 @@
+# ============================================================
+# FINEX Indonesia - Production Dockerfile (PostgreSQL variant)
+# Multi-stage build with Decimal types and PG entrypoint
+#
+# Build:  docker build -f Dockerfile.postgres -t finex-app:latest .
+# Or via compose:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up --build -d
+# ============================================================
+
+# Stage 1: Dependencies
+FROM oven/bun:1 AS deps
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile --production=false
+
+# Stage 2: Build
+FROM oven/bun:1 AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+# Generate Prisma client using the PostgreSQL schema
+ARG PRISMA_SCHEMA=schema.postgres.prisma
+RUN bunx prisma generate --schema="prisma/${PRISMA_SCHEMA}"
+
+# Build Next.js (standalone output)
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_ENV=production
+RUN bun run build
+
+# Stage 3: Production
+FROM oven/bun:1 AS runner
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Install postgresql-client for pg_isready healthcheck in entrypoint
+RUN apk add --no-cache postgresql16-client
+
+# Create non-root user
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Copy standalone output
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
+
+# Copy Prisma schemas + CLI for runtime DB initialization
+COPY --from=builder /app/prisma ./prisma
+COPY --from=deps /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=deps /app/node_modules/prisma ./node_modules/prisma
+
+# Copy PostgreSQL entrypoint
+COPY --from=builder /app/docker-entrypoint.postgres.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
+# Switch to non-root user
+USER nextjs
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+ENTRYPOINT ["./docker-entrypoint.sh"]
+CMD ["bun", "server.js"]

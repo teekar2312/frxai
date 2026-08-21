@@ -1,16 +1,24 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
 import { PAIR_PIP_VALUES } from '@/lib/trading-types';
 import { logApiError } from '@/lib/safe-log';
 import { getCachedQuote } from '@/lib/price-cache';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 
 // POST /api/trailing-stop/process
-// Trailing stop execution engine — called periodically by the frontend.
+// Trailing stop execution engine — called periodically by the frontend or scheduler.
 // Processes all open simulation positions that have trailingStop > 0.
 // Also auto-applies trailing stop to positions opened when autoTrailingStop is on.
 // Updates currentPrice from price cache, computes new SL, and updates the position.
-export async function POST() {
+export async function POST(request: NextRequest) {
+  // Skip rate limit for internal scheduler calls
+  const isInternalCall = request.headers.get('x-internal-call') === 'true';
+  if (!isInternalCall) {
+    const rateCheck = checkRateLimit(clientIp(request), 'trade');
+    if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+  }
+
   try {
     // 1. Fetch config
     const config = await db.tradingConfig.findFirst();

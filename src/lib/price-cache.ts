@@ -6,7 +6,7 @@
  */
 
 import type { ForexPair, QuoteData } from './trading-types';
-import { PAIR_TO_FINNHUB_SYMBOL, PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS, SIMULATED_BASES } from './trading-types';
+import { PAIR_TO_FINNHUB_SYMBOL, PAIR_PIP_VALUES, FOREX_PAIRS, SIMULATED_BASES, DEFAULT_SPREADS } from './trading-types';
 import { fetchWithTimeout } from './fetch-utils';
 import { safeLog } from './safe-log';
 
@@ -67,14 +67,15 @@ function generateSimulatedQuote(pair: ForexPair): QuoteData {
   s.high = Math.max(s.high, s.price);
   s.low = Math.min(s.low, s.price);
 
-  // C-007: Use FINEX_CONFIG.spreadPip for consistency
-  const spread = FINEX_CONFIG.spreadPip * base.pipSize;
+  // C-007: Use pair-specific spreads for realism
+  const spreadPips = DEFAULT_SPREADS[pair];
+  const spread = spreadPips * base.pipSize;
   return {
     pair,
     bid: parseFloat(s.price.toFixed(5)),
     ask: parseFloat((s.price + spread).toFixed(5)),
     mid: parseFloat((s.price + spread / 2).toFixed(5)),
-    spread: FINEX_CONFIG.spreadPip,
+    spread: spreadPips,
     change: parseFloat((s.price - s.prevClose).toFixed(5)),
     changePercent: parseFloat((((s.price - s.prevClose) / s.prevClose) * 100).toFixed(4)),
     high: s.high,
@@ -116,7 +117,8 @@ export async function refreshAllQuotes(): Promise<{ quotes: Record<ForexPair, Qu
       // FNH-006: data.c is the last/mid price, NOT bid
       const lastPrice = data.c;
       const pipSize = PAIR_PIP_VALUES[pair]?.pipSize ?? 0.0001;
-      const spread = FINEX_CONFIG.spreadPip * pipSize; // C-007: use config spread
+      const spreadPips = DEFAULT_SPREADS[pair];
+      const spread = spreadPips * pipSize; // C-007: use pair-specific spread
 
       // RB-002: Track session high/low
       const hl = getSessionHL(pair);
@@ -130,7 +132,7 @@ export async function refreshAllQuotes(): Promise<{ quotes: Record<ForexPair, Qu
         bid: parseFloat((lastPrice - spread / 2).toFixed(5)),
         ask: parseFloat((lastPrice + spread / 2).toFixed(5)),
         mid: lastPrice,
-        spread: FINEX_CONFIG.spreadPip,
+        spread: spreadPips,
         change: parseFloat((data.c - (data.pc || data.c)).toFixed(5)),
         changePercent: data.pc ? parseFloat((((data.c - data.pc) / data.pc) * 100).toFixed(4)) : 0,
         high: hl.high,
@@ -240,7 +242,8 @@ export async function getCurrentBidAsk(pair: string, direction: 'BUY' | 'SELL'):
 
   // FIX LIB-005: Use PAIR_PIP_VALUES as single source of truth instead of hardcoded values
   const pipSize = PAIR_PIP_VALUES[pair as ForexPair]?.pipSize ?? 0.0001;
-  const spread = FINEX_CONFIG.spreadPip * pipSize;
+  const spreadPips = DEFAULT_SPREADS[pair as ForexPair] ?? 0.5;
+  const spread = spreadPips * pipSize;
   const price = direction === 'BUY'
     ? mid.mid + spread / 2  // ask
     : mid.mid - spread / 2;  // bid

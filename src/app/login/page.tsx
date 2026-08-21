@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { ShieldCheck, Mail, Lock, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -104,7 +105,7 @@ export default function LoginPage() {
                 </div>
               </div>
             </CardContent>
-            <CardFooter className="pt-2">
+            <CardFooter className="pt-2 flex-col gap-3">
               <Button
                 type="submit"
                 disabled={loading}
@@ -116,6 +117,9 @@ export default function LoginPage() {
                   'Masuk'
                 )}
               </Button>
+              <Link href="/forgot-password" className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors">
+                Lupa Password?
+              </Link>
             </CardFooter>
           </form>
         </Card>

@@ -2190,3 +2190,109 @@ Stage Summary:
 - Fixed 20+ files: removed unused imports, prefixed unused destructured vars, fixed prefer-const
 - Integration tests cover health, prices, risk (with AI), market-condition, news, config
 - Scalability doc covers migration path, optimization tips, BAPPEBTI compliance
+
+---
+Task ID: A
+Agent: trading-core-engine
+Task: Implement critical trading engine (Auto SL/TP, Pending Order Execution, Server-side Scheduler)
+
+Work Log:
+- Added checkPositionSLTP() to finnhub route — auto-closes positions on SL/TP hit
+- Added checkPendingOrders() to finnhub route — executes pending orders when price triggers
+- Added server-side auto-trading scheduler (every 30s) and trailing stop (every 50s)
+- Added closeReason, executedAt, executedPrice to Prisma schema
+- Updated auto-execute and trailing-stop routes to skip rate limit and auth for internal calls
+
+Stage Summary:
+- Positions now auto-close on SL/TP hit every price tick (5s)
+- Pending orders execute when price crosses their level
+- Auto-trading runs server-side every 30s (no browser needed)
+- Trailing stop processes every 50s server-side
+
+---
+Task ID: B
+Agent: bugfix-config
+Task: Fix priceSourceWarning bug, add ws-prices to prod Docker, realistic spreads, config cleanup
+
+Work Log:
+- Fixed priceSourceWarning variable reference in page.tsx (removed underscore from getter, kept setter underscored)
+- Added ws-prices service to docker-compose.prod.yml with healthcheck on /api/status
+- Added WS_PRICES_URL env var to app service in docker-compose.prod.yml
+- Added DEFAULT_SPREADS per pair (EURUSD:0.8, GBPUSD:1.2, USDJPY:1.0, XAUUSD:30)
+- Updated price-cache.ts to use DEFAULT_SPREADS instead of FINEX_CONFIG.spreadPip
+- Updated ws-prices mini-service to use pair-specific spreads in PAIRS config
+- Fixed ws-prices simulated broadcast to send correct spread value (was hardcoded 1)
+- Replaced FINEX_CONFIG.minLot/maxLotPerOrder with serverConfig values in positions route
+- Replaced FINEX_CONFIG.minLot/maxLotPerOrder with serverConfig values in risk route
+- Removed FINEX_CONFIG import from positions and risk routes
+- Added FALLBACK comment above FINEX_CONFIG in trading-types.ts
+
+Stage Summary:
+- MT5 fallback banner now shows correctly (priceSourceWarning variable fixed)
+- WebSocket prices work in production deployment (ws-prices service added to prod overlay)
+- Spreads are now realistic per pair (XAUUSD: 30 pips vs old 0.5)
+- Risk/position calculations use server-side TradingConfig, not hardcoded FINEX_CONFIG constants
+
+---
+Task ID: C
+Agent: legal-auth
+Task: Create legal/regulatory pages and password reset flow
+
+Work Log:
+- Changed html lang from "en" to "id" in layout.tsx (was already "id")
+- Created 4 legal pages (terms, privacy, risk-disclosure, about) in Bahasa Indonesia
+- Added resetToken/resetTokenExpires to User model in Prisma schema
+- Ran prisma db push successfully
+- Exported sendEmail from email-service.ts for reuse
+- Created /api/auth/forgot-password and /api/auth/reset-password API routes
+- Created forgot-password and reset-password pages
+- Added "Lupa Password?" link to login page
+- Updated middleware to allow /legal, /forgot-password, /reset-password as public routes
+
+Stage Summary:
+- Legal pages: terms, privacy, risk-disclosure, about — all in Bahasa Indonesia
+- Password reset: forgot-password email + reset-password with token validation
+- html lang fixed to "id" for Indonesian market
+
+
+---
+Task ID: D
+Agent: admin-i18n-idr
+Task: Admin CRUD, expanded i18n, IDR currency support
+
+Work Log:
+- Created /api/admin/users route with GET/PUT/DELETE for user management
+- Replaced static admin panel with functional user table in SettingsPanel
+- Expanded i18n from ~50 to ~110+ translation keys covering dashboard, trading, risk, signals, settings, alerts, timeframes, sessions
+- Added language selector in Settings using existing Select component and LOCALE_LABELS
+- Added formatCurrency() with IDR_USD_RATE (15,850) to i18n.ts
+- Added displayCurrency to trading store (persisted via partialize)
+- Updated Sidebar balance display to show IDR equivalent when IDR selected
+- Added currency selector in Settings General section
+
+Stage Summary:
+- Admin can now list, activate/deactivate, and change roles of users via functional table in Settings
+- i18n covers all major panels: dashboard, trading, risk, signals, settings, alerts, timeframes, sessions
+- IDR display option with ~15,850 rate, toggleable between USD/IDR in Settings
+- All changes pass ESLint with zero new warnings
+---
+Task ID: E
+Agent: remaining-features
+Task: Implement news-price correlation, tests, deposits, calendar, API docs, backup
+
+Work Log:
+- Added news-price correlation to analysis route (high-impact news factored into AI prompt)
+- Created 3 new test files: risk-calculation, position-management, indicators
+- Added Transaction model to Prisma schema for deposit/withdrawal tracking
+- Created /api/transactions route for deposit/withdrawal CRUD
+- Expanded economic calendar with 6+ event types and previous values
+- Created docs/api-reference.md with OpenAPI-style documentation
+- Created scripts/backup-db.sh automated backup script
+
+Stage Summary:
+- Analysis now considers high-impact news from last 24h
+- Test coverage: 6 test files, 30+ test cases
+- Transaction tracking for deposits/withdrawals with balance updates
+- Economic calendar: 6+ event types with realistic scheduling
+- API docs covering all 27+ endpoints
+- Automated backup: gzip compression, 30-day rotation

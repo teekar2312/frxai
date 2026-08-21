@@ -99,6 +99,10 @@ interface TradingStore {
   selectedSession: TradingSessionId;
   setSelectedSession: (_session: TradingSessionId) => void;
 
+  // Display currency
+  displayCurrency: 'USD' | 'IDR';
+  setDisplayCurrency: (_currency: 'USD' | 'IDR') => void;
+
   // User role (NOT persisted — comes from server auth)
   userRole: 'admin' | 'user';
   setUserRole: (_role: 'admin' | 'user') => void;
@@ -203,17 +207,22 @@ export const useTradingStore = create<TradingStore>()(
       selectedSession: 'all' as TradingSessionId,
       setSelectedSession: (session) => set({ selectedSession: session }),
 
+      // Display currency (persisted)
+      displayCurrency: 'USD' as const,
+      setDisplayCurrency: (currency) => set({ displayCurrency: currency }),
+
       // User role (NOT persisted — comes from server auth)
       userRole: 'user' as const,
       setUserRole: (role) => set({ userRole: role }),
     }),
     {
       name: 'frxai-trading-store',
-      // Persist tradingMode, timeframe, and session preferences
+      // Persist tradingMode, timeframe, session, and currency preferences
       partialize: (state) => ({
         tradingMode: state.tradingMode,
         selectedTimeframe: state.selectedTimeframe,
         selectedSession: state.selectedSession,
+        displayCurrency: state.displayCurrency,
       }),
     }
   )

@@ -10,9 +10,14 @@ const MIN_CONFIDENCE = 0.6;
 
 // POST - Process auto-execution engine
 export async function POST(request: NextRequest) {
-  const rateCheck = checkRateLimit(clientIp(request), 'trade');
-  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
-  const auth = requireAuthForMutation(request);
+  // Skip rate limit for internal scheduler calls
+  const isInternalCall = request.headers.get('x-internal-call') === 'true';
+  if (!isInternalCall) {
+    const rateCheck = checkRateLimit(clientIp(request), 'trade');
+    if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+  }
+
+  const auth = isInternalCall ? { authorized: true } : requireAuthForMutation(request);
   if (!auth.authorized) return auth.error!;
 
   try {

@@ -132,7 +132,7 @@ function positionCloseHtml(pair: string, direction: string, lotSize: number, ent
 // Core Send Functions
 // ============================================================
 
-async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
+export async function sendEmail(to: string, subject: string, html: string): Promise<boolean> {
   const client = getResendClient();
   if (!client) {
     safeLog({ level: 'warn', route: 'EmailService', message: 'RESEND_API_KEY not set — email skipped' });

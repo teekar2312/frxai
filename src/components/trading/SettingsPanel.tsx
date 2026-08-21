@@ -13,9 +13,11 @@ import { Badge } from '@/components/ui/badge';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { type TradingConfig } from './shared';
 import { Mt5ConnectionPanel } from './Mt5ConnectionPanel';
 import { useTradingStore } from '@/lib/trading-store';
+import { t, setLocale, getLocale, LOCALE_LABELS, type Locale } from '@/lib/i18n';
 
 interface AiProviderInfo {
   id: string;
@@ -26,12 +28,14 @@ interface AiProviderInfo {
 }
 
 export function SettingsPanel() {
-  const { tradingMode, setServerConfig, userRole } = useTradingStore();
+  const { tradingMode, setServerConfig, userRole, displayCurrency, setDisplayCurrency } = useTradingStore();
   const [config, setConfig] = useState<TradingConfig | null>(null);
   const [configLoading, setConfigLoading] = useState(false);
   const [configSaving, setConfigSaving] = useState(false);
   const [aiProviders, setAiProviders] = useState<AiProviderInfo[]>([]);
   const [emailStatus, setEmailStatus] = useState<Record<string, string | boolean> | null>(null);
+  const [adminUsers, setAdminUsers] = useState<{ id: string; email: string; name: string | null; role: string; isActive: boolean; lastLoginAt: string | null; createdAt: string }[]>([]);
+  const [adminUsersLoading, setAdminUsersLoading] = useState(false);
 
   // AUDIT-TRADE-01: Sync config to Zustand store
   // AUDIT-AI-19: Include AI provider/model in store sync
@@ -70,6 +74,20 @@ export function SettingsPanel() {
     }
   }, [syncConfigToStore]);
 
+  // Fetch admin users
+  const fetchAdminUsers = useCallback(async () => {
+    if (userRole !== 'admin') return;
+    setAdminUsersLoading(true);
+    try {
+      const res = await fetch('/api/admin/users');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.users) setAdminUsers(data.users);
+      }
+    } catch { /* silent */ }
+    finally { setAdminUsersLoading(false); }
+  }, [userRole]);
+
   // Fetch AI providers
   const fetchAiProviders = useCallback(async () => {
     try {
@@ -86,7 +104,8 @@ export function SettingsPanel() {
   useEffect(() => {
     fetchConfig();
     fetchAiProviders();
-  }, [fetchConfig, fetchAiProviders]);
+    fetchAdminUsers();
+  }, [fetchConfig, fetchAiProviders, fetchAdminUsers]);
 
   // Save config
   const handleSaveConfig = async () => {
@@ -166,49 +185,72 @@ export function SettingsPanel() {
       {userRole === 'admin' && (
         <Card className="bg-zinc-900 border-amber-500/30 p-4">
           <CardHeader className="p-0 pb-3">
-            <CardTitle className="text-sm text-amber-400 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4" /> Panel Admin
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm text-amber-400 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4" /> {t('admin.userManagement')}
+              </CardTitle>
+              <Button variant="ghost" size="sm" onClick={fetchAdminUsers} className="text-zinc-400 hover:text-white h-7 text-xs">
+                <RefreshCw className={`w-3 h-3 ${adminUsersLoading ? 'animate-spin' : ''}`} />
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-                <span className="text-xs font-medium text-amber-400">Mode Admin Aktif</span>
+            {adminUsersLoading ? (
+              <div className="space-y-2">
+                <Skeleton className="h-8 w-full bg-zinc-800" />
+                <Skeleton className="h-8 w-full bg-zinc-800" />
+                <Skeleton className="h-8 w-full bg-zinc-800" />
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="bg-zinc-800/50 rounded-lg p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <FileText className="w-3.5 h-3.5 text-zinc-400" />
-                    <span className="text-xs font-medium text-white">Manajemen Pengguna</span>
-                  </div>
-                  <p className="text-[10px] text-zinc-500 leading-relaxed">
-                    Kelola akun pengguna, atur peran (admin/user), dan pantau aktivitas login.
-                  </p>
-                </div>
-                <div className="bg-zinc-800/50 rounded-lg p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Settings className="w-3.5 h-3.5 text-zinc-400" />
-                    <span className="text-xs font-medium text-white">Konfigurasi Sistem</span>
-                  </div>
-                  <p className="text-[10px] text-zinc-500 leading-relaxed">
-                    Konfigurasi global server, API keys, batas sistem, dan parameter operasional.
-                  </p>
-                </div>
-                <div className="bg-zinc-800/50 rounded-lg p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <Shield className="w-3.5 h-3.5 text-zinc-400" />
-                    <span className="text-xs font-medium text-white">Log Audit Sistem</span>
-                  </div>
-                  <p className="text-[10px] text-zinc-500 leading-relaxed">
-                    Pantau seluruh aktivitas sistem, perubahan konfigurasi, dan jejak audit.
-                  </p>
-                </div>
+            ) : adminUsers.length === 0 ? (
+              <p className="text-xs text-zinc-500 text-center py-6">{t('common.noData')}</p>
+            ) : (
+              <div className="max-h-64 overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-zinc-700 hover:bg-transparent">
+                      <TableHead className="text-[11px] text-zinc-400">Email</TableHead>
+                      <TableHead className="text-[11px] text-zinc-400">Role</TableHead>
+                      <TableHead className="text-[11px] text-zinc-400">Status</TableHead>
+                      <TableHead className="text-[11px] text-zinc-400">Created</TableHead>
+                      <TableHead className="text-[11px] text-zinc-400 text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {adminUsers.map((u) => (
+                      <TableRow key={u.id} className="border-zinc-800">
+                        <TableCell className="text-xs text-zinc-200 font-mono">{u.email}</TableCell>
+                        <TableCell>
+                          <Select value={u.role} onValueChange={async (v) => {
+                            const res = await fetch('/api/admin/users', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: u.id, role: v }) });
+                            if (res.ok) fetchAdminUsers(); else toast.error('Failed to update role');
+                          }}>
+                            <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-7 w-24 text-[11px]">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="bg-zinc-800 border-zinc-700">
+                              <SelectItem value="admin" className="text-zinc-200">Admin</SelectItem>
+                              <SelectItem value="user" className="text-zinc-200">User</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          <Badge className={`${u.isActive ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'} text-[10px]`}>
+                            {u.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-[11px] text-zinc-500">{new Date(u.createdAt).toLocaleDateString('id-ID')}</TableCell>
+                        <TableCell className="text-right">
+                          <Switch checked={u.isActive} onCheckedChange={async (v) => {
+                            const res = await fetch('/api/admin/users', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: u.id, isActive: v }) });
+                            if (res.ok) fetchAdminUsers(); else toast.error('Failed to update status');
+                          }} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
-              <p className="text-[10px] text-zinc-600">
-                Endpoint API: /api/auth/register · Gunakan dengan hati-hati. Semua aksi dicatat.
-              </p>
-            </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -488,6 +530,41 @@ export function SettingsPanel() {
               <Label className="text-zinc-300 text-xs">Price Alert Terpicau</Label>
               <Switch checked={config?.emailOnAlertTrigger ?? true} onCheckedChange={(v) => updateConfig('emailOnAlertTrigger', v)} />
             </div>
+          </div>
+        </CardContent>
+      </Card>
+      {/* General Settings: Language & Currency */}
+      <Card className="bg-zinc-900 border-zinc-800 p-4">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="text-sm text-white flex items-center gap-2">
+            <Settings className="w-4 h-4" /> {t('settings.general')}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0 space-y-3">
+          <div className="flex items-center justify-between">
+            <Label className="text-zinc-300 text-xs">{t('settings.language')}</Label>
+            <Select value={getLocale()} onValueChange={(v) => setLocale(v as Locale)}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 w-48 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                {Object.entries(LOCALE_LABELS).map(([key, label]) => (
+                  <SelectItem key={key} value={key} className="text-zinc-200">{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center justify-between">
+            <Label className="text-zinc-300 text-xs">Display Currency</Label>
+            <Select value={displayCurrency} onValueChange={(v) => setDisplayCurrency(v as 'USD' | 'IDR')}>
+              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-white h-8 w-48 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-zinc-800 border-zinc-700">
+                <SelectItem value="USD" className="text-zinc-200">🇺🇸 USD ($)</SelectItem>
+                <SelectItem value="IDR" className="text-zinc-200">🇮🇩 IDR (Rp)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </CardContent>
       </Card>

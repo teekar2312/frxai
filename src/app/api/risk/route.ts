@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair, RiskCalculation } from '@/lib/trading-types';
-import { PAIR_PIP_VALUES, FINEX_CONFIG } from '@/lib/trading-types';
+import { PAIR_PIP_VALUES } from '@/lib/trading-types';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 import { getCachedQuote } from '@/lib/price-cache';
@@ -125,9 +125,11 @@ export async function POST(request: NextRequest) {
     // Pip Value per Standard Lot = PAIR_PIP_VALUES[pair].standard
     let lotSize = riskAmount / (stopLossPips * pipConfig.standard);
 
-    // Apply FINEX constraints
-    lotSize = Math.max(FINEX_CONFIG.minLot, lotSize);
-    lotSize = Math.min(FINEX_CONFIG.maxLotPerOrder, lotSize);
+    // Apply server-side constraints from TradingConfig
+    const serverMinLot = serverConfig.minLot ?? 0.01;
+    const serverMaxLot = serverConfig.maxLotPerOrder ?? 50;
+    lotSize = Math.max(serverMinLot, lotSize);
+    lotSize = Math.min(serverMaxLot, lotSize);
 
     if (aiConfidence !== undefined) {
       if (aiConfidence < 0.6) {
@@ -146,11 +148,11 @@ export async function POST(request: NextRequest) {
 
     // Apply confidence factor to lot size
     if (confidenceFactor === 0) {
-      lotSize = FINEX_CONFIG.minLot;
+      lotSize = serverMinLot;
     } else {
       lotSize = lotSize * confidenceFactor;
-      lotSize = Math.max(FINEX_CONFIG.minLot, lotSize);
-      lotSize = Math.min(FINEX_CONFIG.maxLotPerOrder, lotSize);
+      lotSize = Math.max(serverMinLot, lotSize);
+      lotSize = Math.min(serverMaxLot, lotSize);
     }
     // Round to 2 decimal places
     lotSize = parseFloat(lotSize.toFixed(2));
@@ -221,11 +223,11 @@ export async function POST(request: NextRequest) {
     if (finalPositions >= serverConfig.maxOpenPositions - 1) {
       extras.warnings.push(`Near max positions limit: ${finalPositions}/${serverConfig.maxOpenPositions}`);
     }
-    if (lotSize === FINEX_CONFIG.maxLotPerOrder) {
-      extras.warnings.push(`Lot size capped at maximum: ${FINEX_CONFIG.maxLotPerOrder}`);
+    if (lotSize === serverMaxLot) {
+      extras.warnings.push(`Lot size capped at maximum: ${serverMaxLot}`);
     }
-    if (lotSize === FINEX_CONFIG.minLot && riskAmount > stopLossPips * pipConfig.standard * FINEX_CONFIG.minLot) {
-      extras.warnings.push(`Lot size at minimum (${FINEX_CONFIG.minLot}) - risk reduced from ${finalRiskPct}%`);
+    if (lotSize === serverMinLot && riskAmount > stopLossPips * pipConfig.standard * serverMinLot) {
+      extras.warnings.push(`Lot size at minimum (${serverMinLot}) - risk reduced from ${finalRiskPct}%`);
     }
     // AI risk level warnings
     if (riskLevel === 'high') {

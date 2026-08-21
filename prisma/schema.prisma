@@ -16,6 +16,9 @@ model User {
   isActive      Boolean  @default(true)
   lastLoginAt   DateTime?
   twoFactor     UserTwoFactor?
+  resetToken     String?
+  resetTokenExpires DateTime?
+  transactions  Transaction[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -57,6 +60,7 @@ model TradingPosition {
   commission    Float    @default(1)
   openedAt      DateTime @default(now())
   closedAt      DateTime?
+  closeReason   String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -82,6 +86,8 @@ model PendingOrder {
   aiRecommendation String?
   triggeredAt   DateTime?
   cancelledAt   DateTime?
+  executedAt    DateTime?
+  executedPrice Float?
   expiresAt     DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -306,4 +312,17 @@ model SignalComment {
 
   @@index([signalId])
   @@index([createdAt])
+}
+
+model Transaction {
+  id            String   @id @default(cuid())
+  type          String   // deposit, withdrawal, adjustment
+  amount        Float
+  currency      String   @default("USD")
+  balanceBefore Float
+  balanceAfter  Float
+  description   String?
+  createdBy     String?
+  user          User?    @relation(fields: [createdBy], references: [id])
+  createdAt     DateTime @default(now())
 }

@@ -39,7 +39,7 @@ export default function TradingDashboard() {
   const [connected, setConnected] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
-  const [_priceSourceWarning, _setPriceSourceWarning] = useState(false);
+  const [priceSourceWarning, _setPriceSourceWarning] = useState(false);
   const [isSimulated, setIsSimulated] = useState(true);
   const [_newsSimulated, setNewsSimulated] = useState(true);
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';

@@ -67,6 +67,60 @@ const translations: Record<Locale, Record<string, string>> = {
     'risk.ai.highRisk': '⚠️ AI menilai risiko tinggi — pertimbangkan untuk mengurangi ukuran posisi',
     'risk.ai.mediumRisk': 'ℹ️ AI menilai risiko sedang — gunakan manajemen risiko ketat',
     'risk.ai.lowConfidence': '⛔ AI confidence terlalu rendah untuk trading otomatis (< 60%)',
+    // Dashboard
+    'dashboard.welcome': 'Selamat Datang di FINEX Indonesia',
+    'dashboard.totalPnl': 'Total P&L',
+    'dashboard.bestPair': 'Pair Terbaik',
+    'dashboard.worstPair': 'Pair Terburuk',
+    // Live Trading
+    'trading.openPosition': 'Buka Posisi',
+    'trading.closePosition': 'Tutup Posisi',
+    'trading.confirmClose': 'Konfirmasi penutupan posisi?',
+    'trading.positionOpened': 'Posisi berhasil dibuka',
+    'trading.positionClosed': 'Posisi berhasil ditutup',
+    // Risk Management
+    'risk.calculator': 'Kalkulator Risiko',
+    'risk.riskAmount': 'Jumlah Risiko',
+    'risk.suggestedLot': 'Lot yang Disarankan',
+    'risk.riskReward': 'Rasio Risiko/Imbalan',
+    'risk.dailyLimit': 'Batas Risiko Harian',
+    // Signals
+    'signals.noSignals': 'Tidak ada sinyal',
+    'signals.confidence': 'Keyakinan AI',
+    'signals.strategy': 'Strategi',
+    // Settings
+    'settings.general': 'Umum',
+    'settings.aiConfig': 'Konfigurasi AI',
+    'settings.security': 'Keamanan',
+    'settings.notifications': 'Notifikasi',
+    'settings.language': 'Bahasa',
+    'settings.saved': 'Pengaturan tersimpan',
+    // Alerts
+    'alerts.create': 'Buat Peringatan',
+    'alerts.above': 'Di Atas',
+    'alerts.below': 'Di Bawah',
+    'alerts.triggered': 'Peringatan Tereksekusi',
+    // Position statuses
+    'status.open': 'Terbuka',
+    'status.closed': 'Tertutup',
+    'status.pending': 'Tertunda',
+    'status.executed': 'Tereksekusi',
+    'status.expired': 'Kedaluwarsa',
+    // Timeframes
+    'tf.M1': '1 Menit',
+    'tf.M5': '5 Menit',
+    'tf.M15': '15 Menit',
+    'tf.M30': '30 Menit',
+    'tf.H1': '1 Jam',
+    'tf.H4': '4 Jam',
+    'tf.D1': 'Harian',
+    'tf.W1': 'Mingguan',
+    // Sessions
+    'session.Sydney': 'Sidney',
+    'session.Tokyo': 'Tokyo',
+    'session.London': 'London',
+    'session.NewYork': 'New York',
+    'session.all': 'Semua Sesi',
     // Admin
     'admin.userManagement': 'Manajemen Pengguna',
     'admin.systemConfig': 'Konfigurasi Sistem',
@@ -136,6 +190,60 @@ const translations: Record<Locale, Record<string, string>> = {
     'risk.ai.highRisk': '⚠️ AI assesses high risk — consider reducing position size',
     'risk.ai.mediumRisk': 'ℹ️ AI assesses medium risk — use strict risk management',
     'risk.ai.lowConfidence': '⛔ AI confidence too low for auto-trading (< 60%)',
+    // Dashboard
+    'dashboard.welcome': 'Welcome to FINEX Indonesia',
+    'dashboard.totalPnl': 'Total P&L',
+    'dashboard.bestPair': 'Best Pair',
+    'dashboard.worstPair': 'Worst Pair',
+    // Live Trading
+    'trading.openPosition': 'Open Position',
+    'trading.closePosition': 'Close Position',
+    'trading.confirmClose': 'Confirm position close?',
+    'trading.positionOpened': 'Position opened successfully',
+    'trading.positionClosed': 'Position closed successfully',
+    // Risk Management
+    'risk.calculator': 'Risk Calculator',
+    'risk.riskAmount': 'Risk Amount',
+    'risk.suggestedLot': 'Suggested Lot Size',
+    'risk.riskReward': 'Risk/Reward Ratio',
+    'risk.dailyLimit': 'Daily Risk Limit',
+    // Signals
+    'signals.noSignals': 'No signals available',
+    'signals.confidence': 'AI Confidence',
+    'signals.strategy': 'Strategy',
+    // Settings
+    'settings.general': 'General',
+    'settings.aiConfig': 'AI Configuration',
+    'settings.security': 'Security',
+    'settings.notifications': 'Notifications',
+    'settings.language': 'Language',
+    'settings.saved': 'Settings saved',
+    // Alerts
+    'alerts.create': 'Create Alert',
+    'alerts.above': 'Above',
+    'alerts.below': 'Below',
+    'alerts.triggered': 'Alert Triggered',
+    // Position statuses
+    'status.open': 'Open',
+    'status.closed': 'Closed',
+    'status.pending': 'Pending',
+    'status.executed': 'Executed',
+    'status.expired': 'Expired',
+    // Timeframes
+    'tf.M1': '1 Minute',
+    'tf.M5': '5 Minutes',
+    'tf.M15': '15 Minutes',
+    'tf.M30': '30 Minutes',
+    'tf.H1': '1 Hour',
+    'tf.H4': '4 Hours',
+    'tf.D1': 'Daily',
+    'tf.W1': 'Weekly',
+    // Sessions
+    'session.Sydney': 'Sydney',
+    'session.Tokyo': 'Tokyo',
+    'session.London': 'London',
+    'session.NewYork': 'New York',
+    'session.all': 'All Sessions',
     // Admin
     'admin.userManagement': 'User Management',
     'admin.systemConfig': 'System Configuration',
@@ -182,6 +290,17 @@ export const LOCALE_LABELS: Record<Locale, string> = {
   id: '🇮🇩 Bahasa Indonesia',
   en: '🇬🇧 English',
 };
+
+// IDR/USD exchange rate
+export const IDR_USD_RATE = 15850;
+
+export function formatCurrency(amount: number, currency: 'USD' | 'IDR' = 'USD'): string {
+  if (currency === 'IDR') {
+    const idr = amount * IDR_USD_RATE;
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(idr);
+  }
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
+}
 
 // Call init on module load (client-side only)
 if (typeof window !== 'undefined') {

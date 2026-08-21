@@ -231,6 +231,18 @@ export async function POST(request: NextRequest) {
       marketData.clientPrice = currentPrice;
     }
 
+    // News-price correlation: factor high-impact news into analysis
+    const recentHighImpactNews = await db.newsItem.findMany({
+      where: {
+        impact: 'high',
+        publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+      },
+      orderBy: { publishedAt: 'desc' },
+      take: 5,
+      select: { title: true, sentiment: true, impact: true, pair: true },
+    });
+    const relevantHighImpactNews = recentHighImpactNews.filter(n => !n.pair || n.pair === pair);
+
     // RD-002: Always fetch news server-side from DB
     let news: Array<{ title: string; description: string; impact: string; sentiment: string }> = [];
     try {
@@ -257,12 +269,20 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Build news context from high-impact news
+    let newsContext = '';
+    if (relevantHighImpactNews.length > 0) {
+      newsContext = `\n\n--- Berita Berdampak Tinggi (24 jam terakhir) ---\n` +
+        relevantHighImpactNews.map(n => `• [${n.impact.toUpperCase()}] ${n.title} (sentimen: ${n.sentiment})`).join('\n') +
+        '\nPertimbangkan dampak berita ini terhadap analisis teknikal.';
+    }
+
     // AI-006: Resolve active AI provider/model from DB config
     const config = await db.tradingConfig.upsert({ where: { id: 'default' }, update: {}, create: {} });
     const { provider, model } = resolveAiConfig(config.aiProvider, config.aiModel);
 
     // FIX MKT-ANALYSIS-006: Use 'system' role instead of 'assistant'
-    const prompt = buildAnalysisPrompt(pair, marketData, news, timeframe);
+    const prompt = buildAnalysisPrompt(pair, marketData, news, timeframe) + newsContext;
     const aiResult = await aiComplete(provider, model, [
       { role: 'system', content: 'You are a forex market analysis AI. Always respond with valid JSON only. Base your analysis on the actual technical indicator values provided in the user prompt.' },
       { role: 'user', content: prompt },

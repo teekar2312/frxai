@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair } from '@/lib/trading-types';
-import { PAIR_PIP_VALUES, FINEX_CONFIG, FOREX_PAIRS } from '@/lib/trading-types';
+import { PAIR_PIP_VALUES, FOREX_PAIRS } from '@/lib/trading-types';
 import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { getCurrentMidPriceLegacy as getCurrentMidPrice } from '@/lib/price-fetcher';
@@ -189,12 +189,12 @@ export async function POST(request: NextRequest) {
     }
 
     if (!lotSize) {
-      lotSize = FINEX_CONFIG.minLot;
+      lotSize = config.minLot;
     }
 
     // Validate lot size
-    if (lotSize < FINEX_CONFIG.minLot) lotSize = FINEX_CONFIG.minLot;
-    if (lotSize > FINEX_CONFIG.maxLotPerOrder) lotSize = FINEX_CONFIG.maxLotPerOrder;
+    if (lotSize < config.minLot) lotSize = config.minLot;
+    if (lotSize > config.maxLotPerOrder) lotSize = config.maxLotPerOrder;
 
     // Check max open positions
     const openCount = await db.tradingPosition.count({

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Separator } from '@/components/ui/separator';
 import { useTradingStore } from '@/lib/trading-store';
-import { t } from '@/lib/i18n';
+import { t, formatCurrency } from '@/lib/i18n';
 import { NAV_ITEMS } from './shared';
 
 export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
@@ -15,7 +15,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     accountBalance,
     dailyPnl, openPositionsCount,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
-    userRole,
+    userRole, displayCurrency,
   } = useTradingStore();
 
   // H2: Compute MT5-aware sidebar values
@@ -65,11 +65,18 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           )}
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Balance</span>
-            <span className="text-white font-mono font-medium">
-              {isMt5Live && mt5AccountInfo
-                ? `${mt5AccountInfo.currency} ${mt5AccountInfo.balance.toLocaleString()}`
-                : `$${accountBalance.toLocaleString()}`}
-            </span>
+            <div className="flex flex-col items-end">
+              <span className="text-white font-mono font-medium">
+                {isMt5Live && mt5AccountInfo
+                  ? `${mt5AccountInfo.currency} ${mt5AccountInfo.balance.toLocaleString()}`
+                  : formatCurrency(accountBalance, displayCurrency)}
+              </span>
+              {displayCurrency === 'IDR' && !isMt5Live && (
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  ${formatCurrency(accountBalance, 'USD')}
+                </span>
+              )}
+            </div>
           </div>
           <div className="flex justify-between text-xs">
             <span className="text-zinc-400">Daily P&L</span>

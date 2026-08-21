@@ -1,11 +1,11 @@
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY || '';
 const PORT = 3005;
 
-const PAIRS: Record<string, { finnhub: string; pipSize: number; base: number }> = {
-  EURUSD: { finnhub: 'OANDA:EUR_USD', pipSize: 0.0001, base: 1.0872 },
-  USDJPY: { finnhub: 'OANDA:USD_JPY', pipSize: 0.01, base: 154.32 },
-  GBPUSD: { finnhub: 'OANDA:GBP_USD', pipSize: 0.0001, base: 1.2715 },
-  XAUUSD: { finnhub: 'OANDA:XAU_USD', pipSize: 0.01, base: 2658.50 },
+const PAIRS: Record<string, { finnhub: string; pipSize: number; base: number; spreadPips: number }> = {
+  EURUSD: { finnhub: 'OANDA:EUR_USD', pipSize: 0.0001, base: 1.0872, spreadPips: 0.8 },
+  USDJPY: { finnhub: 'OANDA:USD_JPY', pipSize: 0.01, base: 154.32, spreadPips: 1.0 },
+  GBPUSD: { finnhub: 'OANDA:GBP_USD', pipSize: 0.0001, base: 1.2715, spreadPips: 1.2 },
+  XAUUSD: { finnhub: 'OANDA:XAU_USD', pipSize: 0.01, base: 2658.50, spreadPips: 30 },
 };
 
 const clients = new Set<import('bun').ServerWebSocket<{ pair: string | null }>>();
@@ -16,7 +16,8 @@ let _httpPollInterval: ReturnType<typeof setInterval> | null = null;
 
 function initPrices() {
   for (const [pair, cfg] of Object.entries(PAIRS)) {
-    prices[pair] = { bid: cfg.base, ask: cfg.base + cfg.pipSize * 0.5, mid: cfg.base, timestamp: Date.now() };
+    const halfSpread = (cfg.spreadPips * cfg.pipSize) / 2;
+    prices[pair] = { bid: cfg.base - halfSpread, ask: cfg.base + halfSpread, mid: cfg.base, timestamp: Date.now() };
   }
 }
 initPrices();
@@ -47,7 +48,7 @@ function connectFinnhubWs() {
           const timestamp = trade.t as number;
           for (const [pair, cfg] of Object.entries(PAIRS)) {
             if (cfg.finnhub === symbol) {
-              const halfSpread = cfg.pipSize * 0.5;
+              const halfSpread = (cfg.spreadPips * cfg.pipSize) / 2;
               const bid = price - halfSpread;
               const ask = price + halfSpread;
               prices[pair] = { bid, ask, mid: price, timestamp };
@@ -80,7 +81,7 @@ function startHttpPolling() {
       const vol = pair === 'XAUUSD' ? 3.5 : (pair === 'USDJPY' ? 0.15 : 0.0003);
       const change = (Math.random() - 0.5) * vol;
       const mid = prices[pair].mid + change;
-      const halfSpread = cfg.pipSize * 0.5;
+      const halfSpread = (cfg.spreadPips * cfg.pipSize) / 2;
       prices[pair] = { bid: mid - halfSpread, ask: mid + halfSpread, mid, timestamp: Date.now() };
       broadcast({
         type: 'price',
@@ -88,7 +89,7 @@ function startHttpPolling() {
         bid: mid - halfSpread,
         ask: mid + halfSpread,
         mid,
-        spread: 1,
+        spread: cfg.spreadPips,
         timestamp: Date.now(),
       });
     }

@@ -228,6 +228,19 @@ export function toFinnhubResolution(resolution: string): string {
 /** Get valid Finnhub resolutions for validation */
 export const VALID_FINNHUB_RESOLUTIONS = ['1', '2', '5', '15', '30', '60', '240', 'D', 'W', 'M', 'M1', 'M2', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'];
 
+// Realistic default spreads per pair (in pips)
+export const DEFAULT_SPREADS: Record<ForexPair, number> = {
+  EURUSD: 0.8,   // ~0.8 pips typical
+  GBPUSD: 1.2,   // ~1.2 pips typical
+  USDJPY: 1.0,   // ~1.0 pips typical
+  XAUUSD: 30,    // ~30 pips typical for gold
+};
+
+/**
+ * FALLBACK configuration constants.
+ * In production, these values are overridden by TradingConfig from the database.
+ * These defaults are only used when the DB has no config record.
+ */
 export const FINEX_CONFIG = {
   leverage: 100,
   spreadPip: 0.5,

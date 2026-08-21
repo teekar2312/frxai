@@ -1,15 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { validateAuth } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 
 // GET - Return count of unread notifications
+// AUDIT-FIX-8: Removed validateAuth from GET — frontend polls this without API key.
+// Notifications are read-only display data. Mark-as-read (PUT) still requires auth.
 export async function GET(request: NextRequest) {
   const rateCheck = checkRateLimit(clientIp(request), 'general');
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
-  const auth = validateAuth(request);
-  if (!auth.authorized) return auth.error!;
 
   try {
     const count = await db.notification.count({

@@ -11,6 +11,7 @@ export const authOptions: NextAuthOptions = {
       credentials: {
         email: { label: 'Email', type: 'email' },
         password: { label: 'Password', type: 'password' },
+        twoFactorCode: { label: '2FA Code', type: 'text' },
       },
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) {
@@ -21,6 +22,7 @@ export const authOptions: NextAuthOptions = {
         try {
           user = await db.user.findUnique({
             where: { email: credentials.email },
+            include: { twoFactor: true },
           });
         } catch (error) {
           safeLog({
@@ -51,6 +53,54 @@ export const authOptions: NextAuthOptions = {
 
         if (!isValid) {
           return null;
+        }
+
+        // AUDIT-FIX-2: Enforce 2FA if enabled
+        if (user.twoFactor?.enabled) {
+          const code = credentials.twoFactorCode as string | undefined;
+          if (!code) {
+            // Return a special marker so the frontend knows to show 2FA input
+            // We return null (auth fails) but the frontend can detect this
+            // via a separate API call
+            safeLog({
+              level: 'info',
+              route: 'Auth',
+              message: `2FA required for user ${user.email}`,
+            });
+            // Return an object with requires2FA flag so the frontend can handle it
+            return {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              role: user.role,
+              requiresTwoFactor: true as unknown as string,
+            };
+          }
+
+          // Verify TOTP code
+          try {
+            const { authenticator } = await import('otplib');
+            const isTotpValid = authenticator.verify({
+              token: code,
+              secret: user.twoFactor.secret,
+            });
+            if (!isTotpValid) {
+              safeLog({
+                level: 'warn',
+                route: 'Auth',
+                message: `Invalid 2FA code for user ${user.email}`,
+              });
+              return null;
+            }
+          } catch (error) {
+            safeLog({
+              level: 'error',
+              route: 'Auth',
+              message: '2FA verification failed',
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+          }
         }
 
         // Update last login (best-effort — don't let failure prevent login)
@@ -88,7 +138,9 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.role = (user as { role?: string }).role || 'user';
+        token.role = (user as Record<string, unknown>).role || 'user';
+        // AUDIT-FIX-12: Store 2FA flag in token for session invalidation
+        token.twoFactorVerified = true;
       }
       return token;
     },

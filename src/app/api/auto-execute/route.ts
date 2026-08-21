@@ -4,6 +4,8 @@ import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
 import type { ForexPair } from '@/lib/trading-types';
+import { sendPositionOpenEmail } from '@/lib/email-service';
+import { hasRecentHighImpactNews } from '@/lib/balance-sync';
 
 const AUTO_TRADE_PAIRS: ForexPair[] = ['EURUSD', 'USDJPY', 'GBPUSD', 'XAUUSD'];
 const MIN_CONFIDENCE = 0.6;
@@ -35,6 +37,14 @@ export async function POST(request: NextRequest) {
     if (openCount >= config.maxOpenPositions) {
       return NextResponse.json({
         message: 'Max open positions reached',
+        executed: [],
+      });
+    }
+
+    // AUDIT-FIX-6: Check avoidNewsTrading before auto-execution
+    if (config.avoidNewsTrading && await hasRecentHighImpactNews()) {
+      return NextResponse.json({
+        message: 'Auto-trading skipped: high-impact news active (avoidNewsTrading enabled)',
         executed: [],
       });
     }
@@ -147,6 +157,9 @@ export async function POST(request: NextRequest) {
           metadata: JSON.stringify({ positionId: position.id, confidence: analysis.confidence, strategy: analysis.strategyUsed }),
         },
       });
+
+      // AUDIT-FIX-3: Send email on auto-executed position open (non-blocking)
+      sendPositionOpenEmail(pair, direction, analysis.lotSize || 0.01, analysis.entryPrice, analysis.stopLoss, analysis.takeProfit).catch(() => {});
 
       executed.push({
         pair,

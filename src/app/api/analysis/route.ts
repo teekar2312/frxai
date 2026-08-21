@@ -243,17 +243,27 @@ export async function POST(request: NextRequest) {
     });
     const relevantHighImpactNews = recentHighImpactNews.filter(n => !n.pair || n.pair === pair);
 
-    // RD-002: Always fetch news server-side from DB
+    // AUDIT-FIX-9: Fetch news for AI context — include pair-specific AND untagged news
+    // Previously only fetched news tagged with exact pair, missing most articles
     let news: Array<{ title: string; description: string; impact: string; sentiment: string }> = [];
     try {
       const recentNews = await db.newsItem.findMany({
-        where: { pair: pair, publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        where: {
+          OR: [
+            { pair: pair },
+            { pair: null },
+          ],
+          publishedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
+        },
         orderBy: { publishedAt: 'desc' },
-        take: 10,
+        take: 15,
         select: { title: true, description: true, impact: true, sentiment: true },
       });
       if (recentNews.length > 0) {
-        news = recentNews.map(n => ({
+        // Prioritize pair-specific news first, then untagged
+        const pairSpecific = recentNews.filter(n => n.pair === pair);
+        const untagged = recentNews.filter(n => n.pair !== pair);
+        news = [...pairSpecific, ...untagged].slice(0, 10).map(n => ({
           title: n.title,
           description: (n.description || '').slice(0, 150),
           impact: n.impact || 'low',

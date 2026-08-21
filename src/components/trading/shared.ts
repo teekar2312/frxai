@@ -45,6 +45,7 @@ export interface Position {
   isOpen: boolean;
   openedAt: string;
   closedAt: string | null;
+  closeReason?: string | null; // AUDIT-FIX-7: STOP_LOSS, TAKE_PROFIT, manual, stop_out
 }
 
 export interface PriceAlert {

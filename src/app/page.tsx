@@ -118,6 +118,20 @@ export default function TradingDashboard() {
           toast.success(`🔔 ${ta.pair} ${ta.condition.replace('_', ' ')} ${ta.targetPrice}`);
         }
       }
+      // AUDIT-FIX-7: Show toasts for auto-closed positions (SL/TP) with closeReason
+      if (data.closedPositions?.length > 0) {
+        for (const cp of data.closedPositions) {
+          const reasonLabel = cp.reason === 'STOP_LOSS' ? '🛑 Stop Loss' : cp.reason === 'TAKE_PROFIT' ? '✅ Take Profit' : `❌ ${cp.reason}`;
+          const pnlLabel = cp.pnl >= 0 ? `+${cp.pnl.toFixed(2)}` : cp.pnl.toFixed(2);
+          toast[cp.pnl >= 0 ? 'success' : 'error'](`${reasonLabel}: ${cp.pair} ${cp.direction} (${pnlLabel})`);
+        }
+      }
+      // AUDIT-FIX-7: Show toast for executed pending orders
+      if (data.executedPendingOrders?.length > 0) {
+        for (const ep of data.executedPendingOrders) {
+          toast.info(`📋 Pending order tereksekusi: ${ep.direction} ${ep.pair}`);
+        }
+      }
       const sim = !!data.simulated;
       setIsSimulated(sim);
       setConnected(!sim || isMt5Live);

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import type { ForexPair, PendingOrderType } from '@/lib/trading-types';
 import { FOREX_PAIRS } from '@/lib/trading-types';
-import { validateAuth, requireAuthForMutation } from '@/lib/api-auth';
+import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError, safeLog } from '@/lib/safe-log';
 import { getCurrentMidPriceLegacy as getCurrentMidPrice } from '@/lib/price-fetcher';
@@ -11,11 +11,10 @@ const VALID_ORDER_TYPES: PendingOrderType[] = ['buy_limit', 'sell_limit', 'buy_s
 const VALID_STATUSES = ['pending', 'executed', 'cancelled', 'expired'] as const;
 
 // GET - List pending orders
+// AUDIT-FIX-8: Removed validateAuth from GET — read-only display data.
 export async function GET(request: NextRequest) {
   const rateCheck = checkRateLimit(clientIp(request), 'general');
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
-  const auth = validateAuth(request);
-  if (!auth.authorized) return auth.error!;
 
   try {
     const { searchParams } = new URL(request.url);

@@ -8,6 +8,7 @@ import { getCurrentMidPriceLegacy as getCurrentMidPrice } from '@/lib/price-fetc
 import { getCurrentBidAsk } from '@/lib/price-cache';
 import { logApiError, safeLog } from '@/lib/safe-log';
 import { sendPositionOpenEmail, sendPositionCloseEmail } from '@/lib/email-service';
+import { applyPnlToBalance, hasRecentHighImpactNews } from '@/lib/balance-sync';
 
 // GET - Fetch positions (supports ?status=open|closed|cancelled filter)
 export async function GET(request: NextRequest) {
@@ -115,6 +116,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Auto-trading is disabled in settings' },
         { status: 403 }
+      );
+    }
+
+    // AUDIT-FIX-6: Server-side avoidNewsTrading enforcement
+    if (config.avoidNewsTrading && await hasRecentHighImpactNews(pair)) {
+      return NextResponse.json(
+        { error: 'Trading blocked: high-impact news active (avoidNewsTrading enabled)' },
+        { status: 429 }
       );
     }
 
@@ -335,10 +344,28 @@ async function checkMarginCall() {
         const pnlPips = priceDiff / pipCfg.pipSize;
         const pnl = pnlPips * pipValue - worst.commission;
 
+        // AUDIT-FIX-4: Complete stop-out with closeReason, notification, email, balance sync
         await db.tradingPosition.update({
           where: { id: worst.id },
-          data: { currentPrice: closePrice, pnl, pnlPips, status: 'closed', closedAt: new Date() },
+          data: { currentPrice: closePrice, pnl, pnlPips, status: 'closed', closedAt: new Date(), closeReason: 'stop_out' },
         });
+
+        // Sync balance
+        await applyPnlToBalance(pnl, 'stop_out', worst.pair);
+
+        // Notification
+        try {
+          await db.notification.create({
+            data: {
+              type: 'stop_loss',
+              title: `🚨 Stop-Out: ${worst.direction} ${worst.pair}`,
+              message: `Force-closed ${worst.direction} ${worst.pair} @ ${closePrice.toFixed(5)} | P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} (margin: ${marginLevel.toFixed(1)}%)`,
+              pair: worst.pair,
+            },
+          });
+        } catch { /* non-critical */ }
+
+        // Activity log
         try {
           await db.activityLog.create({
             data: {
@@ -350,6 +377,9 @@ async function checkMarginCall() {
             },
           });
         } catch { /* non-critical */ }
+
+        // Email
+        sendPositionCloseEmail(worst.pair, worst.direction, worst.lotSize, worst.entryPrice, closePrice, pnl).catch(() => {});
       }
     }
     // Margin call warning
@@ -455,6 +485,9 @@ export async function PUT(request: NextRequest) {
       } catch {
         // Non-critical
       }
+
+      // AUDIT-FIX-1: Sync balance on manual close
+      await applyPnlToBalance(pnl, 'manual', existing.pair);
 
       // Send email notification on position close
       sendPositionCloseEmail(existing.pair, existing.direction, existing.lotSize, existing.entryPrice, closePrice, pnl).catch(() => {});

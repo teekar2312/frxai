@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import type { ForexPair, CandleData } from '@/lib/trading-types';
 import {
   PAIR_TO_FINNHUB_SYMBOL, RESOLUTION_TO_SECONDS, VALID_FINNHUB_RESOLUTIONS,
-  toFinnhubResolution,
+  toFinnhubResolution, PAIR_PIP_VALUES,
 } from '@/lib/trading-types';
 import { refreshAllQuotes, isAnySimulated, getCacheAge } from '@/lib/price-cache';
 import { fetchWithTimeout } from '@/lib/fetch-utils';
@@ -11,6 +11,8 @@ import { logApiError, safeLog } from '@/lib/safe-log';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { checkAllAlerts } from '@/lib/alert-checker';
 import { db } from '@/lib/db';
+import { applyPnlToBalance, hasRecentHighImpactNews } from '@/lib/balance-sync';
+import { sendPositionCloseEmail, sendPositionOpenEmail } from '@/lib/email-service';
 
 const FINNHUB_BASE = 'https://finnhub.io/api/v1';
 
@@ -49,54 +51,60 @@ async function checkPositionSLTP(currentPrices: Record<string, { bid: number; as
       const price = currentPrices[pos.pair];
       if (!price) continue;
 
-      const currentMid = (price.bid + price.ask) / 2;
       let shouldClose = false;
       let reason = '';
 
+      // FIX 5: Use bid/ask instead of mid for SL/TP comparisons and close price
       if (pos.direction === 'BUY') {
-        if (pos.stopLoss && currentMid <= pos.stopLoss) {
+        if (pos.stopLoss && price.bid <= pos.stopLoss) {
           shouldClose = true;
           reason = 'STOP_LOSS';
-        } else if (pos.takeProfit && currentMid >= pos.takeProfit) {
+        } else if (pos.takeProfit && price.bid >= pos.takeProfit) {
           shouldClose = true;
           reason = 'TAKE_PROFIT';
         }
       } else if (pos.direction === 'SELL') {
-        if (pos.stopLoss && currentMid >= pos.stopLoss) {
+        if (pos.stopLoss && price.ask >= pos.stopLoss) {
           shouldClose = true;
           reason = 'STOP_LOSS';
-        } else if (pos.takeProfit && currentMid <= pos.takeProfit) {
+        } else if (pos.takeProfit && price.ask <= pos.takeProfit) {
           shouldClose = true;
           reason = 'TAKE_PROFIT';
         }
       }
 
       if (shouldClose) {
+        // FIX 5: Use bid for BUY close, ask for SELL close
+        const closePrice = pos.direction === 'BUY' ? price.bid : price.ask;
+
         const pipValue = pos.pair === 'XAUUSD' || pos.pair === 'USDJPY' ? 0.01 : 0.0001;
         const pips = pos.direction === 'BUY'
-          ? (currentMid - pos.entryPrice) / pipValue
-          : (pos.entryPrice - currentMid) / pipValue;
+          ? (closePrice - pos.entryPrice) / pipValue
+          : (pos.entryPrice - closePrice) / pipValue;
         const pnl = pos.direction === 'BUY'
-          ? (currentMid - pos.entryPrice) * pos.lotSize * (pos.pair === 'XAUUSD' ? 100 : 100000)
-          : (pos.entryPrice - currentMid) * pos.lotSize * (pos.pair === 'XAUUSD' ? 100 : 100000);
+          ? (closePrice - pos.entryPrice) * pos.lotSize * (pos.pair === 'XAUUSD' ? 100 : 100000)
+          : (pos.entryPrice - closePrice) * pos.lotSize * (pos.pair === 'XAUUSD' ? 100 : 100000);
         const finalPnl = pnl - (pos.commission || 0);
 
         await db.tradingPosition.update({
           where: { id: pos.id },
           data: {
             status: 'closed',
-            currentPrice: currentMid,
+            currentPrice: closePrice,
             closedAt: new Date(),
             pnl: parseFloat(finalPnl.toFixed(2)),
             closeReason: reason,
           },
         });
 
+        // FIX 1: Sync balance after SL/TP close
+        await applyPnlToBalance(finalPnl, reason, pos.pair);
+
         await db.notification.create({
           data: {
             type: reason === 'STOP_LOSS' ? 'stop_loss' : 'take_profit',
             title: `${reason === 'STOP_LOSS' ? '🛑 Stop Loss' : '✅ Take Profit'}: ${pos.pair} ${pos.direction}`,
-            message: `${pos.pair} ${pos.direction} ditutup @ ${currentMid.toFixed(pos.pair === 'XAUUSD' || pos.pair === 'USDJPY' ? 3 : 5)} | P&L: ${finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)} (${pips >= 0 ? '+' : ''}${pips.toFixed(1)} pips)`,
+            message: `${pos.pair} ${pos.direction} ditutup @ ${closePrice.toFixed(pos.pair === 'XAUUSD' || pos.pair === 'USDJPY' ? 3 : 5)} | P&L: ${finalPnl >= 0 ? '+' : ''}${finalPnl.toFixed(2)} (${pips >= 0 ? '+' : ''}${pips.toFixed(1)} pips)`,
             pair: pos.pair,
           },
         });
@@ -105,11 +113,14 @@ async function checkPositionSLTP(currentPrices: Record<string, { bid: number; as
           data: {
             level: 'info',
             category: 'trading',
-            message: `POSITION CLOSED (${reason}): ${pos.direction} ${pos.pair} @ ${currentMid.toFixed(5)}, P&L: ${finalPnl.toFixed(2)}`,
+            message: `POSITION CLOSED (${reason}): ${pos.direction} ${pos.pair} @ ${closePrice.toFixed(5)}, P&L: ${finalPnl.toFixed(2)}`,
             pair: pos.pair,
             metadata: JSON.stringify({ positionId: pos.id, reason, pips: parseFloat(pips.toFixed(1)), pnl: finalPnl }),
           },
         });
+
+        // FIX 2: Send email notification on SL/TP close (non-blocking)
+        sendPositionCloseEmail(pos.pair, pos.direction, pos.lotSize, pos.entryPrice, closePrice, finalPnl).catch(() => {});
 
         closed.push({ id: pos.id, pair: pos.pair, direction: pos.direction, pnl: finalPnl, reason });
       }
@@ -129,6 +140,9 @@ async function checkPendingOrders(currentPrices: Record<string, { bid: number; a
     const pendingOrders = await db.pendingOrder.findMany({
       where: { status: 'pending' },
     });
+
+    // Fetch config once for safety checks (FIX 3a, 3b, 3c)
+    const config = await db.tradingConfig.findFirst();
 
     for (const order of pendingOrders) {
       const price = currentPrices[order.pair];
@@ -155,14 +169,29 @@ async function checkPendingOrders(currentPrices: Record<string, { bid: number; a
       if (shouldExecute) {
         const direction = order.orderType.startsWith('buy') ? 'BUY' as const : 'SELL' as const;
 
+        // FIX 3a: Check maxOpenPositions limit
+        if (config) {
+          const openCount = await db.tradingPosition.count({ where: { status: 'open' } });
+          if (openCount >= config.maxOpenPositions) continue;
+        }
+
+        // FIX 3c: Check avoidNewsTrading
+        if (config?.avoidNewsTrading && await hasRecentHighImpactNews(order.pair)) continue;
+
+        // FIX 3b: Apply spread-adjusted pricing instead of raw mid
+        const pipSize = (PAIR_PIP_VALUES[order.pair as ForexPair] || { pipSize: 0.0001 }).pipSize;
+        const spreadPips = config?.spreadPip ?? 0.5;
+        const spreadAdjust = (spreadPips * pipSize) / 2;
+        const executionPrice = direction === 'BUY' ? currentMid + spreadAdjust : currentMid - spreadAdjust;
+
         // Create position from pending order
         await db.tradingPosition.create({
           data: {
             pair: order.pair,
             direction,
             lotSize: order.lotSize,
-            entryPrice: currentMid,
-            currentPrice: currentMid,
+            entryPrice: executionPrice,
+            currentPrice: executionPrice,
             stopLoss: order.stopLoss,
             takeProfit: order.takeProfit,
             strategy: 'PENDING_ORDER',
@@ -171,17 +200,20 @@ async function checkPendingOrders(currentPrices: Record<string, { bid: number; a
           },
         });
 
+        // FIX 4: Send email notification on pending order → position creation (non-blocking)
+        sendPositionOpenEmail(order.pair, direction, order.lotSize, executionPrice, order.stopLoss, order.takeProfit).catch(() => {});
+
         // Mark pending order as executed
         await db.pendingOrder.update({
           where: { id: order.id },
-          data: { status: 'executed', executedAt: new Date(), executedPrice: currentMid },
+          data: { status: 'executed', executedAt: new Date(), executedPrice: executionPrice },
         });
 
         await db.notification.create({
           data: {
             type: 'order_executed',
             title: `📋 Pending Order Tereksekusi: ${direction} ${order.pair}`,
-            message: `${order.orderType.replace('_', ' ').toUpperCase()} ${order.pair} @ ${currentMid.toFixed(5)} tereksekusi`,
+            message: `${order.orderType.replace('_', ' ').toUpperCase()} ${order.pair} @ ${executionPrice.toFixed(5)} tereksekusi`,
             pair: order.pair,
           },
         });
@@ -190,9 +222,9 @@ async function checkPendingOrders(currentPrices: Record<string, { bid: number; a
           data: {
             level: 'info',
             category: 'trading',
-            message: `PENDING ORDER EXECUTED: ${order.orderType} ${order.pair} @ ${currentMid.toFixed(5)}`,
+            message: `PENDING ORDER EXECUTED: ${order.orderType} ${order.pair} @ ${executionPrice.toFixed(5)}`,
             pair: order.pair,
-            metadata: JSON.stringify({ orderId: order.id, orderType: order.orderType, executedPrice: currentMid }),
+            metadata: JSON.stringify({ orderId: order.id, orderType: order.orderType, executedPrice: executionPrice }),
           },
         });
 

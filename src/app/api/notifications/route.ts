@@ -1,17 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { validateAuth, requireAuthForMutation } from '@/lib/api-auth';
+import { requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 
 const VALID_TYPES = ['signal', 'alert', 'position_open', 'position_close', 'system', 'auto_trade', 'stop_loss', 'take_profit', 'order_executed', 'order_expired', 'transaction'] as const;
 
 // GET - List notifications
+// AUDIT-FIX-8: Removed validateAuth from GET — frontend polls this without API key.
+// Notifications are read-only display data, not sensitive. Mutations (POST/PUT/DELETE) still require auth.
 export async function GET(request: NextRequest) {
   const rateCheck = checkRateLimit(clientIp(request), 'general');
   if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
-  const auth = validateAuth(request);
-  if (!auth.authorized) return auth.error!;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
     if (type && !VALID_TYPES.includes(type as typeof VALID_TYPES[number])) {
       return NextResponse.json(
         { error: `Invalid type. Must be one of: ${VALID_TYPES.join(', ')}` },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -104,7 +104,7 @@ export async function PUT(request: NextRequest) {
     if (!ids && !id) {
       return NextResponse.json(
         { error: 'Either ids (array) or id (string) is required' },
-        { status: 400 }
+        { status: 400 },
       );
     }
 

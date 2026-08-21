@@ -63,12 +63,12 @@ export interface NewsArticle {
   id: string;
   title: string;
   description: string;
-  url: string;
+  url?: string;
   source: string;
   publishedAt: string;
-  category: string;
-  impact: 'high' | 'medium' | 'low';
-  sentiment: 'positive' | 'negative' | 'neutral';
+  category?: string;
+  impact?: 'high' | 'medium' | 'low';
+  sentiment?: 'positive' | 'negative' | 'neutral';
   pair?: ForexPair;
 }
 
@@ -436,7 +436,7 @@ export interface PendingOrder {
 
 export interface InAppNotification {
   id: string;
-  type: 'signal' | 'alert' | 'position_open' | 'position_close' | 'system' | 'auto_trade';
+  type: 'signal' | 'alert' | 'position_open' | 'position_close' | 'system' | 'auto_trade' | 'stop_loss' | 'take_profit' | 'order_executed' | 'order_expired' | 'transaction';
   title: string;
   message: string;
   pair?: string;
@@ -464,9 +464,9 @@ export interface TradeAnalytics {
   totalPnl: number;
   avgWin: number;
   avgLoss: number;
-  profitFactor: number;
+  profitFactor: number | null;
   maxDrawdown: number;
-  sharpeRatio: number;
+  sharpeRatio: number | null;
   bestPair: string;
   worstPair: string;
   pnlByPair: Record<string, number>;

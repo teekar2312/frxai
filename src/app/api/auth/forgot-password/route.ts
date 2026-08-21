@@ -3,8 +3,13 @@ import crypto from 'crypto';
 import { db } from '@/lib/db';
 import { safeLog } from '@/lib/safe-log';
 import { sendEmail } from '@/lib/email-service';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
+  // H4: Add rate limiting to prevent abuse
+  const rateCheck = checkRateLimit(clientIp(request), 'auth');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+
   try {
     const body = await request.json();
     const { email } = body;

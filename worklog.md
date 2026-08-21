@@ -2296,3 +2296,97 @@ Stage Summary:
 - Economic calendar: 6+ event types with realistic scheduling
 - API docs covering all 27+ endpoints
 - Automated backup: gzip compression, 30-day rotation
+
+---
+Task ID: G1
+Agent: critical-security-fixes
+Task: Fix 13 CRITICAL and SECURITY audit findings
+
+Work Log:
+- C1: Clamped profitFactor Infinity to 999.99 in trade-analytics route
+- C2: Replaced hardcoded localhost:3000 with dynamic base URL using x-forwarded-host
+- C3: Added missing notification types (stop_loss, take_profit, order_executed, order_expired, transaction) to InAppNotification union and VALID_TYPES array
+- C5: Made sharpeRatio/profitFactor nullable in TradeAnalytics interface; added null-safe guards in TradeAnalyticsPanel.tsx
+- H1: Fixed 'next/server.js' imports to 'next/server' in api-auth.ts and admin/users/route.ts
+- H2: Added validateAuth() to MT5 prices GET handler
+- H3: Added requireAuthForMutation() to MT5 trailing-stop POST handler
+- H4: Added rate limiting ('auth' bucket) to forgot-password POST
+- H5: Added rate limiting ('auth' bucket) to reset-password POST
+- H6: Replaced delete mutation on prices object with new filtered object construction
+- H7: Added safeLog dev bypass warning when API_SECRET_KEY is not set
+- H8: Fixed header case from 'X-Internal-Call' to 'x-internal-call' to match route checks
+
+Stage Summary:
+- Auto-trading now works in production (dynamic URL via x-forwarded-host)
+- All MT5 endpoints have auth checks
+- Auth endpoints have rate limiting
+- Notification types consistent between API and frontend
+- profitFactor/sharpeRatio null-safe in types and UI
+- No new lint errors introduced
+
+---
+Task ID: G2
+Agent: frontend-fixes-1
+Task: Fix 9 frontend audit findings (C4, H9-H12, M4-M5, M8-M9)
+
+Work Log:
+- C4: Created /api/auth/2fa/status route for 2FA setup
+- H9: RiskManagementPanel now uses DB config for minLot/maxLot
+- H10: Added confirm=true to ActivityLogPanel clear logs + error check
+- H11: DashboardPanel updates store openPositionsCount
+- H12: Admin nav items noted (acceptable behavior, opens settings)
+- M4: Notification.data parsed from JSON string to object
+- M5: NewsArticle types made nullable to match DB
+- M8: priceSourceWarning now set when MT5 prices fail
+- M9: PriceAlertsPanel initializes prevTriggeredRef with existing triggered alerts
+
+Stage Summary:
+- 2FA setup now loads correctly
+- Risk panel shows server-side lot limits
+- Clear logs actually works
+- Sidebar position count stays synced
+- Notifications have parsed data objects
+- MT5 fallback banner now displays
+- No more false-positive alert toasts on load
+
+---
+Task ID: G3
+Agent: frontend-fixes-2
+Task: Fix 9 more audit findings (M6,M7,M10,M11,M13,M14,M15,M17,H15)
+
+Work Log:
+- M6: Changed admin safeLog category from 'admin' to 'system'
+- M7: MTF analysis now saves combined recommendation as marketCondition
+- M10: Equity chart now works in MT5 live mode using account equity
+- M11: Economic calendar auto-refreshes every 60 seconds
+- M13: Added 'mt5_trading' to ActivityLogPanel category filter
+- M14: Removed M2 from backtesting timeframe options
+- M15: Removed unused emoji field from NAV_ITEMS
+- M17: Added Notification.userId Prisma relation to User
+- H15: positions PUT handler now sets closeReason: 'manual'
+
+Stage Summary:
+- MTF analysis saves correct combined market condition
+- Equity chart functional in both simulation and MT5 modes
+- Calendar stays current with 60s refresh
+- Activity logs now filterable by MT5 trading category
+- Database referential integrity for notifications
+
+---
+Task ID: G4
+Agent: schema-deadcode-fixes
+Task: Fix schema race condition, wire dead endpoints, clean dead code
+
+Work Log:
+- H14: Added P2002 race condition handling in config route (GET and reset handler)
+- M1: Added "Riwayat Transaksi" section with table to SettingsPanel, wiring /api/transactions
+- M2: Added Download/Export CSV button to TradeAnalyticsPanel header, wiring /api/export
+- M3: Documented standalone usage of /api/market-condition endpoint in api-reference.md
+- M12: Removed dead _PAIR_FILTER_MAP from news route
+- M16: Added /// reservation comments to ghost schema fields (pipValue, riskAmount, rewardAmount)
+
+Stage Summary:
+- Config reset no longer crashes on race condition (P2002 → re-fetch)
+- Transaction endpoint now accessible from Settings UI
+- Export CSV accessible from Analytics panel
+- Dead code removed, ghost fields documented for future use

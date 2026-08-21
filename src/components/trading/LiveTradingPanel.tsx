@@ -129,7 +129,11 @@ export function LiveTradingPanel() {
 
   // AUDIT-TRADE-09: Populate equity history from positions data
   useEffect(() => {
-    if (isMt5Live || positions.length === 0) return;
+    if (positions.length === 0 && !isMt5Live) return;
+    if (isMt5Live && mt5AccountInfo) {
+      setEquityHistory(prev => [...prev.slice(-100), { time: new Date().toISOString(), equity: mt5AccountInfo.equity || mt5AccountInfo.balance, balance: mt5AccountInfo.balance }]);
+      return;
+    }
     const totalPnl = positions.reduce((sum, p) => sum + (p.pnl || 0), 0);
     setEquityHistory(prev => {
       const now = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -138,7 +142,7 @@ export function LiveTradingPanel() {
       const next = [...prev, entry];
       return next.length > 60 ? next.slice(-60) : next;
     });
-  }, [positions, isMt5Live, accountBalance]);
+  }, [positions, isMt5Live, accountBalance, mt5AccountInfo]);
 
   // Fetch positions (for manual refresh after actions)
   const refreshPositions = async () => {

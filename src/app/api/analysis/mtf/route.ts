@@ -251,9 +251,7 @@ export async function POST(request: NextRequest) {
       await db.aiAnalysis.create({
         data: {
           pair,
-          marketCondition: VALID_CONDITIONS.includes(parsed.timeframes?.[0]?.marketCondition as MarketCondition)
-            ? (parsed.timeframes[0].marketCondition as MarketCondition)
-            : 'range_bound',
+          marketCondition: combinedRecommendation,
           confidence: combinedConfidence,
           recommendation: combinedRecommendation,
           reasoning: result.reasoning,

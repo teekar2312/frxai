@@ -19,6 +19,7 @@ model User {
   resetToken     String?
   resetTokenExpires DateTime?
   transactions  Transaction[]
+  notifications  Notification[]
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -45,8 +46,11 @@ model TradingPosition {
   takeProfit    Float?
   trailingStop  Float?
   trailingType  String   @default("manual") // manual or automatic
+  /// Reserved for future position risk tracking
   pipValue      Float?
+  /// Reserved for future position risk tracking
   riskAmount    Float?
+  /// Reserved for future position risk tracking
   rewardAmount  Float?
   pnl           Float    @default(0)
   pnlPips       Float    @default(0)
@@ -238,6 +242,7 @@ model TradingConfig {
 model Notification {
   id          String   @id @default(cuid())
   userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   type        String   // signal, alert, position_open, position_close, system, auto_trade
   title       String
   message     String

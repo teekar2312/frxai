@@ -37,11 +37,19 @@ const DEFAULT_CONFIG = {
 // GET - Fetch trading config (initialize default if none exists)
 export async function GET() {
   try {
-    const config = await db.tradingConfig.upsert({
-      where: { id: 'default' },
-      update: {},
-      create: { ...DEFAULT_CONFIG },
-    });
+    let config;
+    try {
+      config = await db.tradingConfig.upsert({
+        where: { id: 'default' },
+        update: {},
+        create: { ...DEFAULT_CONFIG },
+      });
+    } catch (e: unknown) {
+      // H14: P2002 race condition — another request already created the default row
+      if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+        config = await db.tradingConfig.findFirst();
+      } else throw e;
+    }
 
     const emailStatus = await getEmailConfigStatus();
     return NextResponse.json({ config, emailStatus });
@@ -91,10 +99,18 @@ export async function PUT(request: NextRequest) {
 
     const stringFields = ['aiProvider', 'aiModel', 'notifyEmail'];
 
-    // M-7: Handle config reset
+    // M-7: Handle config reset (H14: P2002-safe)
     if (body.reset === true) {
       await db.tradingConfig.deleteMany({});
-      const resetConfig = await db.tradingConfig.create({ data: { ...DEFAULT_CONFIG } });
+      let resetConfig;
+      try {
+        resetConfig = await db.tradingConfig.create({ data: { ...DEFAULT_CONFIG } });
+      } catch (e: unknown) {
+        // H14: Race condition — another request already recreated the default row
+        if (e && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+          resetConfig = await db.tradingConfig.findFirst();
+        } else throw e;
+      }
       try {
         await db.activityLog.create({
           data: { level: 'info', category: 'system', message: 'Trading config reset to defaults' },

@@ -4,7 +4,7 @@ import { validateAuth, requireAuthForMutation } from '@/lib/api-auth';
 import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 import { logApiError } from '@/lib/safe-log';
 
-const VALID_TYPES = ['signal', 'alert', 'position_open', 'position_close', 'system', 'auto_trade'] as const;
+const VALID_TYPES = ['signal', 'alert', 'position_open', 'position_close', 'system', 'auto_trade', 'stop_loss', 'take_profit', 'order_executed', 'order_expired', 'transaction'] as const;
 
 // GET - List notifications
 export async function GET(request: NextRequest) {
@@ -25,7 +25,12 @@ export async function GET(request: NextRequest) {
       take: 50,
     });
 
-    return NextResponse.json({ notifications });
+    const parsed = notifications.map(item => ({
+      ...item,
+      data: item.data ? (() => { try { return JSON.parse(item.data); } catch { return null; } })() : null,
+    }));
+
+    return NextResponse.json({ notifications: parsed });
   } catch (error) {
     logApiError('Notifications', error);
     return NextResponse.json({ error: 'Failed to fetch notifications' }, { status: 500 });

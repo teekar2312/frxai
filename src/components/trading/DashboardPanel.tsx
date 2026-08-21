@@ -25,7 +25,7 @@ export function DashboardPanel() {
   const {
     selectedPair, setSelectedPair,
     quotes, news, aiAnalysis, marketConditions,
-    accountBalance, openPositionsCount: _openPositionsCount, dailyPnl, todayRiskUsed, setTodayRiskUsed,
+    accountBalance, openPositionsCount: _openPositionsCount, dailyPnl, todayRiskUsed, setTodayRiskUsed, setOpenPositionsCount,
     tradingMode, mt5ConnectionStatus, mt5AccountInfo, mt5Positions,
     serverConfig, setActiveTab,
   } = useTradingStore();
@@ -70,7 +70,9 @@ export function DashboardPanel() {
         const res = await fetch('/api/positions?status=open');
         if (res.ok) {
           const data = await res.json();
-          setPositions((data.positions || []) as Position[]);
+          const fetched = (data.positions || []) as Position[];
+          setPositions(fetched);
+          setOpenPositionsCount(fetched.filter((p: Position) => p.isOpen).length);
         }
       } catch {
         // silent
@@ -79,7 +81,7 @@ export function DashboardPanel() {
     load();
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
-  }, [isMt5Live]);
+  }, [isMt5Live, setOpenPositionsCount]);
 
   // Session status
   const sessionStatus = useMemo(() => {

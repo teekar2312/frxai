@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   BarChart3, TrendingUp, TrendingDown, Target, ShieldAlert, Activity,
-  Trophy, AlertTriangle,
+  Trophy, AlertTriangle, Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -172,7 +172,16 @@ export function TradeAnalyticsPanel() {
           <BarChart3 className="w-5 h-5 text-zinc-400" />
           <h2 className="text-lg font-semibold text-zinc-100">Analisis Performa Trading</h2>
         </div>
-        <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-zinc-700 text-zinc-300 hover:text-white h-8 text-xs gap-1.5"
+            onClick={() => window.open('/api/export?type=positions&format=csv', '_blank')}
+          >
+            <Download className="w-3.5 h-3.5" /> Export CSV
+          </Button>
+          <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
           {PERIODS.map((p) => (
             <Button
               key={p.value}
@@ -188,6 +197,7 @@ export function TradeAnalyticsPanel() {
               {p.label}
             </Button>
           ))}
+        </div>
         </div>
       </div>
 
@@ -221,8 +231,8 @@ export function TradeAnalyticsPanel() {
             icon={Trophy}
             label="Profit Factor"
             value={(data?.profitFactor ?? 0).toFixed(2)}
-            sub={data && data.profitFactor >= 1.5 ? 'Menguntungkan' : 'Kurang ideal'}
-            color={data && data.profitFactor >= 1.5 ? 'text-emerald-400' : 'text-amber-400'}
+            sub={data && (data.profitFactor ?? 0) >= 1.5 ? 'Menguntungkan' : 'Kurang ideal'}
+            color={data && (data.profitFactor ?? 0) >= 1.5 ? 'text-emerald-400' : 'text-amber-400'}
           />
           <KpiCard
             icon={AlertTriangle}
@@ -235,8 +245,8 @@ export function TradeAnalyticsPanel() {
             icon={ShieldAlert}
             label="Sharpe Ratio"
             value={(data?.sharpeRatio ?? 0).toFixed(2)}
-            sub={data && data.sharpeRatio >= 1 ? 'Bagus' : 'Kurang'}
-            color={data && data.sharpeRatio >= 1 ? 'text-emerald-400' : 'text-amber-400'}
+            sub={data && (data.sharpeRatio ?? 0) >= 1 ? 'Bagus' : 'Kurang'}
+            color={data && (data.sharpeRatio ?? 0) >= 1 ? 'text-emerald-400' : 'text-amber-400'}
           />
         </div>
       )}

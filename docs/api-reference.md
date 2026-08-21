@@ -248,6 +248,16 @@ Calculate optimal lot size and risk metrics for a trade.
 
 ---
 
+### GET `/api/market-condition` - Market Condition Detection
+
+**Query params:** `pair` (e.g., `EURUSD`, `USDJPY`, `GBPUSD`, `XAUUSD`)
+
+Returns the detected market condition (trending, range_bound, high_volatility, low_volatility) with supporting indicators.
+
+> **Note:** This endpoint can be used standalone for custom charting tools, external dashboards, or automated trading bots that need independent market regime detection without running a full AI analysis.
+
+---
+
 ### GET `/api/transactions` - Transaction History
 
 **Query params:** `type` (deposit/withdrawal/adjustment), `limit`, `offset`

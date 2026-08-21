@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
     const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((sum, p) => sum + p.pnl, 0) / losses.length) : 0;
     const totalWins = wins.reduce((sum, p) => sum + p.pnl, 0);
     const totalLosses = Math.abs(losses.reduce((sum, p) => sum + p.pnl, 0));
-    const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0;
+    const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? 999.99 : 0;
 
     // PnL by pair
     const pnlByPair: Record<string, number> = {};

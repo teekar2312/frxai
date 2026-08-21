@@ -231,6 +231,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const type = searchParams.get('type');
 
+    // C2: Dynamic internal base URL for production compatibility
+    const internalBaseUrl = request.headers.get('x-forwarded-host')
+      ? `${request.headers.get('x-forwarded-proto') || 'https'}://${request.headers.get('x-forwarded-host')}`
+      : `http://localhost:${process.env.PORT || 3000}`;
+
     // Candle data request
     if (type === 'candles') {
       const symbolParam = searchParams.get('symbol') as ForexPair | null;
@@ -300,9 +305,9 @@ export async function GET(request: NextRequest) {
       try {
         const config = await db.tradingConfig.findFirst();
         if (config?.autoTrading) {
-          const autoRes = await fetch('http://localhost:3000/api/auto-execute', {
+          const autoRes = await fetch(`${internalBaseUrl}/api/auto-execute`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Internal-Call': 'true' },
+            headers: { 'Content-Type': 'application/json', 'x-internal-call': 'true' },
           });
           if (autoRes.ok) autoTradeResult = await autoRes.json();
         }
@@ -316,9 +321,9 @@ export async function GET(request: NextRequest) {
       try {
         const config = await db.tradingConfig.findFirst();
         if (config?.autoTrailingStop) {
-          await fetch('http://localhost:3000/api/trailing-stop/process', {
+          await fetch(`${internalBaseUrl}/api/trailing-stop/process`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'X-Internal-Call': 'true' },
+            headers: { 'Content-Type': 'application/json', 'x-internal-call': 'true' },
           });
         }
       } catch { /* non-critical */ }

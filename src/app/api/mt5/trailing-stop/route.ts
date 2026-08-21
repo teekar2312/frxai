@@ -1,12 +1,17 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { MT5_BRIDGE_URL, BRIDGE_HEADERS } from '@/lib/mt5-config';
 import { PAIR_PIP_VALUES } from '@/lib/trading-types';
 import { logApiError, safeLog } from '@/lib/safe-log';
+import { requireAuthForMutation } from '@/lib/api-auth';
 
 // POST /api/mt5/trailing-stop
 // Processes trailing stop for MT5 live positions.
 // Reads positions from MT5 bridge, computes new SL, sends modify_order.
-export async function POST() {
+export async function POST(request: NextRequest) {
+  // H3: Add auth check for mutation
+  const auth = requireAuthForMutation(request);
+  if (!auth.authorized) return auth.error!;
+
   try {
     // 1. Fetch open positions from MT5 bridge
     const posRes = await fetch(`${MT5_BRIDGE_URL}/api/positions`, {

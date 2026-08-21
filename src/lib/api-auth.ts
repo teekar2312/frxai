@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server.js';
+import { NextRequest, NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { safeLog } from '@/lib/safe-log';
 
@@ -17,6 +17,7 @@ export function validateAuth(request: NextRequest): { authorized: boolean; error
         error: NextResponse.json({ error: 'Server misconfigured: API_SECRET_KEY not set' }, { status: 503 }),
       };
     }
+    safeLog({ level: 'warn', route: 'API-Auth', message: 'API_SECRET_KEY not set — mutation endpoints unprotected' });
     return { authorized: true };
   }
 

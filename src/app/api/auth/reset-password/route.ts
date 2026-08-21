@@ -2,8 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { db } from '@/lib/db';
 import { safeLog } from '@/lib/safe-log';
+import { checkRateLimit, rateLimitedResponse, clientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
+  // H5: Add rate limiting to prevent brute-force
+  const rateCheck = checkRateLimit(clientIp(request), 'auth');
+  if (!rateCheck.allowed) return rateLimitedResponse(rateCheck.retryAfterMs);
+
   try {
     const body = await request.json();
     const { token, password } = body;

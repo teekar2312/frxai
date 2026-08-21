@@ -39,7 +39,7 @@ export default function TradingDashboard() {
   const [connected, setConnected] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jakartaTime, setJakartaTime] = useState('');
-  const [priceSourceWarning, _setPriceSourceWarning] = useState(false);
+  const [priceSourceWarning, setPriceSourceWarning] = useState(false);
   const [isSimulated, setIsSimulated] = useState(true);
   const [_newsSimulated, setNewsSimulated] = useState(true);
   const isMt5Live = tradingMode === 'mt5_live' && mt5ConnectionStatus === 'connected';
@@ -102,6 +102,7 @@ export default function TradingDashboard() {
           return;
         }
         safeLog({ level: 'warn', route: 'Page', message: 'MT5 prices unavailable, skipping fetch cycle' });
+        setPriceSourceWarning(true);
         return;
       }
       const res = await fetch('/api/finnhub');

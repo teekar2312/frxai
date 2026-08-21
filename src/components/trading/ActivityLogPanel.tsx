@@ -51,7 +51,11 @@ export function ActivityLogPanel() {
   // Clear logs
   const handleClearLogs = async () => {
     try {
-      await fetch('/api/logs?all=true', { method: 'DELETE' });
+      const res = await fetch('/api/logs?all=true&confirm=true', { method: 'DELETE' });
+      if (!res.ok) {
+        toast.error('Gagal menghapus log');
+        return;
+      }
       toast.success('Logs cleared');
       loadLogs();
     } catch {
@@ -93,6 +97,7 @@ export function ActivityLogPanel() {
             <SelectItem value="alert" className="text-zinc-200">Alert</SelectItem>
             <SelectItem value="system" className="text-zinc-200">System</SelectItem>
             <SelectItem value="api" className="text-zinc-200">API</SelectItem>
+            <SelectItem value="mt5_trading" className="text-zinc-200">MT5 Trading</SelectItem>
           </SelectContent>
         </Select>
         <Button variant="outline" size="sm" onClick={loadLogs} className="border-zinc-700 text-zinc-300 h-8">

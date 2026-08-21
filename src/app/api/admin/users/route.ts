@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server.js';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -89,7 +89,7 @@ export async function PUT(request: NextRequest) {
       select: { id: true, email: true, name: true, role: true, isActive: true, lastLoginAt: true, createdAt: true },
     });
 
-    safeLog({ level: 'info', route: 'admin/users', message: `User updated: ${updated.email}`, category: 'admin' });
+    safeLog({ level: 'info', route: 'admin/users', message: `User updated: ${updated.email}`, category: 'system' });
     return NextResponse.json({ user: updated });
   } catch (error) {
     safeLog({ level: 'error', route: 'admin/users', message: 'Failed to update user', error: error instanceof Error ? error.message : String(error) });
@@ -120,7 +120,7 @@ export async function DELETE(request: NextRequest) {
       select: { id: true, email: true, name: true, role: true, isActive: true, lastLoginAt: true, createdAt: true },
     });
 
-    safeLog({ level: 'info', route: 'admin/users', message: `User soft-deleted: ${updated.email}`, category: 'admin' });
+    safeLog({ level: 'info', route: 'admin/users', message: `User soft-deleted: ${updated.email}`, category: 'system' });
     return NextResponse.json({ user: updated });
   } catch (error) {
     safeLog({ level: 'error', route: 'admin/users', message: 'Failed to delete user', error: error instanceof Error ? error.message : String(error) });

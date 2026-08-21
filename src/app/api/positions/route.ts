@@ -437,6 +437,7 @@ export async function PUT(request: NextRequest) {
           pnlPips,
           status: 'closed',
           closedAt: new Date(),
+          closeReason: 'manual',
         },
       });
 

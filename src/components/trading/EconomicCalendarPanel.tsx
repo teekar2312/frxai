@@ -118,6 +118,8 @@ export function EconomicCalendarPanel() {
 
   useEffect(() => {
     fetchEvents();
+    const interval = setInterval(fetchEvents, 60000);
+    return () => clearInterval(interval);
   }, [fetchEvents]);
 
   return (

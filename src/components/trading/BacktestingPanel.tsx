@@ -19,6 +19,8 @@ import {
   FOREX_PAIRS, PAIR_DISPLAY, STRATEGY_LABELS, TIMEFRAMES,
 } from '@/lib/trading-types';
 
+const BACKTEST_TIMEFRAMES = TIMEFRAMES.filter(tf => tf !== 'M2');
+
 export function BacktestingPanel() {
   const [backtestConfig, setBacktestConfig] = useState({
     pair: 'EURUSD' as ForexPair,
@@ -137,7 +139,7 @@ export function BacktestingPanel() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-zinc-800 border-zinc-700">
-                  {TIMEFRAMES.map(tf => <SelectItem key={tf} value={tf} className="text-zinc-200">{tf}</SelectItem>)}
+                  {BACKTEST_TIMEFRAMES.map(tf => <SelectItem key={tf} value={tf} className="text-zinc-200">{tf}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

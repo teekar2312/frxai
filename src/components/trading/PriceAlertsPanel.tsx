@@ -65,6 +65,7 @@ export function PriceAlertsPanel() {
           const all = (data.alerts || []) as PriceAlert[];
           setAlerts(all.filter(a => !a.isTriggered));
           setFiredAlerts(all.filter(a => a.isTriggered));
+          prevTriggeredRef.current = all.filter((a: { isTriggered: boolean; id: string }) => a.isTriggered).map((a: { id: string }) => a.id);
         }
       } catch { /* silent */ }
       finally { setAlertsLoading(false); }

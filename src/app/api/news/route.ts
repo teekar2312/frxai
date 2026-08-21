@@ -18,14 +18,6 @@ const DEFAULT_FILTER_ENTITIES = 'forex, EUR/USD, USD/JPY, GBP/USD, XAU/USD, Fede
 // RA-003: Removed 'id' from countries — limited Indonesian forex coverage on MARKETAUX
 const DEFAULT_COUNTRIES = 'us,gb,eu,jp';
 
-// MTX-003: Pair-specific filters
-const _PAIR_FILTER_MAP: Record<ForexPair, string[]> = {
-  EURUSD: ['EUR/USD', 'Euro', 'ECB', 'Eurozone'],
-  USDJPY: ['USD/JPY', 'Yen', 'BOJ', 'Japan'],
-  GBPUSD: ['GBP/USD', 'Pound', 'Sterling', 'BOE', 'Bank of England'],
-  XAUUSD: ['XAU/USD', 'Gold', 'precious metal'],
-};
-
 // RC-002: In-flight request deduplication
 let newsFetchPromise: Promise<void> | null = null;
 let lastNewsFetchAt = 0;

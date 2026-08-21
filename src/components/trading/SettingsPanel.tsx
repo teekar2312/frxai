@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Settings, RefreshCw, Shield, FileText, Info, Brain, CheckCircle2, XCircle, Mail, ShieldCheck } from 'lucide-react';
+import { Settings, RefreshCw, Shield, FileText, Info, Brain, CheckCircle2, XCircle, Mail, ShieldCheck, History } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -36,6 +36,7 @@ export function SettingsPanel() {
   const [emailStatus, setEmailStatus] = useState<Record<string, string | boolean> | null>(null);
   const [adminUsers, setAdminUsers] = useState<{ id: string; email: string; name: string | null; role: string; isActive: boolean; lastLoginAt: string | null; createdAt: string }[]>([]);
   const [adminUsersLoading, setAdminUsersLoading] = useState(false);
+  const [recentTx, setRecentTx] = useState<{ id: string; type: string; amount: number; currency: string; description: string | null; createdAt: string }[]>([]);
 
   // AUDIT-TRADE-01: Sync config to Zustand store
   // AUDIT-AI-19: Include AI provider/model in store sync
@@ -101,11 +102,25 @@ export function SettingsPanel() {
     }
   }, []);
 
+  // M1: Fetch recent transactions
+  const fetchRecentTx = useCallback(async () => {
+    try {
+      const res = await fetch('/api/transactions?limit=10');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.transactions) setRecentTx(data.transactions);
+      }
+    } catch {
+      // silent
+    }
+  }, []);
+
   useEffect(() => {
     fetchConfig();
     fetchAiProviders();
     fetchAdminUsers();
-  }, [fetchConfig, fetchAiProviders, fetchAdminUsers]);
+    fetchRecentTx();
+  }, [fetchConfig, fetchAiProviders, fetchAdminUsers, fetchRecentTx]);
 
   // Save config
   const handleSaveConfig = async () => {
@@ -257,6 +272,41 @@ export function SettingsPanel() {
 
       {/* MT5 Integration */}
       <Mt5ConnectionPanel />
+
+      {/* M1: Transaction History */}
+      <Card className="bg-zinc-900 border-zinc-800 p-4">
+        <CardHeader className="p-0 pb-3">
+          <CardTitle className="text-sm text-white flex items-center gap-2">
+            <History className="w-4 h-4 text-emerald-400" /> Riwayat Transaksi
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="max-h-64 overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-700 hover:bg-transparent">
+                  <TableHead className="text-[11px] text-zinc-400">Tipe</TableHead>
+                  <TableHead className="text-[11px] text-zinc-400">Jumlah</TableHead>
+                  <TableHead className="text-[11px] text-zinc-400">Keterangan</TableHead>
+                  <TableHead className="text-[11px] text-zinc-400">Tanggal</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recentTx.length === 0 ? (
+                  <TableRow className="border-zinc-800"><TableCell colSpan={4} className="text-xs text-zinc-500 text-center py-4">Belum ada transaksi</TableCell></TableRow>
+                ) : recentTx.map((tx) => (
+                  <TableRow key={tx.id} className="border-zinc-800">
+                    <TableCell><Badge variant="outline" className={`text-[10px] ${tx.type === 'deposit' ? 'border-emerald-500/30 text-emerald-400' : 'border-rose-500/30 text-rose-400'}`}>{tx.type}</Badge></TableCell>
+                    <TableCell className="text-xs text-zinc-200">${tx.amount.toFixed(2)}</TableCell>
+                    <TableCell className="text-xs text-zinc-400 max-w-[120px] truncate">{tx.description || '-'}</TableCell>
+                    <TableCell className="text-[11px] text-zinc-500">{new Date(tx.createdAt).toLocaleDateString('id-ID')}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* AI-006: AI Provider Configuration */}
       <Card className="bg-zinc-900 border-zinc-800 p-4">

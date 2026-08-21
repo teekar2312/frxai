@@ -74,5 +74,12 @@ prompt
 db/*.db
 db/*.db-journal
 
+# Runtime artifacts
+.zscripts/dev.pid
+.zscripts/*.log
+worklog.md
+simulation-banner-verify.png
+SECURITY_NOTES.md
+
 # Build artifacts (created at build time)
 mini-services/mt5-bridge/node_modules

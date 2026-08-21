@@ -8,6 +8,7 @@ This document describes how to deploy FINEX Indonesia v2.3.0 to production, stag
 - [Deployment Options Overview](#deployment-options-overview)
 - [Production Deployment (Docker Compose)](#production-deployment-docker-compose)
 - [Development Deployment](#development-deployment)
+- [Local Deployment on Windows 11 + VS Code](#local-deployment-on-windows-11--vs-code)
 - [Manual / Bare-Metal Deployment](#manual--bare-metal-deployment)
 - [Environment Variables Reference](#environment-variables-reference)
 - [Health Checks](#health-checks)
@@ -35,6 +36,7 @@ This document describes how to deploy FINEX Indonesia v2.3.0 to production, stag
 |---|---|---|---|
 | Docker Compose (production) | Recommended for live servers | Caddy with auto-TLS | Built-in Caddy |
 | Docker Compose (development) | Local development with containers | None | None (direct access) |
+| Windows 11 + VS Code | Local development on Windows | None | None (dev mode) |
 | Manual / bare metal | Air-gapped or custom infra | Self-managed | Self-managed (Caddy or nginx) |
 
 ---
@@ -173,6 +175,292 @@ cd mini-services/ws-prices && bun install && bun --hot index.ts &
 # MT5 bridge
 cd mini-services/mt5-bridge && bun install && bun --hot index.ts &
 ```
+
+---
+
+## Local Deployment on Windows 11 + VS Code
+
+This section covers setting up the full development environment on a Windows 11 machine using Visual Studio Code as the IDE. Two approaches are available: native Windows (using Bun for Windows) or WSL2 (recommended for best compatibility with the Linux-based Dockerfiles and shell scripts).
+
+### Prerequisites
+
+| Dependency | Version | Purpose | Installation |
+|---|---|---|---|
+| Windows 11 | 22H2 or later | Host operating system | Windows Update or Microsoft download |
+| WSL2 | 2.x (recommended) | Linux compatibility layer for Docker and build tools | `wsl --install` in PowerShell as Administrator |
+| Ubuntu (WSL distro) | 22.04 or 24.04 | Linux distribution inside WSL2 | `wsl --install -d Ubuntu` (installed automatically with WSL2 by default) |
+| Docker Desktop | 4.29+ | Container runtime with WSL2 backend | https://www.docker.com/products/docker-desktop/ |
+| Git for Windows | 2.43+ | Version control | https://git-scm.com/download/win or `winget install Git.Git` |
+| Visual Studio Code | 1.90+ | IDE | https://code.visualstudio.com/ or `winget install Microsoft.VisualStudioCode` |
+| Bun | 1.x | JavaScript runtime and package manager | `powershell -c "irm bun.sh/install.ps1 | iex"` (Windows native) or `curl -fsSL https://bun.sh/install | bash` (WSL2) |
+| Node.js | 20 LTS (fallback) | Required by some Prisma tooling | Installed automatically by Bun; no separate install needed in most cases |
+| OpenSSL | 3.x | Generate secrets (NEXTAUTH_SECRET, API_SECRET_KEY) | Bundled with Git for Windows (`C:\Program Files\Git\usr\bin\openssl.exe`) or WSL2 system package |
+
+**VS Code Extensions (recommended):**
+
+| Extension | ID | Purpose |
+|---|---|---|
+| ESLint | `dbaeumer.vscode-eslint` | Real-time linting for TypeScript/JavaScript |
+| Prisma | `Prisma.prisma-vscode` | Syntax highlighting, format, and IntelliSense for `.prisma` files |
+| Docker | `ms-azuretools.vscode-docker` | Manage containers, compose files, and images |
+| WSL | `ms-vscode-remote.remote-wsl` | Open WSL2 projects directly from VS Code on Windows |
+| GitLens | `eamodio.gitlens` | Git history, blame, and repository visualization |
+| Error Lens | `usernamehw.errorlens` | Inline display of diagnostics (errors/warnings) |
+| Tailwind CSS IntelliSense | `bradlc.vscode-tailwindcss` | Autocomplete for Tailwind utility classes |
+| Prettier | `esbenp.prettier-vscode` | Opinionated code formatter (optional) |
+
+### Approach A -- WSL2 (Recommended)
+
+WSL2 provides a near-native Linux environment, which ensures full compatibility with the project's shell scripts, Dockerfiles, and `prisma db push` commands.
+
+#### Step 1 -- Install WSL2 and Ubuntu
+
+Open **PowerShell as Administrator** and run:
+
+```powershell
+wsl --install
+```
+
+Restart Windows when prompted. After reboot, Ubuntu launches automatically. Set a username and password for the WSL user.
+
+Verify the installation:
+
+```bash
+wsl --version                        # should show WSL 2.x
+wsl -l -v                           # should show Ubuntu with version 2
+```
+
+#### Step 2 -- Install Docker Desktop with WSL2 backend
+
+1. Download and install Docker Desktop from https://www.docker.com/products/docker-desktop/
+2. Launch Docker Desktop, open **Settings > General**, and enable:
+   - "Use the WSL 2 based engine"
+3. Open **Settings > Resources > WSL Integration**, enable integration with Ubuntu.
+4. Restart Docker Desktop.
+
+Verify from WSL2:
+
+```bash
+docker --version         # Docker version 27.x+
+docker compose version  # Docker Compose version v2.x+
+```
+
+#### Step 3 -- Install Bun in WSL2
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+source ~/.bashrc
+bun --version           # should show 1.x
+```
+
+#### Step 4 -- Open the project in VS Code
+
+```bash
+# From WSL2 terminal:
+cd ~
+git clone https://github.com/teekar2312/frxai.git
+cd frxai
+bun install
+code .                  # opens VS Code with WSL remote extension
+```
+
+When VS Code opens, it detects the WSL2 environment and prompts to install the **WSL** extension. Accept the prompt. VS Code then runs the remote server inside WSL2, giving you full Linux tooling with the Windows UI.
+
+#### Step 5 -- Configure the environment
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` in VS Code and set at minimum:
+
+```env
+NEXTAUTH_SECRET=   # generate: openssl rand -hex 32
+API_SECRET_KEY=    # generate: openssl rand -hex 32
+```
+
+Optionally add `FINNHUB_API_KEY` and `GROQ_API_KEY` for live data.
+
+#### Step 6 -- Initialize the database
+
+```bash
+bun run db:push
+```
+
+#### Step 7 -- Start the development server
+
+```bash
+bun run dev
+```
+
+Open `http://localhost:3000` in your browser on Windows. The WSL2 port forwarding makes this work transparently.
+
+#### Step 8 -- Start mini-services (optional)
+
+Open separate VS Code terminals (Ctrl+` backtick, then click the "+" in the terminal panel) and run:
+
+```bash
+# Terminal 1 -- WebSocket price feed
+cd mini-services/ws-prices && bun install && bun --hot index.ts
+
+# Terminal 2 -- MT5 bridge
+cd mini-services/mt5-bridge && bun install && bun --hot index.ts
+```
+
+#### VS Code task for quick start (optional)
+
+Create `.vscode/tasks.json` in the project root to add a one-click start task:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "FINEX -- Start Dev Server",
+      "type": "shell",
+      "command": "bun run dev",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "FINEX -- Start ws-prices",
+      "type": "shell",
+      "command": "cd mini-services/ws-prices && bun install && bun --hot index.ts",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "FINEX -- Start mt5-bridge",
+      "type": "shell",
+      "command": "cd mini-services/mt5-bridge && bun install && bun --hot index.ts",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "FINEX -- Lint",
+      "type": "shell",
+      "command": "bun run lint",
+      "group": "test",
+      "problemMatcher": "$eslint-stylish"
+    }
+  ]
+}
+```
+
+Run tasks with **Terminal > Run Task...** (Ctrl+Shift+B runs the default build task, which is the dev server).
+
+### Approach B -- Native Windows (Without WSL2)
+
+Use this if WSL2 is not available. Some features may require adjustment.
+
+#### Step 1 -- Install dependencies
+
+1. Install Git for Windows from https://git-scm.com/download/win -- during setup, select "Git from the command line and also from 3rd-party software" to ensure `git` is in PATH.
+2. Install Bun for Windows. Open **PowerShell** and run:
+
+```powershell
+powershell -c "irm bun.sh/install.ps1 | iex"
+```
+
+3. Verify:
+
+```powershell
+git --version
+bun --version
+```
+
+#### Step 2 -- Install Docker Desktop
+
+Same as WSL2 Step 2 above. Docker Desktop on Windows works with or without WSL2.
+
+#### Step 3 -- Clone and set up
+
+```powershell
+git clone https://github.com/teekar2312/frxai.git
+cd frxai
+bun install
+copy .env.example .env
+```
+
+#### Step 4 -- Configure and start
+
+1. Open the project folder in VS Code: `code .`
+2. Edit `.env` and set `NEXTAUTH_SECRET` and `API_SECRET_KEY`.
+   Generate secrets using Git Bash (bundled with Git for Windows):
+
+```bash
+# In Git Bash:
+openssl rand -hex 32
+```
+
+3. Initialize the database:
+
+```powershell
+bun run db:push
+```
+
+4. Start the development server:
+
+```powershell
+bun run dev
+```
+
+5. Open `http://localhost:3000` in your browser.
+
+#### Known limitations on native Windows
+
+- The `docker-entrypoint.sh` script uses `#!/bin/sh` (Unix line endings). Docker handles this internally, so it only affects local script execution.
+- The `scripts/backup-db.sh` and `.zscripts/*.sh` scripts require Git Bash or WSL2.
+- File system watching (Next.js hot reload) may be slower on native Windows NTFS compared to WSL2's ext4. If you experience slow refreshes, switch to the WSL2 approach.
+- The `bun --hot` flag for mini-services works on Windows but file events may lag.
+
+### VS Code Workspace Tips
+
+**Recommended settings** -- create `.vscode/settings.json`:
+
+```json
+{
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "files.associations": {
+    "*.prisma": "prisma"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "tailwindCSS.includeLanguages": {
+    "typescript": "javascript",
+    "typescriptreact": "javascript"
+  }
+}
+```
+
+**Useful VS Code keybindings for this project:**
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+` ` (backtick) | Toggle integrated terminal |
+| `Ctrl+Shift+B` | Run default build task (dev server) |
+| `Ctrl+Shift+P` > "Tasks: Run Task" | Pick a task (lint, ws-prices, mt5-bridge) |
+| `Ctrl+P` | Quick file open -- type `@` then function name to search symbols |
+| `Ctrl+` ` (click on import) | Go to definition (jump to component/lib) |
+| `F12` | Go to definition alternative |
+| `Shift+Alt+F` | Format document |
+| `Ctrl+Shift+M` | Open problems panel (ESLint errors/warnings) |
 
 ---
 

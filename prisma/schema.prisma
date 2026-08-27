@@ -1,0 +1,123 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Trade {
+  id            String   @id @default(cuid())
+  symbol        String
+  direction     String   // BUY or SELL
+  lotSize       Float
+  entryPrice    Float
+  currentPrice  Float
+  sl            Float?
+  tp            Float?
+  trailingStop  Boolean  @default(false)
+  trailingDist  Float?
+  pnl           Float    @default(0)
+  pnlPercent    Float    @default(0)
+  status        String   @default("OPEN") // OPEN, CLOSED, PENDING
+  strategy      String?
+  timeframe     String?
+  marketCond    String?
+  aiConfidence  Float?
+  leverage      Int      @default(25)
+  commission    Float    @default(0)
+  margin        Float    @default(0)
+  openTime      DateTime @default(now())
+  closeTime     DateTime?
+  closePrice    Float?
+  reason        String?  // SL, TP, Manual, Trailing Stop, AI Signal
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model PriceAlert {
+  id        String   @id @default(cuid())
+  symbol    String
+  condition String   // ABOVE, BELOW, CROSS_UP, CROSS_DOWN
+  price     Float
+  message   String?
+  triggered Boolean  @default(false)
+  triggeredAt DateTime?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model NewsArticle {
+  id          String   @id @default(cuid())
+  title       String
+  content     String?
+  source      String?
+  url         String?
+  imageUrl    String?
+  sentiment   String   @default("NEUTRAL") // POSITIVE, NEGATIVE, NEUTRAL
+  sentimentScore Float  @default(0)
+  symbols     String   @default("[]") // JSON array of related symbols
+  publishedAt DateTime?
+  fetchedAt   DateTime @default(now())
+  category    String?  // ECONOMIC, POLITICAL, CENTRAL_BANK, FISCAL, COMMODITY, BREAKING
+}
+
+model BacktestResult {
+  id          String   @id @default(cuid())
+  name        String
+  symbol      String
+  strategy    String
+  timeframe   String
+  startDate   DateTime
+  endDate     DateTime
+  initialCapital Float
+  finalCapital   Float
+  totalTrades    Int
+  winTrades      Int
+  lossTrades     Int
+  winRate        Float
+  maxDrawdown    Float
+  sharpeRatio    Float?
+  profitFactor   Float?
+  avgWin         Float?
+  avgLoss        Float?
+  totalPnl       Float
+  config         String   @default("{}") // JSON strategy config
+  createdAt     DateTime @default(now())
+}
+
+model TradingLog {
+  id        String   @id @default(cuid())
+  level     String   // INFO, WARN, ERROR, DEBUG
+  message   String
+  source    String?
+  details   String?
+  createdAt DateTime @default(now())
+}
+
+model AiAnalysis {
+  id             String   @id @default(cuid())
+  symbol         String
+  marketCondition String  // TRENDING, RANGE_BOUND, HIGH_VOLATILITY, LOW_VOLATILITY
+  confidence     Float
+  timeframe      String
+  trendDirection String?  // UP, DOWN, SIDEWAYS
+  volatility     Float?
+  volumeAnalysis String?
+  sentiment      String?
+  recommendations String  @default("[]") // JSON array
+  factors        String   @default("[]") // JSON array of analysis factors
+  createdAt      DateTime @default(now())
+}
+
+model EmailNotification {
+  id        String   @id @default(cuid())
+  to        String
+  subject   String
+  body      String
+  status    String   @default("PENDING") // PENDING, SENT, FAILED
+  sentAt    DateTime?
+  error     String?
+  createdAt DateTime @default(now())
+}

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
-import { calculatePositionSize, getDailyPerformance, calculateRiskOfRuin } from "@/lib/money-management"
+import { calculatePositionSize, getDailyPerformance, calculateRiskOfRuin, calculateDrawdownRecovery, calculateScalingFactor, getExchangeRateRisk } from "@/lib/money-management"
 import logger from "@/lib/trading-logger"
 import { db } from "@/lib/db"
 
@@ -8,13 +8,11 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const action = searchParams.get("action")
 
-    // ---- Daily Performance ----
     if (action === "daily-performance") {
       const perf = await getDailyPerformance()
       return NextResponse.json({ success: true, data: perf })
     }
 
-    // ---- Risk of Ruin ----
     if (action === "risk-of-ruin") {
       const closedTrades = await db.trade.findMany({
         where: { status: "CLOSED" },
@@ -41,7 +39,22 @@ export async function GET(request: NextRequest) {
       })
     }
 
-    // ---- Historical Performance ----
+    if (action === "drawdown-recovery") {
+      const drawdown = parseFloat(searchParams.get("drawdown") || "10")
+      const result = calculateDrawdownRecovery(drawdown)
+      return NextResponse.json({ success: true, data: result })
+    }
+
+    if (action === "scaling-factor") {
+      const factor = await calculateScalingFactor()
+      return NextResponse.json({ success: true, data: { scalingFactor: factor } })
+    }
+
+    if (action === "exchange-rate-risk") {
+      const risk = getExchangeRateRisk()
+      return NextResponse.json({ success: true, data: risk })
+    }
+
     if (action === "history") {
       const history = await db.dailyPerformance.findMany({
         orderBy: { date: "desc" },
@@ -50,9 +63,17 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ success: true, data: history })
     }
 
-    // ---- Default: return today's performance ----
+    // Default: today's performance with extras
     const perf = await getDailyPerformance()
-    return NextResponse.json({ success: true, data: perf })
+    const factor = await calculateScalingFactor()
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...perf,
+        scalingFactor: factor,
+        exchangeRateRisk: getExchangeRateRisk(),
+      },
+    })
   } catch (error) {
     logger.error("MONEY_MANAGEMENT", "Error in money management endpoint", {
       details: error instanceof Error ? error.stack : undefined,
@@ -67,7 +88,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { action, symbol, direction, entryPrice, sl, equity, method, fixedDollarRisk } = body
+    const { action, symbol, direction, entryPrice, sl, equity, method, fixedDollarRisk, scalingFactor } = body
 
     if (action === "calculate-size") {
       if (!symbol || !entryPrice || !equity) {
@@ -84,6 +105,7 @@ export async function POST(request: NextRequest) {
         equity: Number(equity),
         method: method || "FIXED_FRACTIONAL",
         fixedDollarRisk: fixedDollarRisk ? Number(fixedDollarRisk) : undefined,
+        scalingFactor: scalingFactor ? Number(scalingFactor) : undefined,
       })
       return NextResponse.json({ success: true, data: result })
     }

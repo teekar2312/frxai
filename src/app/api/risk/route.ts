@@ -1,12 +1,16 @@
 import { NextResponse } from "next/server"
-import { getRiskSnapshot, logRiskEvent, getRiskConfig } from "@/lib/risk-engine"
+import { getRiskSnapshot, logRiskEvent, getRiskConfig, processProactiveMarginMonitoring } from "@/lib/risk-engine"
 import logger from "@/lib/trading-logger"
 
 export async function GET() {
   try {
+    const config = await getRiskConfig()
     const snapshot = await getRiskSnapshot()
 
-    // Check for auto-generating risk events on critical conditions
+    // Run proactive margin monitoring
+    await processProactiveMarginMonitoring(snapshot.marginLevelPercent, config)
+
+    // Auto-generate risk events for critical conditions
     if (snapshot.isStopOutWarning) {
       await logRiskEvent({
         eventType: "STOP_OUT_WARNING",
@@ -36,6 +40,25 @@ export async function GET() {
         severity: "MEDIUM",
         message: `Daily loss approaching limit: $${Math.abs(snapshot.dailyPnl).toFixed(2)} / $${snapshot.dailyLossLimit.toFixed(2)}`,
         actionTaken: "NONE",
+      })
+    }
+
+    // Proactive margin zone events
+    if (snapshot.proactiveMarginZone === "PROACTIVE_70") {
+      await logRiskEvent({
+        eventType: "PROACTIVE_MC_70",
+        severity: "MEDIUM",
+        message: `Proactive: Margin level at ${snapshot.marginLevelPercent}% (70% warning zone)`,
+        details: `Free margin: $${snapshot.freeMargin}, Scaling factor: ${snapshot.scalingFactor}`,
+        actionTaken: "NONE",
+      })
+    } else if (snapshot.proactiveMarginZone === "PROACTIVE_60") {
+      await logRiskEvent({
+        eventType: "PROACTIVE_MC_60",
+        severity: "HIGH",
+        message: `Proactive: Margin level at ${snapshot.marginLevelPercent}% (60% critical zone). Position sizes reduced 50%.`,
+        details: `Free margin: $${snapshot.freeMargin}, Scaling factor: ${snapshot.scalingFactor}`,
+        actionTaken: "REDUCED_SIZE",
       })
     }
 

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { preTradeCheck } from "@/lib/risk-engine"
-import { calculatePositionSize, updateDailyPerformance } from "@/lib/money-management"
+import { calculatePositionSize, updateDailyPerformance, calculateScalingFactor } from "@/lib/money-management"
 import logger from "@/lib/trading-logger"
+import { SYMBOL_SECTORS } from "@/lib/risk-engine"
 
 export async function GET() {
   try {
@@ -40,10 +41,11 @@ export async function POST(request: NextRequest) {
       marketCond,
       aiConfidence,
       leverage,
-      skipRiskCheck, // For manual override (still logged)
+      skipRiskCheck,
+      expectedSlippage,
     } = body
 
-    // ---- Basic Validation ----
+    // Basic Validation
     if (!symbol || !direction || lotSize == null || entryPrice == null) {
       return NextResponse.json(
         { success: false, error: "Missing required fields: symbol, direction, lotSize, entryPrice" },
@@ -58,7 +60,18 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // ---- Pre-Trade Risk Check ----
+    // Calculate equity
+    const BASE_BALANCE = 10000
+    const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
+    const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
+    const openTrades = await db.trade.findMany({ where: { status: "OPEN" } })
+    const totalOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
+    const equity = BASE_BALANCE + totalClosedPnl + totalOpenPnl
+
+    // Get dynamic scaling factor
+    const scalingFactor = await calculateScalingFactor()
+
+    // Pre-Trade Risk Check (with slippage and scaling)
     const riskCheck = await preTradeCheck({
       symbol,
       direction,
@@ -68,21 +81,15 @@ export async function POST(request: NextRequest) {
       tp: tp ?? null,
       strategy: strategy ?? null,
       aiConfidence: aiConfidence ?? null,
+      expectedSlippage: expectedSlippage ?? null,
     })
 
     if (!riskCheck.approved && !skipRiskCheck) {
       logger.warn("RISK_MANAGEMENT", `Trade rejected by risk engine: ${riskCheck.reason}`, {
         symbol,
-        metadata: {
-          direction,
-          lotSize,
-          entryPrice,
-          sl,
-          riskCheck,
-        },
+        metadata: { direction, lotSize, entryPrice, sl, riskCheck },
       })
 
-      // Create a rejected trade record for audit trail
       await db.trade.create({
         data: {
           symbol,
@@ -101,6 +108,7 @@ export async function POST(request: NextRequest) {
           leverage: leverage || 25,
           status: "REJECTED",
           rejectReason: riskCheck.reason,
+          sector: SYMBOL_SECTORS[symbol] || null,
           commission: 0,
           margin: 0,
         },
@@ -113,27 +121,38 @@ export async function POST(request: NextRequest) {
       }, { status: 422 })
     }
 
-    // ---- Money Management: Calculate position size ----
-    const BASE_BALANCE = 10000
-    const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
-    const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
-    const equity = BASE_BALANCE + totalClosedPnl
-
+    // Money Management: Calculate position size with scaling
     const sizing = await calculatePositionSize({
       symbol,
       direction: direction as "BUY" | "SELL",
       entryPrice,
       sl: sl ?? null,
       equity,
+      scalingFactor,
     })
 
-    // Use the risk-checked lot size (which may be reduced)
-    const finalLotSize = skipRiskCheck ? lotSize : Math.min(lotSize, riskCheck.suggestedLotSize, sizing.suggestedLotSize)
+    // Apply position size reduction from risk engine (e.g. PROACTIVE_60 zone)
+    let effectiveSuggestedLot = sizing.suggestedLotSize
+    if (riskCheck.positionSizeReduction && riskCheck.positionSizeReduction < 1) {
+      effectiveSuggestedLot = Math.max(0.01, Math.floor(effectiveSuggestedLot * riskCheck.positionSizeReduction * 100) / 100)
+    }
 
-    // ---- Create Trade ----
+    const finalLotSize = skipRiskCheck ? lotSize : Math.min(lotSize, riskCheck.suggestedLotSize, effectiveSuggestedLot)
+
+    if (finalLotSize < 0.01) {
+      return NextResponse.json({
+        success: false,
+        error: "Calculated lot size below minimum (0.01). Insufficient risk budget or equity.",
+        riskCheck,
+        moneyManagement: sizing,
+      }, { status: 422 })
+    }
+
+    // Create Trade
     const lev = leverage || 25
     const price = currentPrice || entryPrice
-    const commission = finalLotSize * 1 // $1 per lot
+    const commission = finalLotSize * 1 // $1 per lot FINEX
+    const slippageCost = expectedSlippage ? expectedSlippage * finalLotSize : 0
     const contractValue = price * finalLotSize * 100000
     const margin = contractValue / lev
 
@@ -154,16 +173,20 @@ export async function POST(request: NextRequest) {
         aiConfidence: aiConfidence ?? null,
         leverage: lev,
         commission,
+        slippage: slippageCost,
         margin,
         pnl: 0,
         pnlPercent: 0,
+        sizingMethod: sizing.method,
+        riskAmount: sizing.riskAmount,
+        sector: SYMBOL_SECTORS[symbol] || null,
       },
     })
 
-    // ---- Update Daily Performance ----
+    // Update Daily Performance
     await updateDailyPerformance({ type: "OPEN" })
 
-    // ---- Log trade ----
+    // Log trade
     logger.info("TRADE_EXECUTION", `Trade opened: ${direction} ${symbol} ${finalLotSize} lot @ ${entryPrice}`, {
       tradeId: trade.id,
       symbol,
@@ -174,9 +197,11 @@ export async function POST(request: NextRequest) {
         sl,
         tp,
         strategy,
-        riskCheck: { riskAmount: riskCheck.riskAmount, riskPercent: riskCheck.riskPercent },
-        moneyManagement: { suggestedLot: sizing.suggestedLotSize, method: sizing.method, reasoning: sizing.reasoning },
-        warnings: riskCheck.warnings,
+        scalingFactor,
+        riskCheck: { riskAmount: riskCheck.riskAmount, riskPercent: riskCheck.riskPercent, positionSizeReduction: riskCheck.positionSizeReduction },
+        moneyManagement: { suggestedLot: sizing.suggestedLotSize, method: sizing.method, reasoning: sizing.reasoning, commissionCost: sizing.commissionCost, netRiskAfterCommission: sizing.netRiskAfterCommission },
+        commission,
+        sector: SYMBOL_SECTORS[symbol] || null,
       },
     })
 
@@ -186,9 +211,13 @@ export async function POST(request: NextRequest) {
       riskCheck,
       moneyManagement: {
         suggestedLotSize: sizing.suggestedLotSize,
+        effectiveLotSize: finalLotSize,
         method: sizing.method,
         riskAmount: sizing.riskAmount,
         marginRequired: sizing.marginRequired,
+        commissionCost: sizing.commissionCost,
+        netRiskAfterCommission: sizing.netRiskAfterCommission,
+        scalingFactor,
         reasoning: sizing.reasoning,
       },
     }, { status: 201 })

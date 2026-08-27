@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import logger from "@/lib/trading-logger"
+import logger, { getLogAnalytics } from "@/lib/trading-logger"
 
 export async function GET(request: NextRequest) {
   try {
@@ -11,6 +11,7 @@ export async function GET(request: NextRequest) {
     const symbol = searchParams.get("symbol")
     const startDate = searchParams.get("startDate")
     const endDate = searchParams.get("endDate")
+    const includeAnalytics = searchParams.get("analytics") === "true"
 
     const where: Record<string, unknown> = {}
     if (level) where.level = level
@@ -23,17 +24,20 @@ export async function GET(request: NextRequest) {
       if (endDate) (where.createdAt as Record<string, Date>).lte = new Date(endDate)
     }
 
-    // Get logs
     const logs = await db.tradingLog.findMany({
       where,
       orderBy: { createdAt: "desc" },
       take: Math.min(limit, 200),
     })
 
-    // Log statistics
     const stats = await getLogStats()
 
-    return NextResponse.json({ success: true, data: { logs, stats } })
+    let analytics = null
+    if (includeAnalytics) {
+      analytics = await getLogAnalytics()
+    }
+
+    return NextResponse.json({ success: true, data: { logs, stats, analytics } })
   } catch (error) {
     logger.error("SYSTEM", "Error fetching logs", {
       details: error instanceof Error ? error.stack : undefined,
@@ -62,7 +66,7 @@ export async function POST(request: NextRequest) {
 
     const validCategories = [
       "MT5_CONNECTION", "TRADE_EXECUTION", "RISK_MANAGEMENT",
-      "MONEY_MANAGEMENT", "DATA_FEED", "AI_ENGINE", "SYSTEM", "NOTIFICATION",
+      "MONEY_MANAGEMENT", "DATA_FEED", "AI_ENGINE", "SYSTEM", "NOTIFICATION", "API_RATE_LIMIT",
     ]
     const logCategory = validCategories.includes(category) ? category : "SYSTEM"
 
@@ -88,32 +92,16 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// ---- Log Statistics ----
-
 async function getLogStats() {
   const total = await db.tradingLog.count()
   const lastHour = new Date(Date.now() - 60 * 60 * 1000)
 
-  const byLevel = await db.tradingLog.groupBy({
-    by: ["level"],
-    _count: true,
-  })
-
-  const byCategory = await db.tradingLog.groupBy({
-    by: ["category"],
-    _count: true,
-  })
-
+  const byLevel = await db.tradingLog.groupBy({ by: ["level"], _count: true })
+  const byCategory = await db.tradingLog.groupBy({ by: ["category"], _count: true })
   const recentErrors = await db.tradingLog.count({
-    where: {
-      level: { in: ["ERROR", "CRITICAL", "FATAL"] },
-      createdAt: { gte: lastHour },
-    },
+    where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: lastHour } },
   })
-
-  const recentTotal = await db.tradingLog.count({
-    where: { createdAt: { gte: lastHour } },
-  })
+  const recentTotal = await db.tradingLog.count({ where: { createdAt: { gte: lastHour } } })
 
   return {
     total,

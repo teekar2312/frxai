@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ShieldAlert, TrendingDown, Activity, Percent, Gauge, AlertTriangle, Ban, AlertOctagon, CheckCircle2, XCircle, TriangleAlert } from 'lucide-react'
+import { ShieldAlert, TrendingDown, Activity, Percent, Gauge, AlertTriangle, Ban, AlertOctagon, CheckCircle2, XCircle, TriangleAlert, PieChart, Layers, TrendingUp, DollarSign } from 'lucide-react'
 
 interface PositionRisk {
   tradeId: string
@@ -39,6 +39,13 @@ interface RiskEventItem {
   message: string
   createdAt: string
   resolved: boolean
+}
+
+interface SectorExposure {
+  sector: string
+  exposurePct: number
+  positionCount: number
+  marginUsed: number
 }
 
 interface RiskData {
@@ -72,6 +79,13 @@ interface RiskData {
   recentRiskEvents: RiskEventItem[]
   recommendations: string[]
   positions: PositionRisk[]
+  // Deep audit fields
+  proactiveMarginZone: string
+  sectorExposure: SectorExposure[]
+  portfolioTotalRiskPct: number
+  leverageUsed: number
+  reserveCapitalPct: number
+  scalingFactor: number
 }
 
 function getRiskColor(score: number): string {
@@ -97,8 +111,19 @@ function getRiskLevelBadge(level: string) {
   }
 }
 
+function getProactiveZoneBadge(zone: string) {
+  switch (zone) {
+    case 'SAFE': return <Badge className='bg-emerald-600 hover:bg-emerald-700 text-white'>SAFE</Badge>
+    case 'PROACTIVE_70': return <Badge className='bg-amber-600 hover:bg-amber-700 text-white'>WARN 70%</Badge>
+    case 'PROACTIVE_60': return <Badge className='bg-orange-600 hover:bg-orange-700 text-white'>CRITICAL 60%</Badge>
+    case 'MARGIN_CALL': return <Badge className='bg-red-600 hover:bg-red-700 text-white'>MARGIN CALL</Badge>
+    case 'STOP_OUT': return <Badge variant='destructive'>STOP OUT</Badge>
+    default: return <Badge variant='outline'>{zone}</Badge>
+  }
+}
+
 function getProgressColor(value: number, max: number): string {
-  const pct = (value / max) * 100
+  const pct = max > 0 ? (value / max) * 100 : 0
   if (pct < 50) return '[&>div]:bg-emerald-500'
   if (pct < 80) return '[&>div]:bg-amber-500'
   return '[&>div]:bg-red-500'
@@ -106,14 +131,6 @@ function getProgressColor(value: number, max: number): string {
 
 function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value)
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  return `${h}h ${m}m`
 }
 
 export default function RiskManagement() {
@@ -140,7 +157,6 @@ export default function RiskManagement() {
     return () => clearInterval(interval)
   }, [fetchRisk])
 
-  // ---- Derived values ----
   const dailyPnLPct = data ? Math.min(Math.abs(data.dailyPnl / data.dailyLossLimit) * 100, 100) : 0
   const isDailyLoss = data ? data.dailyPnl < 0 : false
   const marginPct = data ? Math.min(data.marginUsagePercent, 100) : 0
@@ -149,20 +165,23 @@ export default function RiskManagement() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
           <ShieldAlert className="h-5 w-5 text-amber-500" />
           Risk Management
         </h2>
-        {data && getRiskLevelBadge(data.riskLevel)}
+        <div className="flex items-center gap-2">
+          {data && getRiskLevelBadge(data.riskLevel)}
+          {data && getProactiveZoneBadge(data.proactiveMarginZone)}
+        </div>
       </div>
 
-      {/* ---- CRITICAL ALERTS ---- */}
+      {/* CRITICAL ALERTS */}
       {data?.isStopOutWarning && (
         <Alert variant="destructive">
           <AlertOctagon className="h-4 w-4" />
           <AlertDescription>
-            <strong>STOP OUT WARNING</strong> — Margin level at {data.marginLevelPercent}% (stop out at 20%). All positions at risk of forced closure.
+            <strong>STOP OUT WARNING</strong> - Margin level at {data.marginLevelPercent}% (stop out at 20%). All positions at risk.
           </AlertDescription>
         </Alert>
       )}
@@ -170,7 +189,23 @@ export default function RiskManagement() {
         <Alert className="border-red-500 bg-red-50 dark:bg-red-950/30">
           <TriangleAlert className="h-4 w-4 text-red-600" />
           <AlertDescription className="text-red-800 dark:text-red-200">
-            <strong>MARGIN CALL WARNING</strong> — Margin level at {data.marginLevelPercent}%. Reduce positions immediately.
+            <strong>MARGIN CALL WARNING</strong> - Margin level at {data.marginLevelPercent}%. Reduce positions immediately.
+          </AlertDescription>
+        </Alert>
+      )}
+      {data?.proactiveMarginZone === 'PROACTIVE_60' && !data?.isMarginCallWarning && (
+        <Alert className="border-orange-500 bg-orange-50 dark:bg-orange-950/30">
+          <AlertTriangle className="h-4 w-4 text-orange-600" />
+          <AlertDescription className="text-orange-800 dark:text-orange-200">
+            <strong>PROACTIVE 60% ZONE</strong> - Position sizes reduced by 50%. Margin level: {data.marginLevelPercent}%.
+          </AlertDescription>
+        </Alert>
+      )}
+      {data?.proactiveMarginZone === 'PROACTIVE_70' && !data?.isMarginCallWarning && (
+        <Alert className="border-amber-500 bg-amber-50 dark:bg-amber-950/30">
+          <AlertTriangle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="text-amber-800 dark:text-amber-200">
+            <strong>PROACTIVE 70% ZONE</strong> - Margin level approaching critical: {data.marginLevelPercent}%. Monitor closely.
           </AlertDescription>
         </Alert>
       )}
@@ -178,11 +213,11 @@ export default function RiskManagement() {
         <Alert className="border-amber-500 bg-amber-50 dark:bg-amber-950/30">
           <Ban className="h-4 w-4 text-amber-600" />
           <AlertDescription className="text-amber-800 dark:text-amber-200">
-            <strong>DAILY LOSS LIMIT REACHED</strong> — {formatCurrency(data.dailyPnl)} loss. No new trades allowed today.
+            <strong>DAILY LOSS LIMIT REACHED</strong> - {formatCurrency(data.dailyPnl)} loss. No new trades today.
           </AlertDescription>
         </Alert>
       )}
-      {data && !data.isTradingAllowed && !data.isDailyLimitReached && !data.isStopOutWarning && (
+      {data && !data.isTradingAllowed && !data.isDailyLimitReached && !data.isStopOutWarning && data.proactiveMarginZone === 'SAFE' && (
         <Alert className="border-red-500 bg-red-50 dark:bg-red-950/30">
           <XCircle className="h-4 w-4 text-red-600" />
           <AlertDescription className="text-red-800 dark:text-red-200">
@@ -191,9 +226,8 @@ export default function RiskManagement() {
         </Alert>
       )}
 
-      {/* ---- STAT CARDS ---- */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {/* Risk Score */}
+      {/* STAT CARDS */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Card className={`py-4 ${getRiskBg(riskScore)}`}>
           <CardContent className="flex items-center gap-3 p-4">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${getRiskBg(riskScore)}`}>
@@ -202,28 +236,26 @@ export default function RiskManagement() {
             <div className="min-w-0">
               <p className="truncate text-xs text-muted-foreground">Risk Score</p>
               <p className={`truncate text-sm font-bold ${getRiskColor(riskScore)}`}>
-                {loading ? '—' : `${riskScore}/10`}
+                {loading ? '-' : `${riskScore}/10`}
               </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Risk per Trade */}
         <Card className="py-4">
           <CardContent className="flex items-center gap-3 p-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-950/40">
               <Percent className="h-5 w-5 text-emerald-600" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-xs text-muted-foreground">Risk / Trade</p>
-              <p className="truncate text-sm font-bold text-emerald-600">
-                0.5%
+              <p className="truncate text-xs text-muted-foreground">Portfolio Risk</p>
+              <p className={`truncate text-sm font-bold ${(data?.portfolioTotalRiskPct ?? 0) > 5 ? 'text-red-600' : 'text-emerald-600'}`}>
+                {loading ? '-' : `${(data?.portfolioTotalRiskPct ?? 0).toFixed(1)}%`}
               </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Drawdown */}
         <Card className="py-4">
           <CardContent className="flex items-center gap-3 p-4">
             <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${drawdownPct > 80 ? 'bg-red-50 dark:bg-red-950/40' : 'bg-amber-50 dark:bg-amber-950/40'}`}>
@@ -232,31 +264,43 @@ export default function RiskManagement() {
             <div className="min-w-0">
               <p className="truncate text-xs text-muted-foreground">Drawdown</p>
               <p className={`truncate text-sm font-bold ${drawdownPct > 80 ? 'text-red-600' : 'text-amber-600'}`}>
-                {loading ? '—' : `${data?.currentDrawdown ?? 0}% / ${data?.maxAllowedDrawdown ?? 10}%`}
+                {loading ? '-' : `${data?.currentDrawdown ?? 0}% / ${data?.maxAllowedDrawdown ?? 10}%`}
               </p>
             </div>
           </CardContent>
         </Card>
 
-        {/* Positions */}
         <Card className="py-4">
           <CardContent className="flex items-center gap-3 p-4">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-50 dark:bg-sky-950/40">
               <Activity className="h-5 w-5 text-sky-600" />
             </div>
             <div className="min-w-0">
-              <p className="truncate text-xs text-muted-foreground">Positions</p>
+              <p className="truncate text-xs text-muted-foreground">Leverage</p>
               <p className="truncate text-sm font-bold text-sky-600">
-                {loading ? '—' : `${data?.openPositions ?? 0}/${data?.maxPositionsAllowed ?? 200}`}
+                {loading ? '-' : `${(data?.leverageUsed ?? 0).toFixed(1)}:1`}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="py-4">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-50 dark:bg-violet-950/40">
+              <TrendingUp className={`h-5 w-5 ${(data?.scalingFactor ?? 1) < 1 ? 'text-red-600' : (data?.scalingFactor ?? 1) > 1 ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-xs text-muted-foreground">Scaling</p>
+              <p className={`truncate text-sm font-bold ${(data?.scalingFactor ?? 1) < 1 ? 'text-red-600' : (data?.scalingFactor ?? 1) > 1 ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+                {loading ? '-' : `${((data?.scalingFactor ?? 1) * 100).toFixed(0)}%`}
               </p>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* ---- P&L BARS ---- */}
-      <div className="grid gap-4 lg:grid-cols-3">
-        {/* Daily P&L vs Max Loss */}
+      {/* P&L BARS + MARGIN LEVEL */}
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium">Daily P&L</CardTitle>
@@ -264,39 +308,37 @@ export default function RiskManagement() {
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className={isDailyLoss ? 'text-red-600 font-medium' : 'text-emerald-600 font-medium'}>
-                {isDailyLoss ? '' : '+'}{data ? formatCurrency(data.dailyPnl) : '—'}
+                {isDailyLoss ? '' : '+'}{data ? formatCurrency(data.dailyPnl) : '-'}
               </span>
-              <span className="text-muted-foreground text-xs">
-                Limit: {data ? formatCurrency(data.dailyLossLimit) : '—'}
-              </span>
+              <span className="text-muted-foreground text-xs">Limit: {data ? formatCurrency(data.dailyLossLimit) : '-'}</span>
             </div>
             <Progress value={dailyPnLPct} className={`h-3 ${getProgressColor(Math.abs(data?.dailyPnl ?? 0), data?.dailyLossLimit ?? 200)}`} />
-            <p className="text-xs text-muted-foreground">
-              {data ? `${formatCurrency(data.dailyLossRemaining)} remaining` : '—'}
-            </p>
+            <p className="text-xs text-muted-foreground">{data ? `${formatCurrency(data.dailyLossRemaining)} remaining` : '-'}</p>
           </CardContent>
         </Card>
 
-        {/* Margin Usage */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium">Margin Usage</CardTitle>
+            <CardTitle className="text-sm font-medium">Margin Level</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
-              <span className={marginPct > 50 ? 'text-red-600 font-medium' : 'text-emerald-600 font-medium'}>
-                {data ? `${data.marginUsagePercent.toFixed(1)}%` : '—'}
+              <span className={data && data.marginLevelPercent < 60 ? 'text-red-600 font-medium' : data && data.marginLevelPercent < 70 ? 'text-amber-600 font-medium' : 'text-emerald-600 font-medium'}>
+                {data ? `${data.marginLevelPercent.toFixed(1)}%` : '-'}
               </span>
-              <span className="text-muted-foreground text-xs">Max: {data?.maxMarginAllowed ?? 50}%</span>
+              <span className="text-muted-foreground text-xs">Reserve: {data ? `${data.reserveCapitalPct.toFixed(0)}%` : '-'}</span>
             </div>
-            <Progress value={marginPct} className={`h-3 ${getProgressColor(data?.marginUsagePercent ?? 0, data?.maxMarginAllowed ?? 50)}`} />
+            <Progress value={Math.min(data?.marginLevelPercent ?? 0, 100)} className={
+              (data?.marginLevelPercent ?? 0) < 60 ? 'h-3 [&>div]:bg-red-500' :
+              (data?.marginLevelPercent ?? 0) < 70 ? 'h-3 [&>div]:bg-amber-500' :
+              'h-3 [&>div]:bg-emerald-500'
+            } />
             <p className="text-xs text-muted-foreground">
-              Free: {data ? formatCurrency(data.freeMargin) : '—'}
+              Free: {data ? formatCurrency(data.freeMargin) : '-'}
             </p>
           </CardContent>
         </Card>
 
-        {/* Drawdown */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium">Drawdown</CardTitle>
@@ -304,19 +346,33 @@ export default function RiskManagement() {
           <CardContent className="space-y-3">
             <div className="flex items-center justify-between text-sm">
               <span className={drawdownPct > 80 ? 'text-red-600 font-medium' : 'text-amber-600 font-medium'}>
-                {data ? `${data.currentDrawdown}%` : '—'}
+                {data ? `${data.currentDrawdown}%` : '-'}
               </span>
               <span className="text-muted-foreground text-xs">Max: {data?.maxAllowedDrawdown ?? 10}%</span>
             </div>
             <Progress value={drawdownPct} className={`h-3 ${getProgressColor(data?.currentDrawdown ?? 0, data?.maxAllowedDrawdown ?? 10)}`} />
-            <p className="text-xs text-muted-foreground">
-              All-time max: {data ? `${data.maxDrawdown}%` : '—'}
-            </p>
+            <p className="text-xs text-muted-foreground">All-time max: {data ? `${data.maxDrawdown}%` : '-'}</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium">Margin Usage</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between text-sm">
+              <span className={marginPct > 50 ? 'text-red-600 font-medium' : 'text-emerald-600 font-medium'}>
+                {data ? `${data.marginUsagePercent.toFixed(1)}%` : '-'}
+              </span>
+              <span className="text-muted-foreground text-xs">Max: {data?.maxMarginAllowed ?? 50}%</span>
+            </div>
+            <Progress value={marginPct} className={`h-3 ${getProgressColor(data?.marginUsagePercent ?? 0, data?.maxMarginAllowed ?? 50)}`} />
+            <p className="text-xs text-muted-foreground">Used: {data ? formatCurrency(data.marginUsed) : '-'}</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* ---- TIME-BASED P&L ---- */}
+      {/* TIME-BASED P&L */}
       <div className="grid grid-cols-3 gap-3">
         {[
           { label: 'Today', value: data?.dailyPnl, pct: data?.dailyPnlPercent },
@@ -327,7 +383,7 @@ export default function RiskManagement() {
             <CardContent className="p-4 text-center">
               <p className="text-xs text-muted-foreground mb-1">{item.label}</p>
               <p className={`text-sm font-bold ${(item.value ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                {item.value != null ? `${(item.value >= 0 ? '+' : '')}${formatCurrency(item.value)}` : '—'}
+                {item.value != null ? `${(item.value >= 0 ? '+' : '')}${formatCurrency(item.value)}` : '-'}
               </p>
               <p className={`text-xs ${(item.value ?? 0) >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
                 {item.pct != null ? `${(item.pct >= 0 ? '+' : '')}${item.pct}%` : ''}
@@ -337,7 +393,43 @@ export default function RiskManagement() {
         ))}
       </div>
 
-      {/* ---- POSITION-LEVEL RISK ---- */}
+      {/* SECTOR EXPOSURE - New deep audit feature */}
+      {data && data.sectorExposure.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <PieChart className="h-4 w-4 text-muted-foreground" />
+            Sector Exposure
+          </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+              {data.sectorExposure.map((se) => (
+                <div key={se.sector} className="rounded-lg border p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-medium">{se.sector}</span>
+                    <span className={`text-xs font-bold ${se.exposurePct > 15 ? 'text-red-600' : se.exposurePct > 10 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {se.exposurePct.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-1.5 mb-1">
+                    <div
+                      className={`h-1.5 rounded-full ${se.exposurePct > 15 ? 'bg-red-500' : se.exposurePct > 10 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                      style={{ width: `${Math.min(se.exposurePct * (100 / 15), 100)}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[10px] text-muted-foreground">
+                    <span>{se.positionCount} pos</span>
+                    <span>${formatCurrency(se.marginUsed)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* POSITION-LEVEL RISK */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium">Position-Level Risk Breakdown</CardTitle>
@@ -370,7 +462,7 @@ export default function RiskManagement() {
                     </TableCell>
                     <TableCell className="text-right font-mono hidden sm:table-cell">{pos.lotSize}</TableCell>
                     <TableCell className="text-right font-mono hidden md:table-cell">{pos.entryPrice.toLocaleString('id-ID')}</TableCell>
-                    <TableCell className="text-right font-mono hidden md:table-cell">{pos.sl?.toLocaleString('id-ID') ?? '—'}</TableCell>
+                    <TableCell className="text-right font-mono hidden md:table-cell">{pos.sl?.toLocaleString('id-ID') ?? '-'}</TableCell>
                     <TableCell className="text-right font-mono">{formatCurrency(pos.riskAmount)}</TableCell>
                     <TableCell className="text-right">
                       <span className={`text-sm font-medium ${pos.riskPercent <= 0.5 ? 'text-emerald-600' : 'text-red-600'}`}>
@@ -381,7 +473,7 @@ export default function RiskManagement() {
                       {pos.pnl >= 0 ? '+' : ''}{formatCurrency(pos.pnl)}
                     </TableCell>
                     <TableCell className="hidden xl:table-cell">
-                      <span className="text-xs text-muted-foreground">{pos.strategy || '—'}</span>
+                      <span className="text-xs text-muted-foreground">{pos.strategy || '-'}</span>
                       {pos.trailingStop && <Badge variant="outline" className="ml-1 text-[10px]">TS</Badge>}
                     </TableCell>
                   </TableRow>
@@ -395,7 +487,7 @@ export default function RiskManagement() {
         </CardContent>
       </Card>
 
-      {/* ---- RECOMMENDATIONS ---- */}
+      {/* RECOMMENDATIONS */}
       {data && data.recommendations.length > 0 && (
         <Card>
           <CardHeader className="pb-3">
@@ -408,7 +500,7 @@ export default function RiskManagement() {
             <ul className="space-y-1.5">
               {data.recommendations.map((rec, i) => (
                 <li key={i} className="text-sm flex items-start gap-2">
-                  <span className="text-muted-foreground mt-0.5">•</span>
+                  <span className="text-muted-foreground mt-0.5">*</span>
                   <span>{rec}</span>
                 </li>
               ))}
@@ -417,21 +509,24 @@ export default function RiskManagement() {
         </Card>
       )}
 
-      {/* ---- RISK RULES ---- */}
+      {/* RISK RULES - Enhanced */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-500" />
-            Risk Rules (FINEX Indonesia)
+            <Layers className="h-4 w-4 text-amber-500" />
+            Risk Rules (FINEX Indonesia - Deep Audit)
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5 xl:grid-cols-10">
             {[
-              { label: 'Risk / Trade', value: '0.5%', icon: Percent },
+              { label: 'Risk/Trade', value: '0.5%', icon: Percent },
               { label: 'Daily Loss', value: '2%', icon: TrendingDown },
+              { label: 'Weekly Loss', value: '5%', icon: TrendingDown },
               { label: 'Max DD', value: '10%', icon: TrendingDown },
-              { label: 'Margin', value: '50%', icon: Activity },
+              { label: 'Margin Max', value: '50%', icon: Activity },
+              { label: 'Proactive 70%', value: 'ON', icon: ShieldAlert },
+              { label: 'Proactive 60%', value: 'ON', icon: ShieldAlert },
               { label: 'MC Level', value: '50%', icon: ShieldAlert },
               { label: 'SO Level', value: '20%', icon: ShieldAlert },
               { label: 'Leverage', value: '1:25', icon: Gauge },

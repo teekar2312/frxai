@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   Select,
@@ -12,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Terminal, Filter, RefreshCw, Bug, Info, AlertTriangle, XCircle, AlertOctagon, Skull } from 'lucide-react'
+import { Terminal, Filter, RefreshCw, Bug, Info, AlertTriangle, XCircle, AlertOctagon, Skull, BarChart3, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
 interface LogEntry {
   id: string
@@ -34,6 +35,13 @@ interface LogStats {
   byCategory: { category: string; count: number }[]
 }
 
+interface LogAnalytics {
+  errorRateTrend: { lastHour: number; previousHour: number; direction: string }
+  topCategories: { category: string; count: number }[]
+  bursts: { startTime: string; count: number; topMessage: string }[]
+  topMessages: { message: string; count: number }[]
+}
+
 const LEVEL_CONFIG: Record<string, { icon: typeof Bug; color: string; bg: string; badgeClass: string }> = {
   DEBUG: { icon: Bug, color: 'text-cyan-600', bg: 'bg-cyan-50 dark:bg-cyan-950/30', badgeClass: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200' },
   INFO: { icon: Info, color: 'text-emerald-600', bg: 'bg-emerald-50 dark:bg-emerald-950/30', badgeClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' },
@@ -45,35 +53,39 @@ const LEVEL_CONFIG: Record<string, { icon: typeof Bug; color: string; bg: string
 
 const CATEGORIES = [
   'ALL', 'MT5_CONNECTION', 'TRADE_EXECUTION', 'RISK_MANAGEMENT',
-  'MONEY_MANAGEMENT', 'DATA_FEED', 'AI_ENGINE', 'SYSTEM', 'NOTIFICATION',
+  'MONEY_MANAGEMENT', 'DATA_FEED', 'AI_ENGINE', 'SYSTEM', 'NOTIFICATION', 'API_RATE_LIMIT',
 ]
 
 export default function LogViewer() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [stats, setStats] = useState<LogStats | null>(null)
+  const [analytics, setAnalytics] = useState<LogAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const [levelFilter, setLevelFilter] = useState('ALL')
   const [categoryFilter, setCategoryFilter] = useState('ALL')
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [showAnalytics, setShowAnalytics] = useState(false)
 
   const fetchLogs = useCallback(async () => {
     try {
       const params = new URLSearchParams({ limit: '100' })
       if (levelFilter !== 'ALL') params.set('level', levelFilter)
       if (categoryFilter !== 'ALL') params.set('category', categoryFilter)
+      if (showAnalytics) params.set('analytics', 'true')
 
       const res = await fetch(`/api/logs?${params}`)
       if (res.ok) {
         const json = await res.json()
         setLogs(json.data.logs || [])
         setStats(json.data.stats || null)
+        if (showAnalytics) setAnalytics(json.data.analytics || null)
       }
     } catch {
       // use stale data
     } finally {
       setLoading(false)
     }
-  }, [levelFilter, categoryFilter])
+  }, [levelFilter, categoryFilter, showAnalytics])
 
   useEffect(() => {
     fetchLogs()
@@ -85,11 +97,14 @@ export default function LogViewer() {
     return () => clearInterval(interval)
   }, [autoRefresh, fetchLogs])
 
-  const filteredLogs = logs
+  const TrendIcon = analytics?.errorRateTrend.direction === 'improving' ? TrendingUp :
+    analytics?.errorRateTrend.direction === 'degrading' ? TrendingDown : Minus
+  const trendColor = analytics?.errorRateTrend.direction === 'improving' ? 'text-emerald-600' :
+    analytics?.errorRateTrend.direction === 'degrading' ? 'text-red-600' : 'text-amber-600'
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
           <Terminal className="h-5 w-5 text-muted-foreground" />
           System Logs
@@ -102,6 +117,15 @@ export default function LogViewer() {
             </div>
           )}
           <Button
+            variant={showAnalytics ? 'default' : 'outline'}
+            size="sm"
+            className={showAnalytics ? 'h-7 text-xs bg-violet-600 hover:bg-violet-700' : 'h-7 text-xs'}
+            onClick={() => setShowAnalytics(!showAnalytics)}
+          >
+            <BarChart3 className="h-3 w-3 mr-1" />
+            Analytics
+          </Button>
+          <Button
             variant={autoRefresh ? 'default' : 'outline'}
             size="sm"
             className={autoRefresh ? 'h-7 text-xs bg-emerald-600 hover:bg-emerald-700' : 'h-7 text-xs'}
@@ -113,7 +137,7 @@ export default function LogViewer() {
         </div>
       </div>
 
-      {/* ---- Stats Bar ---- */}
+      {/* Stats Bar */}
       {stats && (
         <div className="flex flex-wrap gap-2">
           {stats.byLevel.map((l) => {
@@ -130,7 +154,81 @@ export default function LogViewer() {
         </div>
       )}
 
-      {/* ---- Filters ---- */}
+      {/* Analytics Panel - New deep audit feature */}
+      {showAnalytics && analytics && (
+        <div className="grid gap-3 lg:grid-cols-3">
+          {/* Error Rate Trend */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium flex items-center gap-2">
+                <BarChart3 className="h-3.5 w-3.5 text-muted-foreground" />
+                Error Rate Trend
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <div className="flex items-center gap-2">
+                <TrendIcon className={`h-5 w-5 ${trendColor}`} />
+                <span className={`text-sm font-bold ${trendColor}`}>
+                  {analytics.errorRateTrend.direction === 'improving' ? 'Improving' :
+                   analytics.errorRateTrend.direction === 'degrading' ? 'Degrading' : 'Stable'}
+                </span>
+              </div>
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Last hour: <strong className={analytics.errorRateTrend.lastHour > analytics.errorRateTrend.previousHour ? 'text-red-600' : 'text-emerald-600'}>{analytics.errorRateTrend.lastHour}</strong></span>
+                <span>Prev hour: {analytics.errorRateTrend.previousHour}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Top Error Sources */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium">Top Error Categories</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-1.5">
+                {analytics.topCategories.map((cat) => (
+                  <div key={cat.category} className="flex items-center justify-between text-xs">
+                    <span className="font-mono text-muted-foreground">{cat.category}</span>
+                    <Badge variant="outline" className="text-[10px] h-5">{cat.count}</Badge>
+                  </div>
+                ))}
+                {analytics.topCategories.length === 0 && <p className="text-xs text-muted-foreground">No errors</p>}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Bursts + Top Messages */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-xs font-medium flex items-center gap-2">
+                <AlertOctagon className="h-3.5 w-3.5 text-red-500" />
+                Error Bursts & Top Messages
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {analytics.bursts.length > 0 ? (
+                <Alert variant="destructive" className="mb-2 py-2">
+                  <AlertDescription className="text-xs">
+                    <strong>Burst detected:</strong> {analytics.bursts[0].count} errors in 5 min - {analytics.bursts[0].topMessage}
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <p className="text-xs text-emerald-600 mb-2">No error bursts</p>
+              )}
+              <div className="space-y-1">
+                {analytics.topMessages.slice(0, 3).map((msg, i) => (
+                  <p key={i} className="text-[10px] text-muted-foreground truncate" title={msg.message}>
+                    {msg.count}x {msg.message}
+                  </p>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* Filters */}
       <div className="flex flex-wrap gap-2">
         <div className="flex items-center gap-1.5">
           <Filter className="h-3.5 w-3.5 text-muted-foreground" />
@@ -156,28 +254,25 @@ export default function LogViewer() {
             </SelectContent>
           </Select>
         </div>
-        <span className="text-xs text-muted-foreground self-center">
-          {filteredLogs.length} entries
-        </span>
+        <span className="text-xs text-muted-foreground self-center">{logs.length} entries</span>
       </div>
 
-      {/* ---- Log Entries ---- */}
+      {/* Log Entries */}
       <Card>
         <CardContent className="p-0">
           <ScrollArea className="h-[500px]">
-            {filteredLogs.length === 0 ? (
+            {logs.length === 0 ? (
               <div className="py-12 text-center text-sm text-muted-foreground">
                 {loading ? 'Loading logs...' : 'No log entries found'}
               </div>
             ) : (
               <div className="divide-y">
-                {filteredLogs.map((entry) => {
+                {logs.map((entry) => {
                   const cfg = LEVEL_CONFIG[entry.level]
                   if (!cfg) return null
                   const Icon = cfg.icon
                   return (
-                    <div key={entry.id} className={`flex gap-3 px-4 py-2.5 text-sm hover:bg-muted/50 ${cfg.bg}`}
-                      >
+                    <div key={entry.id} className={`flex gap-3 px-4 py-2.5 text-sm hover:bg-muted/50 ${cfg.bg}`}>
                       <Icon className={`h-4 w-4 shrink-0 mt-0.5 ${cfg.color}`} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-0.5">
@@ -199,9 +294,7 @@ export default function LogViewer() {
                         <p className="text-xs leading-relaxed break-words">{entry.message}</p>
                         {entry.details && (
                           <details className="mt-1">
-                            <summary className="text-[10px] text-muted-foreground cursor-pointer hover:underline">
-                              Details
-                            </summary>
+                            <summary className="text-[10px] text-muted-foreground cursor-pointer hover:underline">Details</summary>
                             <pre className="text-[10px] mt-1 p-2 rounded bg-muted/50 overflow-x-auto max-h-32 overflow-y-auto">
                               {entry.details}
                             </pre>

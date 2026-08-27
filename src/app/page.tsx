@@ -20,6 +20,7 @@ import {
   Terminal,
   Loader2,
   AlertCircle,
+  Clock,
 } from 'lucide-react'
 import AccountSummary from '@/components/trading/AccountSummary'
 import StockWatchlist from '@/components/trading/StockWatchlist'
@@ -55,6 +56,8 @@ export default function TradingDashboard() {
   const [mt5Status, setMt5Status] = useState<string>('DISCONNECTED')
   const [mt5Latency, setMt5Latency] = useState<number>(0)
   const [mt5Uptime, setMt5Uptime] = useState<number>(0)
+  const [isMarketOpen, setIsMarketOpen] = useState(false)
+  const [tradingPhase, setTradingPhase] = useState('CLOSED')
 
   const fetchMt5Status = useCallback(async () => {
     try {
@@ -64,6 +67,8 @@ export default function TradingDashboard() {
         setMt5Status(json.data.status)
         setMt5Latency(json.data.latencyMs)
         setMt5Uptime(json.data.uptimeSeconds)
+        setIsMarketOpen(json.data.isMarketOpen)
+        setTradingPhase(json.data.tradingPhase)
       }
     } catch { /* stale */ }
   }, [])
@@ -74,6 +79,7 @@ export default function TradingDashboard() {
   }, [fetchMt5Status])
 
   const isConnected = mt5Status === 'CONNECTED'
+  const isDegraded = mt5Status === 'DEGRADED'
   const isReconnecting = mt5Status === 'RECONNECTING'
   const isAuthFailed = mt5Status === 'AUTH_FAILED'
 
@@ -102,6 +108,15 @@ export default function TradingDashboard() {
           </div>
 
           <div className="flex items-center gap-3 ml-auto">
+            {/* Market Hours - Deep Audit */}
+            <Badge
+              variant={isMarketOpen ? 'default' : 'outline'}
+              className={"h-6 gap-1 text-[10px] " + (isMarketOpen ? 'bg-emerald-600 hover:bg-emerald-700' : '')}
+            >
+              <Clock className="h-3 w-3" />
+              IDX {isMarketOpen ? 'OPEN' : tradingPhase === 'CLOSED' ? 'CLOSED' : tradingPhase}
+            </Badge>
+
             <div className="hidden md:flex items-center gap-2">
               <Button
                 variant={autoTrading ? 'default' : 'outline'}
@@ -119,13 +134,13 @@ export default function TradingDashboard() {
               </Button>
             </div>
 
-            {/* MT5 Connection Status - Real */}
+            {/* MT5 Connection Status */}
             <Badge
-              variant={isConnected ? 'default' : isAuthFailed ? 'destructive' : 'outline'}
-              className={"h-6 gap-1 text-[10px] " + (isConnected ? 'bg-emerald-600 hover:bg-emerald-700' : isReconnecting ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-600' : '')}
+              variant={isConnected ? 'default' : isAuthFailed || isDegraded ? 'destructive' : 'outline'}
+              className={"h-6 gap-1 text-[10px] " + (isConnected ? 'bg-emerald-600 hover:bg-emerald-700' : isDegraded ? 'bg-orange-600 hover:bg-orange-700 text-white border-orange-600' : isReconnecting ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-600' : '')}
             >
               {isReconnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : isConnected ? <Wifi className="h-3 w-3" /> : isAuthFailed ? <AlertCircle className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-              {isConnected ? `MT5 ${mt5Latency}ms` : isReconnecting ? 'Reconnecting...' : isAuthFailed ? 'Auth Failed' : 'Disconnected'}
+              {isConnected ? `MT5 ${mt5Latency}ms` : isDegraded ? `DEGRADED ${mt5Latency}ms` : isReconnecting ? 'Reconnecting...' : isAuthFailed ? 'Auth Failed' : 'Disconnected'}
             </Badge>
 
             {isConnected && mt5Uptime > 0 && (
@@ -226,13 +241,11 @@ export default function TradingDashboard() {
             <span className="hidden sm:inline">Commission $1/lot</span>
           </div>
           <div className="flex items-center gap-4">
-            <span className="hidden md:inline">Margin Call: 50%</span>
+            <span className="hidden md:inline">MC: 50%</span>
             <span className="hidden md:inline">|</span>
-            <span className="hidden md:inline">Stop Out: 20%</span>
+            <span className="hidden md:inline">SO: 20%</span>
             <span className="hidden lg:inline">|</span>
-            <span className="hidden lg:inline">Max Order: 50 lots</span>
-            <span className="hidden lg:inline">|</span>
-            <span className="hidden lg:inline">Max Positions: 200</span>
+            <span className="hidden lg:inline">Proactive: 70%/60%</span>
           </div>
         </div>
       </footer>

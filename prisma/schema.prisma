@@ -31,12 +31,18 @@ model Trade {
   aiConfidence    Float?
   leverage        Int      @default(25)
   commission      Float    @default(0)
+  slippage        Float    @default(0)
   margin          Float    @default(0)
   openTime        DateTime @default(now())
   closeTime       DateTime?
   closePrice      Float?
   reason          String?  // SL, TP, Manual, Trailing Stop, AI Signal, Margin Call, Stop Out, Risk Reject
   rejectReason    String?  // Why trade was rejected by risk engine
+  mt5ErrorCode    Int?     // MT5 trade_return_code if rejected by broker
+  mt5ErrorDesc    String?  // Human-readable MT5 error description
+  sizingMethod    String?  // Which money management method was used
+  riskAmount      Float?   // Dollar risk at trade open
+  sector          String?  // Sector classification for correlation
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -59,7 +65,7 @@ model PriceAlert {
 
 model Mt5ConnectionState {
   id              String   @id @default(cuid())
-  status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, RECONNECTING, ERROR, AUTH_FAILED
+  status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, RECONNECTING, ERROR, AUTH_FAILED, DEGRADED
   broker          String   @default("FINEX Indonesia")
   server          String?
   accountNumber   String?
@@ -72,17 +78,30 @@ model Mt5ConnectionState {
   lastConnectedAt DateTime?
   lastDisconnectedAt DateTime?
   connectedAt     DateTime?
+  consecutiveHeartbeatFailures Int @default(0)
+  isMarketOpen    Boolean  @default(false)
+  tradingPhase    String   @default("CLOSED") // PRE_OPEN, OPEN, PRE_CLOSE, CLOSED, AFTER_HOURS
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
 model Mt5ConnectionLog {
   id          String   @id @default(cuid())
-  event       String   // CONNECTED, DISCONNECTED, RECONNECTING, AUTH_FAILED, TIMEOUT, HEARTBEAT_OK, HEARTBEAT_FAIL, ERROR
+  event       String   // CONNECTED, DISCONNECTED, RECONNECTING, AUTH_FAILED, TIMEOUT, HEARTBEAT_OK, HEARTBEAT_FAIL, ERROR, DEGRADED, RECOVERED, MARKET_OPEN, MARKET_CLOSE
   message     String
   details     String?
   latencyMs   Int?
   createdAt   DateTime @default(now())
+}
+
+model Mt5ErrorCode {
+  code        Int    @id // MT5 trade_return_code (10004-10036)
+  description String
+  severity    String @default("ERROR") // INFO, WARN, ERROR, CRITICAL, FATAL
+  category    String @default("TRADE_EXECUTION") // MT5_CONNECTION, TRADE_EXECUTION, DATA_FEED
+  remediation String // Auto-remediation action
+  retryable   Boolean @default(false)
+ createdAt   DateTime @default(now())
 }
 
 // ============================================
@@ -91,11 +110,11 @@ model Mt5ConnectionLog {
 
 model RiskEvent {
   id            String   @id @default(cuid())
-  eventType     String   // DAILY_LIMIT_APPROACHING, DAILY_LIMIT_REACHED, MARGIN_CALL_WARNING, STOP_OUT_WARNING, MARGIN_EXCEEDED, POSITION_LIMIT_REACHED, LOT_LIMIT_EXCEEDED, RISK_SCORE_HIGH, CORRELATION_RISK, DRAWDOWN_LIMIT
+  eventType     String   // DAILY_LIMIT_APPROACHING, DAILY_LIMIT_REACHED, MARGIN_CALL_WARNING, STOP_OUT_WARNING, MARGIN_EXCEEDED, POSITION_LIMIT_REACHED, LOT_LIMIT_EXCEEDED, RISK_SCORE_HIGH, CORRELATION_RISK, DRAWDOWN_LIMIT, PROACTIVE_MC_70, PROACTIVE_MC_60, LEVERAGE_CAP, CONCENTRATION_LIMIT, PORTFOLIO_RISK_CAP, SLIPPAGE_WARNING, GAP_RISK
   severity      String   // LOW, MEDIUM, HIGH, CRITICAL
   message       String
   details       String?
-  actionTaken   String?  // TRADE_BLOCKED, ALL_POSITIONS_CLOSED, REDUCED_SIZE, NOTIFICATION_SENT, NONE
+  actionTaken   String?  // TRADE_BLOCKED, ALL_POSITIONS_CLOSED, REDUCED_SIZE, NOTIFICATION_SENT, NONE, AUTO_RECONNECT
   resolved      Boolean  @default(false)
   resolvedAt    DateTime?
   createdAt     DateTime @default(now())
@@ -117,6 +136,15 @@ model RiskConfig {
   stopOutLevel      Float    @default(20.0)  // %
   maxCorrelatedExposure Float  @default(15.0) // % max for same-sector positions
   cooldownAfterLossMinutes Int @default(15)
+  // --- New deep audit fields ---
+  proactiveMcLevel70    Boolean @default(true)  // Warn at 70% margin level
+  proactiveMcLevel60    Boolean @default(true)  // Warn at 60% margin level
+  maxPortfolioRiskPct    Float   @default(5.0)   // Max total risk across all positions (% of equity)
+  maxLeveragePerTrade    Float   @default(10.0)  // Max effective leverage per single trade
+  maxSingleStockPct      Float   @default(5.0)   // Max % of equity in single stock
+  maxSectorPct           Float   @default(15.0)  // Max % of equity in single sector
+  slippageTolerancePips  Float   @default(3.0)   // Max acceptable slippage in pips
+  reserveCapitalPct      Float   @default(20.0)  // % of equity to keep as cash reserve
   updatedAt         DateTime @updatedAt
   createdAt         DateTime @default(now())
 }
@@ -142,6 +170,13 @@ model DailyPerformance {
   peakEquity    Float
   troughEquity  Float
   riskScoreAvg  Float    @default(0)
+  // --- New deep audit fields ---
+  commissionPaid     Float    @default(0)
+  slippageCost       Float    @default(0)
+  deployedCapital    Float    @default(0)
+  reserveCapital     Float    @default(0)
+  sizingMethodUsed   String   @default("FIXED_FRACTIONAL")
+  scalingFactor      Float    @default(1.0)   // Dynamic risk scaling multiplier
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -226,13 +261,31 @@ model EmailNotification {
 model TradingLog {
   id          String   @id @default(cuid())
   level       String   // DEBUG, INFO, WARN, ERROR, CRITICAL, FATAL
-  category    String   @default("SYSTEM") // MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT, MONEY_MANAGEMENT, DATA_FEED, AI_ENGINE, SYSTEM, NOTIFICATION
+  category    String   @default("SYSTEM") // MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT, MONEY_MANAGEMENT, DATA_FEED, AI_ENGINE, SYSTEM, NOTIFICATION, API_RATE_LIMIT
   message     String
   source      String?
   details     String?
   stackTrace  String?
-  tradeId     String?   //关联交易ID
-  symbol      String?   //相关股票代码
+  tradeId     String?
+  symbol      String?
   metadata    String   @default("{}") // JSON for extensible context
+  fingerprint  String?  // Hash of (category+message+first50chars) for dedup
   createdAt   DateTime @default(now())
+}
+
+// ============================================
+// API RATE LIMIT TRACKING
+// ============================================
+
+model ApiRateLimit {
+  id            String   @id @default(cuid())
+  service       String   // FINNHUB, MARKETAUX, MT5
+  callsThisMinute Int    @default(0)
+  callsThisHour   Int    @default(0)
+  limitPerMinute Int    @default(60)
+  limitPerHour   Int    @default(3600)
+  lastCallAt     DateTime?
+  warningSentAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }

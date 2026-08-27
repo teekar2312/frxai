@@ -54,3 +54,4 @@ server.log
 /skills/tool-results/
 dev.log
 *.db-journal
+skills/

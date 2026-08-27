@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import { updateDailyPerformance } from "/home/z/my-project/src/lib/money-management"
+import logger from "/home/z/my-project/src/lib/trading-logger"
 
 export async function PATCH(
   request: NextRequest,
@@ -30,7 +32,7 @@ export async function PATCH(
       }
       pnl -= existing.commission
 
-      const pnlPercent = (pnl / existing.margin) * 100
+      const pnlPercent = existing.margin > 0 ? (pnl / existing.margin) * 100 : 0
 
       const updated = await db.trade.update({
         where: { id },
@@ -44,6 +46,29 @@ export async function PATCH(
           currentPrice: closePrice,
         },
       })
+
+      // Update daily performance
+      await updateDailyPerformance({
+        type: "CLOSE",
+        pnl,
+        isWin: pnl > 0,
+      })
+
+      logger.info("TRADE_EXECUTION", `Trade closed: ${existing.direction} ${existing.symbol} | PnL: $${pnl.toFixed(2)} | Reason: ${reason}`, {
+        tradeId: id,
+        symbol: existing.symbol,
+        metadata: {
+          direction: existing.direction,
+          lotSize: existing.lotSize,
+          entryPrice: existing.entryPrice,
+          closePrice,
+          pnl,
+          pnlPercent,
+          reason,
+          strategy: existing.strategy,
+        },
+      })
+
       return NextResponse.json({ success: true, data: updated })
     }
 
@@ -64,7 +89,7 @@ export async function PATCH(
       }
       pnl -= existing.commission
       updateData.pnl = pnl
-      updateData.pnlPercent = (pnl / existing.margin) * 100
+      updateData.pnlPercent = existing.margin > 0 ? (pnl / existing.margin) * 100 : 0
     }
     if (body.strategy !== undefined) updateData.strategy = body.strategy
     if (body.timeframe !== undefined) updateData.timeframe = body.timeframe
@@ -77,7 +102,10 @@ export async function PATCH(
 
     return NextResponse.json({ success: true, data: updated })
   } catch (error) {
-    console.error("Error updating trade:", error)
+    logger.error("TRADE_EXECUTION", "Error updating trade", {
+      tradeId: (await params).id,
+      details: error instanceof Error ? error.stack : undefined,
+    })
     return NextResponse.json(
       { success: false, error: "Failed to update trade" },
       { status: 500 }
@@ -102,9 +130,17 @@ export async function DELETE(
 
     await db.trade.delete({ where: { id } })
 
+    logger.info("TRADE_EXECUTION", `Trade deleted: ${existing.symbol} ${existing.direction} ${existing.lotSize} lot`, {
+      tradeId: id,
+      symbol: existing.symbol,
+    })
+
     return NextResponse.json({ success: true, message: "Trade deleted" })
   } catch (error) {
-    console.error("Error deleting trade:", error)
+    logger.error("TRADE_EXECUTION", "Error deleting trade", {
+      tradeId: (await params).id,
+      details: error instanceof Error ? error.stack : undefined,
+    })
     return NextResponse.json(
       { success: false, error: "Failed to delete trade" },
       { status: 500 }

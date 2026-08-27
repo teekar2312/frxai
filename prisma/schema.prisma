@@ -7,108 +7,205 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================
+// CORE TRADING MODELS
+// ============================================
+
 model Trade {
+  id              String   @id @default(cuid())
+  symbol          String
+  direction       String   // BUY or SELL
+  lotSize         Float
+  entryPrice      Float
+  currentPrice    Float
+  sl              Float?
+  tp              Float?
+  trailingStop    Boolean  @default(false)
+  trailingDist    Float?
+  pnl             Float    @default(0)
+  pnlPercent      Float    @default(0)
+  status          String   @default("OPEN") // OPEN, CLOSED, PENDING, REJECTED
+  strategy        String?
+  timeframe       String?
+  marketCond      String?
+  aiConfidence    Float?
+  leverage        Int      @default(25)
+  commission      Float    @default(0)
+  margin          Float    @default(0)
+  openTime        DateTime @default(now())
+  closeTime       DateTime?
+  closePrice      Float?
+  reason          String?  // SL, TP, Manual, Trailing Stop, AI Signal, Margin Call, Stop Out, Risk Reject
+  rejectReason    String?  // Why trade was rejected by risk engine
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model PriceAlert {
+  id          String   @id @default(cuid())
+  symbol      String
+  condition   String   // ABOVE, BELOW, CROSS_UP, CROSS_DOWN
+  price       Float
+  message     String?
+  triggered   Boolean  @default(false)
+  triggeredAt DateTime?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+}
+
+// ============================================
+// MT5 CONNECTION MANAGEMENT
+// ============================================
+
+model Mt5ConnectionState {
+  id              String   @id @default(cuid())
+  status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, RECONNECTING, ERROR, AUTH_FAILED
+  broker          String   @default("FINEX Indonesia")
+  server          String?
+  accountNumber   String?
+  accountType     String   @default("Real")
+  latencyMs       Int      @default(0)
+  uptimeSeconds   Int      @default(0)
+  reconnectCount  Int      @default(0)
+  lastHeartbeat   DateTime?
+  lastError       String?
+  lastConnectedAt DateTime?
+  lastDisconnectedAt DateTime?
+  connectedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Mt5ConnectionLog {
+  id          String   @id @default(cuid())
+  event       String   // CONNECTED, DISCONNECTED, RECONNECTING, AUTH_FAILED, TIMEOUT, HEARTBEAT_OK, HEARTBEAT_FAIL, ERROR
+  message     String
+  details     String?
+  latencyMs   Int?
+  createdAt   DateTime @default(now())
+}
+
+// ============================================
+// RISK MANAGEMENT
+// ============================================
+
+model RiskEvent {
   id            String   @id @default(cuid())
-  symbol        String
-  direction     String   // BUY or SELL
-  lotSize       Float
-  entryPrice    Float
-  currentPrice  Float
-  sl            Float?
-  tp            Float?
-  trailingStop  Boolean  @default(false)
-  trailingDist  Float?
-  pnl           Float    @default(0)
+  eventType     String   // DAILY_LIMIT_APPROACHING, DAILY_LIMIT_REACHED, MARGIN_CALL_WARNING, STOP_OUT_WARNING, MARGIN_EXCEEDED, POSITION_LIMIT_REACHED, LOT_LIMIT_EXCEEDED, RISK_SCORE_HIGH, CORRELATION_RISK, DRAWDOWN_LIMIT
+  severity      String   // LOW, MEDIUM, HIGH, CRITICAL
+  message       String
+  details       String?
+  actionTaken   String?  // TRADE_BLOCKED, ALL_POSITIONS_CLOSED, REDUCED_SIZE, NOTIFICATION_SENT, NONE
+  resolved      Boolean  @default(false)
+  resolvedAt    DateTime?
+  createdAt     DateTime @default(now())
+}
+
+model RiskConfig {
+  id                String   @id @default(cuid())
+  name              String   @unique @default("default")
+  maxRiskPerTrade   Float    @default(0.5)   // % of equity
+  maxDailyLoss      Float    @default(2.0)   // % of equity
+  maxWeeklyLoss     Float    @default(5.0)   // % of equity
+  maxMonthlyLoss    Float    @default(10.0)  // % of equity
+  maxMarginUsage    Float    @default(50.0)  // % of equity
+  maxDrawdown       Float    @default(10.0)  // % of peak equity
+  maxOpenPositions  Int      @default(200)
+  maxLotPerTrade    Float    @default(50.0)
+  maxLotPerSymbol   Float    @default(100.0)
+  marginCallLevel   Float    @default(50.0)  // %
+  stopOutLevel      Float    @default(20.0)  // %
+  maxCorrelatedExposure Float  @default(15.0) // % max for same-sector positions
+  cooldownAfterLossMinutes Int @default(15)
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+}
+
+// ============================================
+// MONEY MANAGEMENT
+// ============================================
+
+model DailyPerformance {
+  id            String   @id @default(cuid())
+  date          String   @unique  // YYYY-MM-DD
+  startBalance  Float
+  endBalance    Float
+  realizedPnl   Float    @default(0)
+  unrealizedPnl Float    @default(0)
+  totalPnl      Float    @default(0)
   pnlPercent    Float    @default(0)
-  status        String   @default("OPEN") // OPEN, CLOSED, PENDING
-  strategy      String?
-  timeframe     String?
-  marketCond    String?
-  aiConfidence  Float?
-  leverage      Int      @default(25)
-  commission    Float    @default(0)
-  margin        Float    @default(0)
-  openTime      DateTime @default(now())
-  closeTime     DateTime?
-  closePrice    Float?
-  reason        String?  // SL, TP, Manual, Trailing Stop, AI Signal
+  tradesOpened  Int      @default(0)
+  tradesClosed  Int      @default(0)
+  winTrades     Int      @default(0)
+  lossTrades    Int      @default(0)
+  maxDrawdown   Float    @default(0)
+  peakEquity    Float
+  troughEquity  Float
+  riskScoreAvg  Float    @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
 
-model PriceAlert {
-  id        String   @id @default(cuid())
-  symbol    String
-  condition String   // ABOVE, BELOW, CROSS_UP, CROSS_DOWN
-  price     Float
-  message   String?
-  triggered Boolean  @default(false)
-  triggeredAt DateTime?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-}
+// ============================================
+// AI & BACKTESTING
+// ============================================
 
-model NewsArticle {
-  id          String   @id @default(cuid())
-  title       String
-  content     String?
-  source      String?
-  url         String?
-  imageUrl    String?
-  sentiment   String   @default("NEUTRAL") // POSITIVE, NEGATIVE, NEUTRAL
-  sentimentScore Float  @default(0)
-  symbols     String   @default("[]") // JSON array of related symbols
-  publishedAt DateTime?
-  fetchedAt   DateTime @default(now())
-  category    String?  // ECONOMIC, POLITICAL, CENTRAL_BANK, FISCAL, COMMODITY, BREAKING
+model AiAnalysis {
+  id              String   @id @default(cuid())
+  symbol          String
+  marketCondition String   // TRENDING, RANGE_BOUND, HIGH_VOLATILITY, LOW_VOLATILITY
+  confidence      Float
+  timeframe       String
+  trendDirection  String?  // UP, DOWN, SIDEWAYS
+  volatility      Float?
+  volumeAnalysis  String?
+  sentiment       String?
+  recommendations String   @default("[]") // JSON array
+  factors         String   @default("[]") // JSON array of analysis factors
+  createdAt       DateTime @default(now())
 }
 
 model BacktestResult {
-  id          String   @id @default(cuid())
-  name        String
-  symbol      String
-  strategy    String
-  timeframe   String
-  startDate   DateTime
-  endDate     DateTime
-  initialCapital Float
-  finalCapital   Float
-  totalTrades    Int
-  winTrades      Int
-  lossTrades     Int
-  winRate        Float
-  maxDrawdown    Float
-  sharpeRatio    Float?
-  profitFactor   Float?
-  avgWin         Float?
-  avgLoss        Float?
-  totalPnl       Float
-  config         String   @default("{}") // JSON strategy config
-  createdAt     DateTime @default(now())
+  id              String   @id @default(cuid())
+  name            String
+  symbol          String
+  strategy        String
+  timeframe       String
+  startDate       DateTime
+  endDate         DateTime
+  initialCapital  Float
+  finalCapital    Float
+  totalTrades     Int
+  winTrades       Int
+  lossTrades      Int
+  winRate         Float
+  maxDrawdown     Float
+  sharpeRatio     Float?
+  profitFactor    Float?
+  avgWin          Float?
+  avgLoss         Float?
+  totalPnl        Float
+  config          String   @default("{}") // JSON strategy config
+  createdAt       DateTime @default(now())
 }
 
-model TradingLog {
-  id        String   @id @default(cuid())
-  level     String   // INFO, WARN, ERROR, DEBUG
-  message   String
-  source    String?
-  details   String?
-  createdAt DateTime @default(now())
-}
+// ============================================
+// NEWS & NOTIFICATIONS
+// ============================================
 
-model AiAnalysis {
+model NewsArticle {
   id             String   @id @default(cuid())
-  symbol         String
-  marketCondition String  // TRENDING, RANGE_BOUND, HIGH_VOLATILITY, LOW_VOLATILITY
-  confidence     Float
-  timeframe      String
-  trendDirection String?  // UP, DOWN, SIDEWAYS
-  volatility     Float?
-  volumeAnalysis String?
-  sentiment      String?
-  recommendations String  @default("[]") // JSON array
-  factors        String   @default("[]") // JSON array of analysis factors
-  createdAt      DateTime @default(now())
+  title          String
+  content        String?
+  source         String?
+  url            String?
+  imageUrl       String?
+  sentiment      String   @default("NEUTRAL") // POSITIVE, NEGATIVE, NEUTRAL
+  sentimentScore Float    @default(0)
+  symbols        String   @default("[]") // JSON array of related symbols
+  publishedAt    DateTime?
+  fetchedAt      DateTime @default(now())
+  category       String?  // ECONOMIC, POLITICAL, CENTRAL_BANK, FISCAL, COMMODITY, BREAKING
 }
 
 model EmailNotification {
@@ -120,4 +217,22 @@ model EmailNotification {
   sentAt    DateTime?
   error     String?
   createdAt DateTime @default(now())
+}
+
+// ============================================
+// STRUCTURED LOGGING
+// ============================================
+
+model TradingLog {
+  id          String   @id @default(cuid())
+  level       String   // DEBUG, INFO, WARN, ERROR, CRITICAL, FATAL
+  category    String   @default("SYSTEM") // MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT, MONEY_MANAGEMENT, DATA_FEED, AI_ENGINE, SYSTEM, NOTIFICATION
+  message     String
+  source      String?
+  details     String?
+  stackTrace  String?
+  tradeId     String?   //关联交易ID
+  symbol      String?   //相关股票代码
+  metadata    String   @default("{}") // JSON for extensible context
+  createdAt   DateTime @default(now())
 }

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -17,6 +17,9 @@ import {
   Bot,
   Wifi,
   WifiOff,
+  Terminal,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react'
 import AccountSummary from '@/components/trading/AccountSummary'
 import StockWatchlist from '@/components/trading/StockWatchlist'
@@ -29,17 +32,19 @@ import BacktestPanel from '@/components/trading/BacktestPanel'
 import StrategyMonitor from '@/components/trading/StrategyMonitor'
 import TradingSessions from '@/components/trading/TradingSessions'
 import EquityChart from '@/components/trading/EquityChart'
+import LogViewer from '@/components/trading/LogViewer'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'trading', label: 'Live Trading', icon: LineChart },
   { id: 'ai', label: 'AI Analysis', icon: BrainCircuit },
   { id: 'strategies', label: 'Strategies', icon: Cpu },
-  { id: 'news', label: 'News & Sentiment', icon: Newspaper },
-  { id: 'alerts', label: 'Price Alerts', icon: Bell },
-  { id: 'risk', label: 'Risk Management', icon: Shield },
-  { id: 'backtest', label: 'Backtesting', icon: FlaskConical },
+  { id: 'risk', label: 'Risk & Money', icon: Shield },
+  { id: 'news', label: 'News', icon: Newspaper },
+  { id: 'alerts', label: 'Alerts', icon: Bell },
+  { id: 'backtest', label: 'Backtest', icon: FlaskConical },
   { id: 'sessions', label: 'Sessions', icon: Globe },
+  { id: 'logs', label: 'System Logs', icon: Terminal },
 ] as const
 
 type TabId = (typeof NAV_ITEMS)[number]['id']
@@ -47,7 +52,38 @@ type TabId = (typeof NAV_ITEMS)[number]['id']
 export default function TradingDashboard() {
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [autoTrading, setAutoTrading] = useState(false)
-  const [connected] = useState(true)
+  const [mt5Status, setMt5Status] = useState<string>('DISCONNECTED')
+  const [mt5Latency, setMt5Latency] = useState<number>(0)
+  const [mt5Uptime, setMt5Uptime] = useState<number>(0)
+
+  const fetchMt5Status = useCallback(async () => {
+    try {
+      const res = await fetch('/api/mt5/status')
+      if (res.ok) {
+        const json = await res.json()
+        setMt5Status(json.data.status)
+        setMt5Latency(json.data.latencyMs)
+        setMt5Uptime(json.data.uptimeSeconds)
+      }
+    } catch { /* stale */ }
+  }, [])
+
+  useEffect(() => {
+    const interval = setInterval(fetchMt5Status, 10000)
+    return () => clearInterval(interval)
+  }, [fetchMt5Status])
+
+  const isConnected = mt5Status === 'CONNECTED'
+  const isReconnecting = mt5Status === 'RECONNECTING'
+  const isAuthFailed = mt5Status === 'AUTH_FAILED'
+
+  function formatUptime(seconds: number): string {
+    if (seconds < 60) return `${seconds}s`
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m`
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    return `${h}h ${m}m`
+  }
 
   return (
     <div className="min-h-screen flex flex-col bg-background">
@@ -83,13 +119,20 @@ export default function TradingDashboard() {
               </Button>
             </div>
 
+            {/* MT5 Connection Status - Real */}
             <Badge
-              variant={connected ? 'default' : 'destructive'}
-              className={"h-6 gap-1 text-[10px] " + (connected ? 'bg-emerald-600 hover:bg-emerald-700' : '')}
+              variant={isConnected ? 'default' : isAuthFailed ? 'destructive' : 'outline'}
+              className={"h-6 gap-1 text-[10px] " + (isConnected ? 'bg-emerald-600 hover:bg-emerald-700' : isReconnecting ? 'bg-amber-600 hover:bg-amber-700 text-white border-amber-600' : '')}
             >
-              {connected ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-              {connected ? 'MT5 Connected' : 'Disconnected'}
+              {isReconnecting ? <Loader2 className="h-3 w-3 animate-spin" /> : isConnected ? <Wifi className="h-3 w-3" /> : isAuthFailed ? <AlertCircle className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
+              {isConnected ? `MT5 ${mt5Latency}ms` : isReconnecting ? 'Reconnecting...' : isAuthFailed ? 'Auth Failed' : 'Disconnected'}
             </Badge>
+
+            {isConnected && mt5Uptime > 0 && (
+              <span className="hidden lg:inline text-[10px] text-muted-foreground">
+                Up {formatUptime(mt5Uptime)}
+              </span>
+            )}
 
             <Badge variant="outline" className="hidden sm:flex h-6 text-[10px]">
               Real Account
@@ -155,6 +198,10 @@ export default function TradingDashboard() {
 
           <TabsContent value="risk" className="space-y-6">
             <RiskManagement />
+          </TabsContent>
+
+          <TabsContent value="logs" className="space-y-6">
+            <LogViewer />
           </TabsContent>
 
           <TabsContent value="backtest" className="space-y-6">

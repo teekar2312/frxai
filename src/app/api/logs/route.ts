@@ -1,26 +1,43 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const limit = parseInt(searchParams.get("limit") ?? "50")
     const level = searchParams.get("level")
-    const source = searchParams.get("source")
+    const category = searchParams.get("category")
+    const symbol = searchParams.get("symbol")
+    const startDate = searchParams.get("startDate")
+    const endDate = searchParams.get("endDate")
 
     const where: Record<string, unknown> = {}
     if (level) where.level = level
-    if (source) where.source = source
+    if (category) where.category = category
+    if (symbol) where.symbol = symbol
 
+    if (startDate || endDate) {
+      where.createdAt = {} as Record<string, Date>
+      if (startDate) (where.createdAt as Record<string, Date>).gte = new Date(startDate)
+      if (endDate) (where.createdAt as Record<string, Date>).lte = new Date(endDate)
+    }
+
+    // Get logs
     const logs = await db.tradingLog.findMany({
       where,
       orderBy: { createdAt: "desc" },
       take: Math.min(limit, 200),
     })
 
-    return NextResponse.json({ success: true, data: logs })
+    // Log statistics
+    const stats = await getLogStats()
+
+    return NextResponse.json({ success: true, data: { logs, stats } })
   } catch (error) {
-    console.error("Error fetching logs:", error)
+    logger.error("SYSTEM", "Error fetching logs", {
+      details: error instanceof Error ? error.stack : undefined,
+    })
     return NextResponse.json(
       { success: false, error: "Failed to fetch logs" },
       { status: 500 }
@@ -31,7 +48,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { level, message, source, details } = body
+    const { level, message, source, details, category, symbol, tradeId, metadata } = body
 
     if (!message) {
       return NextResponse.json(
@@ -40,24 +57,69 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const validLevels = ["INFO", "WARN", "ERROR", "DEBUG"]
+    const validLevels = ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL", "FATAL"]
     const logLevel = validLevels.includes(level) ? level : "INFO"
+
+    const validCategories = [
+      "MT5_CONNECTION", "TRADE_EXECUTION", "RISK_MANAGEMENT",
+      "MONEY_MANAGEMENT", "DATA_FEED", "AI_ENGINE", "SYSTEM", "NOTIFICATION",
+    ]
+    const logCategory = validCategories.includes(category) ? category : "SYSTEM"
 
     const log = await db.tradingLog.create({
       data: {
         level: logLevel,
+        category: logCategory,
         message,
         source: source ?? null,
         details: details ?? null,
+        tradeId: tradeId ?? null,
+        symbol: symbol ?? null,
+        metadata: metadata ? JSON.stringify(metadata) : "{}",
       },
     })
 
     return NextResponse.json({ success: true, data: log }, { status: 201 })
   } catch (error) {
-    console.error("Error creating log:", error)
     return NextResponse.json(
       { success: false, error: "Failed to create log" },
       { status: 500 }
     )
+  }
+}
+
+// ---- Log Statistics ----
+
+async function getLogStats() {
+  const total = await db.tradingLog.count()
+  const lastHour = new Date(Date.now() - 60 * 60 * 1000)
+
+  const byLevel = await db.tradingLog.groupBy({
+    by: ["level"],
+    _count: true,
+  })
+
+  const byCategory = await db.tradingLog.groupBy({
+    by: ["category"],
+    _count: true,
+  })
+
+  const recentErrors = await db.tradingLog.count({
+    where: {
+      level: { in: ["ERROR", "CRITICAL", "FATAL"] },
+      createdAt: { gte: lastHour },
+    },
+  })
+
+  const recentTotal = await db.tradingLog.count({
+    where: { createdAt: { gte: lastHour } },
+  })
+
+  return {
+    total,
+    lastHourTotal: recentTotal,
+    lastHourErrors: recentErrors,
+    byLevel: byLevel.map((g) => ({ level: g.level, count: g._count })),
+    byCategory: byCategory.map((g) => ({ category: g.category, count: g._count })),
   }
 }

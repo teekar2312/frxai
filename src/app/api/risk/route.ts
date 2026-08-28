@@ -1,18 +1,57 @@
 import { NextResponse } from "next/server"
 import { getRiskSnapshot, logRiskEvent, getRiskConfig, processProactiveMarginMonitoring } from "@/lib/risk-engine"
 import logger from "@/lib/trading-logger"
+import { db } from "@/lib/db"
+
+/**
+ * Deep Audit Fix #1: Risk Event Deduplication
+ * Prevents flooding the database with duplicate risk events on every poll.
+ * Uses a time-window dedup: same eventType within THROTTLE_WINDOW_MS won't create a new event.
+ */
+const RISK_EVENT_THROTTLE_MS = 60_000 // 60 seconds
+const lastRiskEventTime = new Map<string, number>()
+
+async function logThrottledRiskEvent(params: {
+  eventType: string
+  severity: string
+  message: string
+  details?: string
+  actionTaken?: string
+}) {
+  const now = Date.now()
+  const lastTime = lastRiskEventTime.get(params.eventType) || 0
+
+  if (now - lastTime < RISK_EVENT_THROTTLE_MS) {
+    // Skip - already logged recently
+    return
+  }
+
+  lastRiskEventTime.set(params.eventType, now)
+  await logRiskEvent(params)
+}
+
+/**
+ * Deep Audit Fix #2: Proactive Margin Monitoring Throttle
+ * Only run proactive monitoring every 30 seconds, not on every GET request.
+ */
+let lastProactiveCheck = 0
+const PROACTIVE_CHECK_INTERVAL_MS = 30_000
 
 export async function GET() {
   try {
     const config = await getRiskConfig()
     const snapshot = await getRiskSnapshot()
 
-    // Run proactive margin monitoring
-    await processProactiveMarginMonitoring(snapshot.marginLevelPercent, config)
+    // Throttled proactive margin monitoring
+    const now = Date.now()
+    if (now - lastProactiveCheck >= PROACTIVE_CHECK_INTERVAL_MS) {
+      lastProactiveCheck = now
+      await processProactiveMarginMonitoring(snapshot.marginLevelPercent, config)
+    }
 
-    // Auto-generate risk events for critical conditions
+    // Auto-generate risk events for critical conditions (throttled)
     if (snapshot.isStopOutWarning) {
-      await logRiskEvent({
+      await logThrottledRiskEvent({
         eventType: "STOP_OUT_WARNING",
         severity: "CRITICAL",
         message: `Stop out level reached! Margin level: ${snapshot.marginLevelPercent}%`,
@@ -20,7 +59,7 @@ export async function GET() {
         actionTaken: "NOTIFICATION_SENT",
       })
     } else if (snapshot.isMarginCallWarning) {
-      await logRiskEvent({
+      await logThrottledRiskEvent({
         eventType: "MARGIN_CALL_WARNING",
         severity: "HIGH",
         message: `Margin call approaching! Margin level: ${snapshot.marginLevelPercent}%`,
@@ -28,14 +67,14 @@ export async function GET() {
         actionTaken: "NOTIFICATION_SENT",
       })
     } else if (snapshot.isDailyLimitReached) {
-      await logRiskEvent({
+      await logThrottledRiskEvent({
         eventType: "DAILY_LIMIT_REACHED",
         severity: "HIGH",
         message: `Daily loss limit reached: $${Math.abs(snapshot.dailyPnl).toFixed(2)} (${Math.abs(snapshot.dailyPnlPercent).toFixed(2)}%)`,
         actionTaken: "TRADE_BLOCKED",
       })
     } else if (snapshot.dailyPnlPercent < -1.5) {
-      await logRiskEvent({
+      await logThrottledRiskEvent({
         eventType: "DAILY_LIMIT_APPROACHING",
         severity: "MEDIUM",
         message: `Daily loss approaching limit: $${Math.abs(snapshot.dailyPnl).toFixed(2)} / $${snapshot.dailyLossLimit.toFixed(2)}`,
@@ -43,9 +82,9 @@ export async function GET() {
       })
     }
 
-    // Proactive margin zone events
+    // Proactive margin zone events (throttled)
     if (snapshot.proactiveMarginZone === "PROACTIVE_70") {
-      await logRiskEvent({
+      await logThrottledRiskEvent({
         eventType: "PROACTIVE_MC_70",
         severity: "MEDIUM",
         message: `Proactive: Margin level at ${snapshot.marginLevelPercent}% (70% warning zone)`,
@@ -53,7 +92,7 @@ export async function GET() {
         actionTaken: "NONE",
       })
     } else if (snapshot.proactiveMarginZone === "PROACTIVE_60") {
-      await logRiskEvent({
+      await logThrottledRiskEvent({
         eventType: "PROACTIVE_MC_60",
         severity: "HIGH",
         message: `Proactive: Margin level at ${snapshot.marginLevelPercent}% (60% critical zone). Position sizes reduced 50%.`,
@@ -62,7 +101,19 @@ export async function GET() {
       })
     }
 
-    return NextResponse.json({ success: true, data: snapshot })
+    // Deep Audit: Include recent resolved risk events
+    const recentRiskEvents = await db.riskEvent.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 10,
+    })
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...snapshot,
+        recentRiskEvents,
+      },
+    })
   } catch (error) {
     logger.error("RISK_MANAGEMENT", "Failed to generate risk snapshot", {
       details: error instanceof Error ? error.stack : undefined,

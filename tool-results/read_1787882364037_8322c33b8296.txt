@@ -1,0 +1,1385 @@
+     1→/**
+     2→ * MT5 Connection Manager - FINEX Indonesia (Enhanced)
+     3→ * ======================================================
+     4→ * Manages connection lifecycle, heartbeat, auto-reconnection,
+     5→ * and connection state persistence for MetaTrader 5 integration.
+     6→ *
+     7→ * Status States: CONNECTED, DISCONNECTED, RECONNECTING, ERROR, AUTH_FAILED, DEGRADED
+     8→ * Features:
+     9→ *  - Exponential backoff reconnection (1s, 2s, 4s, 8s, 16s, max 30s)
+    10→ *  - Heartbeat monitoring (configurable interval)
+    11→ *  - Connection metrics (uptime, latency, reconnect count)
+    12→ *  - Persistent state in DB
+    13→ *  - Event emission for UI status updates
+    14→ *  - DEGRADED state on high latency / heartbeat failures
+    15→ *  - IDX trading hours awareness (09:00-15:00 WIB)
+    16→ *  - Async mutex for MT5 API call serialization
+    17→ *  - MT5 error code mapping (10004-10036)
+    18→ *  - FINEX Indonesia symbol mapping with sector classification
+    19→ *  - Silent failure detection via validateReturn()
+    20→ *  - Graceful shutdown with state persistence
+    21→ */
+    22→
+    23→import { db } from "./db"
+    24→import logger, { type LogCategory } from "./trading-logger"
+    25→
+    26→// ============================================
+    27→// EXPORTED TYPES
+    28→// ============================================
+    29→
+    30→export type Mt5Status =
+    31→  | "CONNECTED"
+    32→  | "DISCONNECTED"
+    33→  | "RECONNECTING"
+    34→  | "ERROR"
+    35→  | "AUTH_FAILED"
+    36→  | "DEGRADED"
+    37→
+    38→export type TradingPhase =
+    39→  | "PRE_OPEN"
+    40→  | "OPEN"
+    41→  | "PRE_CLOSE"
+    42→  | "CLOSED"
+    43→  | "AFTER_HOURS"
+    44→
+    45→export type ErrorSeverity = "INFO" | "WARN" | "ERROR" | "CRITICAL" | "FATAL"
+    46→
+    47→export interface Mt5ErrorCodeEntry {
+    48→  code: number
+    49→  description: string
+    50→  severity: ErrorSeverity
+    51→  category: string
+    52→  remediation: string
+    53→  retryable: boolean
+    54→}
+    55→
+    56→export interface SymbolMappingEntry {
+    57→  idxSymbol: string
+    58→  mt5Symbol: string
+    59→  sector: string
+    60→  description: string
+    61→  lotSize: number
+    62→  tickSize: number
+    63→}
+    64→
+    65→// ============================================
+    66→// ASYNC MUTEX
+    67→// ============================================
+    68→
+    69→/**
+    70→ * Simple async mutex to prevent concurrent MT5 API calls.
+    71→ * The MT5 Python module is not thread-safe, so all calls must be serialized.
+    72→ */
+    73→export class AsyncMutex {
+    74→  private _queue: Array<() => void> = []
+    75→  private _locked = false
+    76→
+    77→  /** Acquire the mutex lock. Returns a release function. */
+    78→  async acquire(): Promise<() => void> {
+    79→    return new Promise<() => void>((resolve) => {
+    80→      const tryAcquire = () => {
+    81→        if (!this._locked) {
+    82→          this._locked = true
+    83→          resolve(this._release)
+    84→        } else {
+    85→          this._queue.push(tryAcquire)
+    86→        }
+    87→      }
+    88→      tryAcquire()
+    89→    })
+    90→  }
+    91→
+    92→  /** Run a function exclusively within the mutex lock. */
+    93→  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    94→    const release = await this.acquire()
+    95→    try {
+    96→      return await fn()
+    97→    } finally {
+    98→      release()
+    99→    }
+   100→  }
+   101→
+   102→  private _release = (): void => {
+   103→    this._locked = false
+   104→    const next = this._queue.shift()
+   105→    if (next) next()
+   106→  }
+   107→
+   108→  get locked(): boolean {
+   109→    return this._locked
+   110→  }
+   111→
+   112→  get queueLength(): number {
+   113→    return this._queue.length
+   114→  }
+   115→}
+   116→
+   117→// ============================================
+   118→// FINEX INDONESIA SYMBOL MAPPING TABLE
+   119→// ============================================
+   120→
+   121→export const SYMBOL_MAP: Record<string, SymbolMappingEntry> = {
+   122→  BBRI: {
+   123→    idxSymbol: "BBRI",
+   124→    mt5Symbol: "BBRI",
+   125→    sector: "BANKING",
+   126→    description: "Bank Rakyat Indonesia",
+   127→    lotSize: 100,
+   128→    tickSize: 1,
+   129→  },
+   130→  BBCA: {
+   131→    idxSymbol: "BBCA",
+   132→    mt5Symbol: "BBCA",
+   133→    sector: "BANKING",
+   134→    description: "Bank Central Asia",
+   135→    lotSize: 100,
+   136→    tickSize: 1,
+   137→  },
+   138→  BMRI: {
+   139→    idxSymbol: "BMRI",
+   140→    mt5Symbol: "BMRI",
+   141→    sector: "BANKING",
+   142→    description: "Bank Mandiri",
+   143→    lotSize: 100,
+   144→    tickSize: 1,
+   145→  },
+   146→  BBNI: {
+   147→    idxSymbol: "BBNI",
+   148→    mt5Symbol: "BBNI",
+   149→    sector: "BANKING",
+   150→    description: "Bank Negara Indonesia",
+   151→    lotSize: 100,
+   152→    tickSize: 1,
+   153→  },
+   154→  BRIS: {
+   155→    idxSymbol: "BRIS",
+   156→    mt5Symbol: "BRIS",
+   157→    sector: "BANKING",
+   158→    description: "Bank Syariah Indonesia",
+   159→    lotSize: 100,
+   160→    tickSize: 1,
+   161→  },
+   162→  ARTO: {
+   163→    idxSymbol: "ARTO",
+   164→    mt5Symbol: "ARTO",
+   165→    sector: "BANKING",
+   166→    description: "Bank Jago",
+   167→    lotSize: 100,
+   168→    tickSize: 1,
+   169→  },
+   170→  TLKM: {
+   171→    idxSymbol: "TLKM",
+   172→    mt5Symbol: "TLKM",
+   173→    sector: "TELECOMMUNICATION",
+   174→    description: "Telkom Indonesia",
+   175→    lotSize: 100,
+   176→    tickSize: 1,
+   177→  },
+   178→  EXCL: {
+   179→    idxSymbol: "EXCL",
+   180→    mt5Symbol: "EXCL",
+   181→    sector: "TELECOMMUNICATION",
+   182→    description: "XL Axiata",
+   183→    lotSize: 100,
+   184→    tickSize: 1,
+   185→  },
+   186→  ASII: {
+   187→    idxSymbol: "ASII",
+   188→    mt5Symbol: "ASII",
+   189→    sector: "CONGLOMERATE",
+   190→    description: "Astra International",
+   191→    lotSize: 100,
+   192→    tickSize: 1,
+   193→  },
+   194→  UNVR: {
+   195→    idxSymbol: "UNVR",
+   196→    mt5Symbol: "UNVR",
+   197→    sector: "CONSUMER_GOODS",
+   198→    description: "Unilever Indonesia",
+   199→    lotSize: 100,
+   200→    tickSize: 1,
+   201→  },
+   202→  ICBP: {
+   203→    idxSymbol: "ICBP",
+   204→    mt5Symbol: "ICBP",
+   205→    sector: "CONSUMER_GOODS",
+   206→    description: "Indofood CBP Sukses Makmur",
+   207→    lotSize: 100,
+   208→    tickSize: 1,
+   209→  },
+   210→  GOTO: {
+   211→    idxSymbol: "GOTO",
+   212→    mt5Symbol: "GOTO",
+   213→    sector: "TECHNOLOGY",
+   214→    description: "GoTo Gojek Tokopedia",
+   215→    lotSize: 100,
+   216→    tickSize: 1,
+   217→  },
+   218→  TBIG: {
+   219→    idxSymbol: "TBIG",
+   220→    mt5Symbol: "TBIG",
+   221→    sector: "INFRASTRUCTURE",
+   222→    description: "Tower Bersama Infrastructure",
+   223→    lotSize: 100,
+   224→    tickSize: 1,
+   225→  },
+   226→  ANTM: {
+   227→    idxSymbol: "ANTM",
+   228→    mt5Symbol: "ANTM",
+   229→    sector: "MINING",
+   230→    description: "Aneka Tambang",
+   231→    lotSize: 100,
+   232→    tickSize: 1,
+   233→  },
+   234→  TINS: {
+   235→    idxSymbol: "TINS",
+   236→    mt5Symbol: "TINS",
+   237→    sector: "MINING",
+   238→    description: "Timah",
+   239→    lotSize: 100,
+   240→    tickSize: 1,
+   241→  },
+   242→  ADRO: {
+   243→    idxSymbol: "ADRO",
+   244→    mt5Symbol: "ADRO",
+   245→    sector: "MINING",
+   246→    description: "Adaro Energy",
+   247→    lotSize: 100,
+   248→    tickSize: 1,
+   249→  },
+   250→  PGAS: {
+   251→    idxSymbol: "PGAS",
+   252→    mt5Symbol: "PGAS",
+   253→    sector: "ENERGY",
+   254→    description: "Perusahaan Gas Negara",
+   255→    lotSize: 100,
+   256→    tickSize: 1,
+   257→  },
+   258→  MEDC: {
+   259→    idxSymbol: "MEDC",
+   260→    mt5Symbol: "MEDC",
+   261→    sector: "ENERGY",
+   262→    description: "Medco Energi Internasional",
+   263→    lotSize: 100,
+   264→    tickSize: 1,
+   265→  },
+   266→  WSKT: {
+   267→    idxSymbol: "WSKT",
+   268→    mt5Symbol: "WSKT",
+   269→    sector: "INFRASTRUCTURE",
+   270→    description: "Waskita Karya",
+   271→    lotSize: 100,
+   272→    tickSize: 1,
+   273→  },
+   274→  JSMR: {
+   275→    idxSymbol: "JSMR",
+   276→    mt5Symbol: "JSMR",
+   277→    sector: "INFRASTRUCTURE",
+   278→    description: "Jasa Marga",
+   279→    lotSize: 100,
+   280→    tickSize: 1,
+   281→  },
+   282→  INKP: {
+   283→    idxSymbol: "INKP",
+   284→    mt5Symbol: "INKP",
+   285→    sector: "INDUSTRIAL",
+   286→    description: "Indah Kiat Pulp & Paper",
+   287→    lotSize: 100,
+   288→    tickSize: 1,
+   289→  },
+   290→  SMGR: {
+   291→    idxSymbol: "SMGR",
+   292→    mt5Symbol: "SMGR",
+   293→    sector: "INDUSTRIAL",
+   294→    description: "Semen Indonesia",
+   295→    lotSize: 100,
+   296→    tickSize: 1,
+   297→  },
+   298→  EMTK: {
+   299→    idxSymbol: "EMTK",
+   300→    mt5Symbol: "EMTK",
+   301→    sector: "CONGLOMERATE",
+   302→    description: "Elang Mahkota Teknologi",
+   303→    lotSize: 100,
+   304→    tickSize: 1,
+   305→  },
+   306→}
+   307→
+   308→/** Reverse lookup: MT5 symbol -> IDX symbol */
+   309→export const MT5_TO_IDX: Record<string, string> = Object.fromEntries(
+   310→  Object.entries(SYMBOL_MAP).map(([idx, entry]) => [entry.mt5Symbol, idx])
+   311→)
+   312→
+   313→/** All sectors in the symbol map */
+   314→export const SECTORS = [...new Set(Object.values(SYMBOL_MAP).map((s) => s.sector))]
+   315→
+   316→// ============================================
+   317→// MT5 ERROR CODE MAPPING TABLE (10004-10036)
+   318→// ============================================
+   319→
+   320→export const MT5_ERROR_CODES: Mt5ErrorCodeEntry[] = [
+   321→  {
+   322→    code: 10004,
+   323→    description: "Requote",
+   324→    severity: "WARN",
+   325→    category: "TRADE_EXECUTION",
+   326→    remediation: "Re-fetch current price and resubmit order with updated price",
+   327→    retryable: true,
+   328→  },
+   329→  {
+   330→    code: 10006,
+   331→    description: "Request rejected",
+   332→    severity: "ERROR",
+   333→    category: "TRADE_EXECUTION",
+   334→    remediation: "Log rejection reason, check order parameters, do not retry without investigation",
+   335→    retryable: false,
+   336→  },
+   337→  {
+   338→    code: 10007,
+   339→    description: "Request canceled by trader",
+   340→    severity: "INFO",
+   341→    category: "TRADE_EXECUTION",
+   342→    remediation: "No action needed - order was intentionally canceled",
+   343→    retryable: false,
+   344→  },
+   345→  {
+   346→    code: 10008,
+   347→    description: "Order placed",
+   348→    severity: "INFO",
+   349→    category: "TRADE_EXECUTION",
+   350→    remediation: "Confirm order ticket and monitor fill status",
+   351→    retryable: false,
+   352→  },
+   353→  {
+   354→    code: 10009,
+   355→    description: "Request executed successfully",
+   356→    severity: "INFO",
+   357→    category: "TRADE_EXECUTION",
+   358→    remediation: "Log successful execution, update position tracker",
+   359→    retryable: false,
+   360→  },
+   361→  {
+   362→    code: 10011,
+   363→    description: "Request executed partially",
+   364→    severity: "WARN",
+   365→    category: "TRADE_EXECUTION",
+   366→    remediation: "Track partial fill, monitor remaining quantity for complete fill",
+   367→    retryable: false,
+   368→  },
+   369→  {
+   370→    code: 10013,
+   371→    description: "Invalid request",
+   372→    severity: "ERROR",
+   373→    category: "TRADE_EXECUTION",
+   374→    remediation: "Validate all order fields (type, symbol, volume, price), fix and resubmit",
+   375→    retryable: true,
+   376→  },
+   377→  {
+   378→    code: 10014,
+   379→    description: "Invalid volume in request",
+   380→    severity: "ERROR",
+   381→    category: "TRADE_EXECUTION",
+   382→    remediation: "Check lot size against symbol's min/max lot and step size requirements",
+   383→    retryable: true,
+   384→  },
+   385→  {
+   386→    code: 10015,
+   387→    description: "Invalid price in request",
+   388→    severity: "ERROR",
+   389→    category: "TRADE_EXECUTION",
+   390→    remediation: "Check price against current bid/ask, symbol digits, and stop level distance",
+   391→    retryable: true,
+   392→  },
+   393→  {
+   394→    code: 10016,
+   395→    description: "Invalid stops in request",
+   396→    severity: "ERROR",
+   397→    category: "TRADE_EXECUTION",
+   398→    remediation: "Check SL/TP distance meets minimum stop level; verify stops are on correct side of price",
+   399→    retryable: true,
+   400→  },
+   401→  {
+   402→    code: 10017,
+   403→    description: "Trade disabled",
+   404→    severity: "CRITICAL",
+   405→    category: "TRADE_EXECUTION",
+   406→    remediation: "Check if trading is enabled in account settings and broker allows the symbol; contact broker if unexpected",
+   407→    retryable: false,
+   408→  },
+   409→  {
+   410→    code: 10018,
+   411→    description: "Market closed",
+   412→    severity: "WARN",
+   413→    category: "TRADE_EXECUTION",
+   414→    remediation: "Wait for market to open; queue order for next trading session",
+   415→    retryable: true,
+   416→  },
+   417→  {
+   418→    code: 10019,
+   419→    description: "Not enough money for trade",
+   420→    severity: "ERROR",
+   421→    category: "TRADE_EXECUTION",
+   422→    remediation: "Reduce lot size, close losing positions to free margin, or deposit additional funds",
+   423→    retryable: false,
+   424→  },
+   425→  {
+   426→    code: 10020,
+   427→    description: "Prices changed",
+   428→    severity: "WARN",
+   429→    category: "TRADE_EXECUTION",
+   430→    remediation: "Re-fetch current prices and resubmit with updated bid/ask",
+   431→    retryable: true,
+   432→  },
+   433→  {
+   434→    code: 10021,
+   435→    description: "No quotes to process request",
+   436→    severity: "WARN",
+   437→    category: "DATA_FEED",
+   438→    remediation: "Wait for quotes to resume; check symbol is subscribed and market is open",
+   439→    retryable: true,
+   440→  },
+   441→  {
+   442→    code: 10022,
+   443→    description: "Invalid order expiration date",
+   444→    severity: "ERROR",
+   445→    category: "TRADE_EXECUTION",
+   446→    remediation: "Set expiration within broker-allowed range, or use ORDER_TIME_GTC",
+   447→    retryable: true,
+   448→  },
+   449→  {
+   450→    code: 10023,
+   451→    description: "Order state changed",
+   452→    severity: "WARN",
+   453→    category: "TRADE_EXECUTION",
+   454→    remediation: "Re-fetch order state and retry modification if needed",
+   455→    retryable: true,
+   456→  },
+   457→  {
+   458→    code: 10024,
+   459→    description: "Too many requests",
+   460→    severity: "WARN",
+   461→    category: "MT5_CONNECTION",
+   462→    remediation: "Apply exponential backoff, reduce request frequency, batch requests",
+   463→    retryable: true,
+   464→  },
+   465→  {
+   466→    code: 10025,
+   467→    description: "No changes in request",
+   468→    severity: "INFO",
+   469→    category: "TRADE_EXECUTION",
+   470→    remediation: "Skip modification - order already matches requested parameters",
+   471→    retryable: false,
+   472→  },
+   473→  {
+   474→    code: 10026,
+   475→    description: "Autotrading disabled by server",
+   476→    severity: "CRITICAL",
+   477→    category: "MT5_CONNECTION",
+   478→    remediation: "Check broker settings for algorithmic trading permissions; contact FINEX support",
+   479→    retryable: false,
+   480→  },
+   481→  {
+   482→    code: 10027,
+   483→    description: "Autotrading only allowed for live accounts",
+   484→    severity: "ERROR",
+   485→    category: "MT5_CONNECTION",
+   486→    remediation: "Switch from demo to live account, or disable automated trading",
+   487→    retryable: false,
+   488→  },
+   489→  {
+   490→    code: 10028,
+   491→    description: "Request locked for processing",
+   492→    severity: "WARN",
+   493→    category: "TRADE_EXECUTION",
+   494→    remediation: "Wait briefly and retry; another operation on the same order is in progress",
+   495→    retryable: true,
+   496→  },
+   497→  {
+   498→    code: 10029,
+   499→    description: "Order or position frozen",
+   500→    severity: "ERROR",
+   501→    category: "TRADE_EXECUTION",
+   502→    remediation: "Wait for freeze to expire; check if close-only mode is active on the symbol",
+   503→    retryable: true,
+   504→  },
+   505→  {
+   506→    code: 10030,
+   507→    description: "Invalid order filling type",
+   508→    severity: "ERROR",
+   509→    category: "TRADE_EXECUTION",
+   510→    remediation: "Check symbol's allowed filling modes (FOK, IOC, Return); use symbol_info_get to verify",
+   511→    retryable: true,
+   512→  },
+   513→  {
+   514→    code: 10031,
+   515→    description: "No connection to trade server",
+   516→    severity: "CRITICAL",
+   517→    category: "MT5_CONNECTION",
+   518→    remediation: "Trigger reconnection sequence; check network connectivity and firewall rules",
+   519→    retryable: true,
+   520→  },
+   521→  {
+   522→    code: 10032,
+   523→    description: "Operation allowed only for live accounts",
+   524→    severity: "ERROR",
+   525→    category: "MT5_CONNECTION",
+   526→    remediation: "Verify account type; some operations (withdrawals, etc.) require live accounts",
+   527→    retryable: false,
+   528→  },
+   529→  {
+   530→    code: 10033,
+   531→    description: "Limit orders only allowed",
+   532→    severity: "WARN",
+   533→    category: "TRADE_EXECUTION",
+   534→    remediation: "Convert market order to limit order with appropriate price offset",
+   535→    retryable: true,
+   536→  },
+   537→  {
+   538→    code: 10034,
+   539→    description: "Volume limit exceeded",
+   540→    severity: "ERROR",
+   541→    category: "TRADE_EXECUTION",
+   542→    remediation: "Reduce lot size to within max lot limit for the symbol; split into multiple orders",
+   543→    retryable: true,
+   544→  },
+   545→  {
+   546→    code: 10035,
+   547→    description: "Invalid or incorrect order",
+   548→    severity: "ERROR",
+   549→    category: "TRADE_EXECUTION",
+   550→    remediation: "Verify order ticket exists and belongs to this account; re-fetch open orders",
+   551→    retryable: false,
+   552→  },
+   553→  {
+   554→    code: 10036,
+   555→    description: "Position already closed",
+   556→    severity: "INFO",
+   557→    category: "TRADE_EXECUTION",
+   558→    remediation: "Skip close request - position no longer exists; refresh position list",
+   559→    retryable: false,
+   560→  },
+   561→]
+   562→
+   563→/** Quick lookup by code */
+   564→export const MT5_ERROR_CODE_MAP: Map<number, Mt5ErrorCodeEntry> = new Map(
+   565→  MT5_ERROR_CODES.map((e) => [e.code, e])
+   566→)
+   567→
+   568→// ============================================
+   569→// IDX TRADING HOURS (WIB = UTC+7)
+   570→// ============================================
+   571→
+   572→/** Convert WIB (UTC+7) hours/minutes to UTC hours/minutes */
+   573→function wibToUtc(wibHour: number, wibMinute: number = 0): { hour: number; minute: number } {
+   574→  let utcHour = wibHour - 7
+   575→  let utcMinute = wibMinute
+   576→  if (utcHour < 0) utcHour += 24
+   577→  return { hour: utcHour, minute: utcMinute }
+   578→}
+   579→
+   580→// Pre-computed UTC boundaries for IDX trading
+   581→const PHASE_BOUNDARIES_UTC = {
+   582→  preOpenStart: wibToUtc(8, 45),     // 01:45 UTC
+   583→  morningOpen: wibToUtc(9, 0),        // 02:00 UTC
+   584→  preCloseStart: wibToUtc(11, 30),     // 04:30 UTC
+   585→  preCloseEnd: wibToUtc(11, 30, 30),   // 04:30:30 UTC (treated as 04:30 since we only have minutes)
+   586→  afternoonOpen: wibToUtc(13, 30),     // 06:30 UTC
+   587→  marketClose: wibToUtc(15, 0),        // 08:00 UTC
+   588→} as const
+   589→
+   590→/**
+   591→ * Determine the current IDX trading phase based on UTC time.
+   592→ * IDX Schedule (WIB / UTC):
+   593→ *   PRE_OPEN:     08:45-09:00 WIB  = 01:45-02:00 UTC
+   594→ *   OPEN:         09:00-11:30 WIB  = 02:00-04:30 UTC
+   595→ *   PRE_CLOSE:    11:30-11:30:30    = ~04:30 UTC (30s window)
+   596→ *   CLOSED:       11:30-13:30 WIB  = 04:30-06:30 UTC (lunch break)
+   597→ *   OPEN:         13:30-15:00 WIB  = 06:30-08:00 UTC
+   598→ *   AFTER_HOURS:  15:00+ WIB       = 08:00+ UTC
+   599→ */
+   600→export function getTradingPhase(now?: Date): TradingPhase {
+   601→  const d = now || new Date()
+   602→  // Get UTC hours and minutes as decimal for comparison
+   603→  const utcDecimal = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600
+   604→
+   605→  const { preOpenStart, morningOpen, preCloseStart, preCloseEnd, afternoonOpen, marketClose } = PHASE_BOUNDARIES_UTC
+   606→
+   607→  // Convert boundaries to decimal hours for comparison
+   608→  const preOpenDec = preOpenStart.hour + preOpenStart.minute / 60
+   609→  const morningDec = morningOpen.hour + morningOpen.minute / 60
+   610→  const preCloseDec = preCloseStart.hour + preCloseStart.minute / 60
+   611→  const preCloseEndDec = preCloseStart.hour + preCloseStart.minute / 60 + 30 / 3600 // 30 seconds
+   612→  const afternoonDec = afternoonOpen.hour + afternoonOpen.minute / 60
+   613→  const closeDec = marketClose.hour + marketClose.minute / 60
+   614→
+   615→  if (utcDecimal >= preOpenDec && utcDecimal < morningDec) {
+   616→    return "PRE_OPEN"
+   617→  }
+   618→  if (utcDecimal >= morningDec && utcDecimal < preCloseDec) {
+   619→    return "OPEN"
+   620→  }
+   621→  // PRE_CLOSE is a 30-second window; treat it as part of PRE_CLOSE
+   622→  if (utcDecimal >= preCloseDec && utcDecimal < preCloseEndDec) {
+   623→    return "PRE_CLOSE"
+   624→  }
+   625→  // Lunch break CLOSED
+   626→  if (utcDecimal >= preCloseDec && utcDecimal < afternoonDec) {
+   627→    return "CLOSED"
+   628→  }
+   629→  // Afternoon session OPEN
+   630→  if (utcDecimal >= afternoonDec && utcDecimal < closeDec) {
+   631→    return "OPEN"
+   632→  }
+   633→  // After hours
+   634→  return "AFTER_HOURS"
+   635→}
+   636→
+   637→/** Check if the IDX market is currently open for trading. */
+   638→export function isMarketOpen(now?: Date): boolean {
+   639→  const phase = getTradingPhase(now)
+   640→  return phase === "OPEN" || phase === "PRE_OPEN"
+   641→}
+   642→
+   643→// ============================================
+   644→// SEED MT5 ERROR CODES (idempotent upsert)
+   645→// ============================================
+   646→
+   647→let _errorCodesSeeded = false
+   648→
+   649→/**
+   650→ * Seed all MT5 error codes into the Mt5ErrorCode table.
+   651→ * Uses upsert for idempotency. Safe to call multiple times.
+   652→ * Uses lazy initialization - no top-level await.
+   653→ */
+   654→export async function seedMt5ErrorCodes(): Promise<void> {
+   655→  if (_errorCodesSeeded) return
+   656→
+   657→  try {
+   658→    for (const entry of MT5_ERROR_CODES) {
+   659→      await db.mt5ErrorCode.upsert({
+   660→        where: { code: entry.code },
+   661→        update: {
+   662→          description: entry.description,
+   663→          severity: entry.severity,
+   664→          category: entry.category,
+   665→          remediation: entry.remediation,
+   666→          retryable: entry.retryable,
+   667→        },
+   668→        create: {
+   669→          code: entry.code,
+   670→          description: entry.description,
+   671→          severity: entry.severity,
+   672→          category: entry.category,
+   673→          remediation: entry.remediation,
+   674→          retryable: entry.retryable,
+   675→        },
+   676→      })
+   677→    }
+   678→    _errorCodesSeeded = true
+   679→    logger.info("MT5_CONNECTION", `Seeded ${MT5_ERROR_CODES.length} MT5 error codes into database`)
+   680→  } catch (err) {
+   681→    const msg = err instanceof Error ? err.message : String(err)
+   682→    logger.error("MT5_CONNECTION", `Failed to seed MT5 error codes: ${msg}`, {
+   683→      details: err instanceof Error ? err.stack : undefined,
+   684→    })
+   685→    // Don't throw - allow system to continue operating
+   686→  }
+   687→}
+   688→
+   689→// ============================================
+   690→// CONNECTION MANAGER CONFIG
+   691→// ============================================
+   692→
+   693→interface Mt5Config {
+   694→  server: string
+   695→  login: number
+   696→  password: string
+   697→  heartbeatIntervalMs: number
+   698→  maxReconnectAttempts: number
+   699→  baseReconnectDelayMs: number
+   700→  maxReconnectDelayMs: number
+   701→  degradedLatencyThresholdMs: number
+   702→  degradedHeartbeatFailureThreshold: number
+   703→  tradingPhaseCheckIntervalMs: number
+   704→}
+   705→
+   706→interface ConnectionMetrics {
+   707→  latencyMs: number
+   708→  uptimeSeconds: number
+   709→  reconnectCount: number
+   710→  lastHeartbeat: Date | null
+   711→  connectedAt: Date | null
+   712→  lastError: string | null
+   713→  consecutiveHeartbeatFailures: number
+   714→  currentTradingPhase: TradingPhase
+   715→  marketIsOpen: boolean
+   716→}
+   717→
+   718→// Status change listeners (for WebSocket broadcast)
+   719→type StatusListener = (status: Mt5Status, metrics: ConnectionMetrics) => void
+   720→const listeners: StatusListener[] = []
+   721→
+   722→export function onStatusChange(fn: StatusListener) {
+   723→  listeners.push(fn)
+   724→  return () => {
+   725→    const idx = listeners.indexOf(fn)
+   726→    if (idx >= 0) listeners.splice(idx, 1)
+   727→  }
+   728→}
+   729→
+   730→function emitStatusChange(status: Mt5Status, metrics: ConnectionMetrics) {
+   731→  for (const fn of listeners) {
+   732→    try {
+   733→      fn(status, metrics)
+   734→    } catch {
+   735→      /* ignore listener errors */
+   736→    }
+   737→  }
+   738→}
+   739→
+   740→// ---- Default config for FINEX Indonesia ----
+   741→const DEFAULT_CONFIG: Omit<Mt5Config, "login" | "password"> = {
+   742→  server: "FINEX-Server",
+   743→  heartbeatIntervalMs: 5000,
+   744→  maxReconnectAttempts: 20,
+   745→  baseReconnectDelayMs: 1000,
+   746→  maxReconnectDelayMs: 30000,
+   747→  degradedLatencyThresholdMs: 200,
+   748→  degradedHeartbeatFailureThreshold: 2,
+   749→  tradingPhaseCheckIntervalMs: 30000, // Check trading phase every 30s
+   750→}
+   751→
+   752→// ============================================
+   753→// CONNECTION MANAGER CLASS
+   754→// ============================================
+   755→
+   756→class Mt5ConnectionManager {
+   757→  private status: Mt5Status = "DISCONNECTED"
+   758→  private config: Mt5Config | null = null
+   759→  private metrics: ConnectionMetrics = {
+   760→    latencyMs: 0,
+   761→    uptimeSeconds: 0,
+   762→    reconnectCount: 0,
+   763→    lastHeartbeat: null,
+   764→    connectedAt: null,
+   765→    lastError: null,
+   766→    consecutiveHeartbeatFailures: 0,
+   767→    currentTradingPhase: getTradingPhase(),
+   768→    marketIsOpen: isMarketOpen(),
+   769→  }
+   770→  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+   771→  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+   772→  private reconnectAttempt = 0
+   773→  private uptimeTimer: ReturnType<typeof setInterval> | null = null
+   774→  private tradingPhaseTimer: ReturnType<typeof setInterval> | null = null
+   775→  private isShuttingDown = false
+   776→  private previousPhase: TradingPhase | null = null
+   777→  private previousMarketOpen: boolean | null = null
+   778→
+   779→  /** Async mutex to serialize all MT5 API calls */
+   780→  public readonly mutex = new AsyncMutex()
+   781→
+   782→  // ---- Public API ----
+   783→
+   784→  getStatus(): Mt5Status {
+   785→    return this.status
+   786→  }
+   787→
+   788→  getMetrics(): ConnectionMetrics {
+   789→    return { ...this.metrics }
+   790→  }
+   791→
+   792→  isConnected(): boolean {
+   793→    return this.status === "CONNECTED" || this.status === "DEGRADED"
+   794→  }
+   795→
+   796→  getTradingPhase(): TradingPhase {
+   797→    return this.metrics.currentTradingPhase
+   798→  }
+   799→
+   800→  isMarketOpen(): boolean {
+   801→    return this.metrics.marketIsOpen
+   802→  }
+   803→
+   804→  getSymbolMapping(symbol: string): SymbolMappingEntry | undefined {
+   805→    return SYMBOL_MAP[symbol.toUpperCase()]
+   806→  }
+   807→
+   808→  getAllSymbols(): SymbolMappingEntry[] {
+   809→    return Object.values(SYMBOL_MAP)
+   810→  }
+   811→
+   812→  getErrorCode(code: number): Mt5ErrorCodeEntry | undefined {
+   813→    return MT5_ERROR_CODE_MAP.get(code)
+   814→  }
+   815→
+   816→  /**
+   817→   * Validate MT5 API return data for silent failures.
+   818→   * Checks for: empty arrays, null values, zero ticks outside trading hours.
+   819→   */
+   820→  validateReturn<T>(
+   821→    data: T,
+   822→    context: string,
+   823→    options?: {
+   824→      expectArray?: boolean
+   825→      expectNonEmpty?: boolean
+   826→      expectNonNull?: boolean
+   827→      symbol?: string
+   828→    }
+   829→  ): { valid: boolean; issue?: string; data: T } {
+   830→    const { expectArray, expectNonEmpty, expectNonNull, symbol } = options || {}
+   831→
+   832→    // Null/undefined check
+   833→    if (data == null) {
+   834→      const msg = `MT5 API silent failure: ${context} returned ${data === null ? "null" : "undefined"}`
+   835→      logger.warn("MT5_CONNECTION", msg, { symbol, metadata: { context, value: String(data) } })
+   836→      return { valid: false, issue: msg, data }
+   837→    }
+   838→
+   839→    // Array checks
+   840→    if (expectArray && !Array.isArray(data)) {
+   841→      const msg = `MT5 API silent failure: ${context} expected array but got ${typeof data}`
+   842→      logger.warn("MT5_CONNECTION", msg, { symbol, metadata: { context, type: typeof data } })
+   843→      return { valid: false, issue: msg, data }
+   844→    }
+   845→
+   846→    if (expectArray && expectNonEmpty && Array.isArray(data) && data.length === 0) {
+   847→      // Empty array is OK if market is closed
+   848→      if (!this.metrics.marketIsOpen) {
+   849→        logger.debug("MT5_CONNECTION", `${context} returned empty array but market is closed (expected)`, { symbol })
+   850→        return { valid: true, data }
+   851→      }
+   852→      // During trading hours, empty array = silent failure
+   853→      const msg = `MT5 API silent failure: ${context} returned empty array during market hours`
+   854→      logger.warn("MT5_CONNECTION", msg, { symbol, metadata: { context, tradingPhase: this.metrics.currentTradingPhase } })
+   855→      return { valid: false, issue: msg, data }
+   856→    }
+   857→
+   858→    // Zero-tick check for tick data
+   859→    if (expectNonNull && (data as unknown) === 0) {
+   860→      if (!this.metrics.marketIsOpen) {
+   861→        return { valid: true, data }
+   862→      }
+   863→      const msg = `MT5 API silent failure: ${context} returned zero value during market hours`
+   864→      logger.warn("MT5_CONNECTION", msg, { symbol, metadata: { context } })
+   865→      return { valid: false, issue: msg, data }
+   866→    }
+   867→
+   868→    return { valid: true, data }
+   869→  }
+   870→
+   871→  async connect(login: number, password: string, server?: string): Promise<{ success: boolean; error?: string }> {
+   872→    if (this.status === "CONNECTED" || this.status === "DEGRADED") {
+   873→      return { success: true }
+   874→    }
+   875→
+   876→    this.config = {
+   877→      ...DEFAULT_CONFIG,
+   878→      login,
+   879→      password,
+   880→      server: server || DEFAULT_CONFIG.server,
+   881→    }
+   882→
+   883→    // Lazy seed error codes on first connection
+   884→    await seedMt5ErrorCodes()
+   885→
+   886→    logger.info("MT5_CONNECTION", `Initiating connection to ${this.config.server}`, {
+   887→      metadata: { login: this.config.login, server: this.config.server },
+   888→    })
+   889→
+   890→    try {
+   891→      const result = await this.mutex.runExclusive(() => this.attemptConnection())
+   892→      if (result.success) {
+   893→        await this.onConnected()
+   894→        return { success: true }
+   895→      } else {
+   896→        await this.onConnectionFailed(result.error || "Unknown error")
+   897→        return { success: false, error: result.error }
+   898→      }
+   899→    } catch (err) {
+   900→      const msg = err instanceof Error ? err.message : String(err)
+   901→      await this.onConnectionFailed(msg)
+   902→      return { success: false, error: msg }
+   903→    }
+   904→  }
+   905→
+   906→  async disconnect(): Promise<void> {
+   907→    this.isShuttingDown = true
+   908→    this.clearTimers()
+   909→    await this.setStatus("DISCONNECTED")
+   910→    await this.persistState()
+   911→    logger.info("MT5_CONNECTION", "Disconnected from MT5 server")
+   912→  }
+   913→
+   914→  /**
+   915→   * Graceful shutdown: clear all timers, persist state, flush logger.
+   916→   * Call this on process exit (SIGTERM, SIGINT) or during hot reload.
+   917→   */
+   918→  async gracefulShutdown(): Promise<void> {
+   919→    logger.info("MT5_CONNECTION", "Initiating graceful shutdown")
+   920→    this.isShuttingDown = true
+   921→
+   922→    // 1. Clear all timers
+   923→    this.clearTimers()
+   924→
+   925→    // 2. Set status to DISCONNECTED
+   926→    const previousStatus = this.status
+   927→    this.status = "DISCONNECTED"
+   928→
+   929→    // 3. Persist final state to DB
+   930→    try {
+   931→      await this.persistState()
+   932→    } catch (err) {
+   933→      const msg = err instanceof Error ? err.message : String(err)
+   934→      logger.error("MT5_CONNECTION", `Failed to persist state during shutdown: ${msg}`)
+   935→    }
+   936→
+   937→    // 4. Log the shutdown event
+   938→    try {
+   939→      await this.logConnectionEvent("DISCONNECTED", `Graceful shutdown (was ${previousStatus})`)
+   940→    } catch {
+   941→      // Best effort
+   942→    }
+   943→
+   944→    // 5. Flush the trading logger buffer
+   945→    try {
+   946→      await logger.shutdown()
+   947→    } catch {
+   948→      // Best effort
+   949→    }
+   950→
+   951→    logger.info("MT5_CONNECTION", "Graceful shutdown complete")
+   952→  }
+   953→
+   954→  // ---- Connection Logic ----
+   955→
+   956→  private async attemptConnection(): Promise<{ success: boolean; error?: string }> {
+   957→    if (!this.config) {
+   958→      return { success: false, error: "No configuration provided" }
+   959→    }
+   960→
+   961→    // Simulate connection latency
+   962→    const startMs = Date.now()
+   963→    const latency = Math.floor(20 + Math.random() * 80)
+   964→    await new Promise((r) => setTimeout(r, latency))
+   965→    this.metrics.latencyMs = latency
+   966→
+   967→    // Validate credentials format
+   968→    if (!this.config.login || this.config.login <= 0) {
+   969→      return { success: false, error: "Invalid login credentials" }
+   970→    }
+   971→
+   972→    if (!this.config.password || this.config.password.length < 1) {
+   973→      return { success: false, error: "Password is required" }
+   974→    }
+   975→
+   976→    return { success: true }
+   977→  }
+   978→
+   979→  private async onConnected(): Promise<void> {
+   980→    this.reconnectAttempt = 0
+   981→    this.metrics.connectedAt = new Date()
+   982→    this.metrics.lastError = null
+   983→    this.metrics.consecutiveHeartbeatFailures = 0
+   984→    this.metrics.reconnectCount =
+   985→      this.status === "RECONNECTING" ? this.metrics.reconnectCount : 0
+   986→    this.status = "CONNECTED"
+   987→
+   988→    // Start heartbeat
+   989→    this.heartbeatTimer = setInterval(
+   990→      () => this.heartbeat(),
+   991→      this.config?.heartbeatIntervalMs || 5000
+   992→    )
+   993→
+   994→    // Start uptime counter
+   995→    this.uptimeTimer = setInterval(() => {
+   996→      if (this.metrics.connectedAt) {
+   997→        this.metrics.uptimeSeconds = Math.floor(
+   998→          (Date.now() - this.metrics.connectedAt.getTime()) / 1000
+   999→        )
+  1000→      }
+  1001→    }, 1000)
+  1002→
+  1003→    // Start trading phase monitor
+  1004→    this.tradingPhaseTimer = setInterval(
+  1005→      () => this.checkTradingPhase(),
+  1006→      this.config?.tradingPhaseCheckIntervalMs || 30000
+  1007→    )
+  1008→
+  1009→    // Initialize trading phase
+  1010→    this.updateTradingPhase()
+  1011→
+  1012→    await this.persistState()
+  1013→    await this.logConnectionEvent("CONNECTED", "Successfully connected to MT5 server")
+  1014→
+  1015→    logger.info("MT5_CONNECTION", `Connected to ${this.config?.server} (latency: ${this.metrics.latencyMs}ms)`, {
+  1016→      metadata: {
+  1017→        latencyMs: this.metrics.latencyMs,
+  1018→        accountLogin: this.config?.login,
+  1019→      },
+  1020→    })
+  1021→
+  1022→    emitStatusChange(this.status, this.metrics)
+  1023→  }
+  1024→
+  1025→  private async onConnectionFailed(error: string): Promise<void> {
+  1026→    // Detect auth failure
+  1027→    if (error.includes("auth") || error.includes("credentials") || error.includes("login")) {
+  1028→      this.status = "AUTH_FAILED"
+  1029→      this.metrics.lastError = error
+  1030→      await this.setStatus("AUTH_FAILED")
+  1031→      await this.logConnectionEvent("AUTH_FAILED", `Authentication failed: ${error}`)
+  1032→      logger.critical("MT5_CONNECTION", `Authentication failed: ${error}`)
+  1033→      emitStatusChange(this.status, this.metrics)
+  1034→      return
+  1035→    }
+  1036→
+  1037→    this.status = "ERROR"
+  1038→    this.metrics.lastError = error
+  1039→    await this.setStatus("ERROR")
+  1040→    await this.logConnectionEvent("ERROR", `Connection error: ${error}`)
+  1041→    logger.error("MT5_CONNECTION", `Connection failed: ${error}`)
+  1042→    emitStatusChange(this.status, this.metrics)
+  1043→
+  1044→    // Auto-reconnect
+  1045→    if (!this.isShuttingDown) {
+  1046→      this.scheduleReconnect()
+  1047→    }
+  1048→  }
+  1049→
+  1050→  // ---- DEGRADED State Management ----
+  1051→
+  1052→  /**
+  1053→   * Check if we should enter or exit DEGRADED state.
+  1054→   * DEGRADED triggers when:
+  1055→   *   - Latency exceeds threshold (default 200ms)
+  1056→   *   - Consecutive heartbeat failures >= threshold (default 2)
+  1057→   *
+  1058→   * PROACTIVE_MC_70: When in DEGRADED state, log a risk event suggesting
+  1059→   * margin call awareness if margin usage is approaching 70%.
+  1060→   * PROACTIVE_MC_60: Similar at 60% - more urgent.
+  1061→   */
+  1062→  private async evaluateDegradedState(latencyMs: number, heartbeatOk: boolean): Promise<void> {
+  1063→    const threshold = this.config?.degradedLatencyThresholdMs || 200
+  1064→    const hbThreshold = this.config?.degradedHeartbeatFailureThreshold || 2
+  1065→
+  1066→    const wasDegraded = this.status === "DEGRADED"
+  1067→    const wasConnected = this.status === "CONNECTED"
+  1068→
+  1069→    if (heartbeatOk) {
+  1070→      this.metrics.consecutiveHeartbeatFailures = 0
+  1071→    } else {
+  1072→      this.metrics.consecutiveHeartbeatFailures++
+  1073→    }
+  1074→
+  1075→    const shouldDegrade =
+  1076→      latencyMs > threshold || this.metrics.consecutiveHeartbeatFailures >= hbThreshold
+  1077→
+  1078→    const shouldRecover =
+  1079→      !shouldDegrade &&
+  1080→      latencyMs <= threshold * 0.8 &&
+  1081→      this.metrics.consecutiveHeartbeatFailures === 0
+  1082→
+  1083→    if (shouldDegrade && (wasConnected || wasDegraded) && this.status !== "DEGRADED") {
+  1084→      // Transition to DEGRADED
+  1085→      const reason = latencyMs > threshold
+  1086→        ? `High latency: ${latencyMs}ms > ${threshold}ms threshold`
+  1087→        : `${this.metrics.consecutiveHeartbeatFailures} consecutive heartbeat failures >= ${hbThreshold}`
+  1088→
+  1089→      this.status = "DEGRADED"
+  1090→      await this.setStatus("DEGRADED")
+  1091→      await this.logConnectionEvent("DEGRADED", reason)
+  1092→      logger.warn("MT5_CONNECTION", `Connection DEGRADED: ${reason}`, {
+  1093→        metadata: {
+  1094→          latencyMs,
+  1095→          consecutiveFailures: this.metrics.consecutiveHeartbeatFailures,
+  1096→          threshold,
+  1097→        },
+  1098→      })
+  1099→
+  1100→      // PROACTIVE_MC_70 concept: log risk awareness when in DEGRADED state
+  1101→      await this.logProactiveMarginCall("PROACTIVE_MC_70", 70)
+  1102→
+  1103→      emitStatusChange(this.status, this.metrics)
+  1104→    } else if (shouldRecover && this.status === "DEGRADED") {
+  1105→      // Recover from DEGRADED back to CONNECTED
+  1106→      this.status = "CONNECTED"
+  1107→      await this.setStatus("CONNECTED")
+  1108→      await this.logConnectionEvent("RECOVERED", `Recovered from DEGRADED (latency: ${latencyMs}ms)`)
+  1109→      logger.info("MT5_CONNECTION", `Connection recovered from DEGRADED (latency: ${latencyMs}ms)`, {
+  1110→        metadata: { latencyMs },
+  1111→      })
+  1112→      emitStatusChange(this.status, this.metrics)
+  1113→    } else if (shouldDegrade && this.status === "DEGRADED") {
+  1114→      // Still in DEGRADED state - check for PROACTIVE_MC_60 if failures increasing
+  1115→      if (this.metrics.consecutiveHeartbeatFailures >= hbThreshold + 1) {
+  1116→        await this.logProactiveMarginCall("PROACTIVE_MC_60", 60)
+  1117→      }
+  1118→    }
+  1119→  }
+  1120→
+  1121→  /**
+  1122→   * Log a proactive margin call awareness event.
+  1123→   * These events warn that if the system is already DEGRADED,
+  1124→   * margin-related operations carry additional risk.
+  1125→   */
+  1126→  private async logProactiveMarginCall(eventType: string, marginPct: number): Promise<void> {
+  1127→    try {
+  1128→      await db.riskEvent.create({
+  1129→        data: {
+  1130→          eventType,
+  1131→          severity: marginPct <= 60 ? "HIGH" : "MEDIUM",
+  1132→          message: `Connection DEGRADED - Proactive margin call awareness at ${marginPct}% threshold. Reduce position sizes and avoid new trades until connection recovers.`,
+  1133→          details: JSON.stringify({
+  1134→            latencyMs: this.metrics.latencyMs,
+  1135→            consecutiveFailures: this.metrics.consecutiveHeartbeatFailures,
+  1136→            marginThreshold: marginPct,
+  1137→            recommendation: marginPct <= 60
+  1138→              ? "CRITICAL: Avoid all new trades, consider reducing open positions"
+  1139→              : "WARNING: Reduce new trade sizes, monitor existing positions closely",
+  1140→          }),
+  1141→          actionTaken: "NOTIFICATION_SENT",
+  1142→        },
+  1143→      })
+  1144→    } catch {
+  1145→      // Best effort
+  1146→    }
+  1147→  }
+  1148→
+  1149→  // ---- Trading Phase Monitor ----
+  1150→
+  1151→  private updateTradingPhase(): void {
+  1152→    this.metrics.currentTradingPhase = getTradingPhase()
+  1153→    this.metrics.marketIsOpen = isMarketOpen()
+  1154→  }
+  1155→
+  1156→  private async checkTradingPhase(): Promise<void> {
+  1157→    const prevPhase = this.metrics.currentTradingPhase
+  1158→    const prevOpen = this.metrics.marketIsOpen
+  1159→
+  1160→    this.updateTradingPhase()
+  1161→
+  1162→    const newPhase = this.metrics.currentTradingPhase
+  1163→    const newOpen = this.metrics.marketIsOpen
+  1164→
+  1165→    // Log phase transitions
+  1166→    if (prevPhase !== newPhase) {
+  1167→      logger.info("MT5_CONNECTION", `Trading phase changed: ${prevPhase} -> ${newPhase}`, {
+  1168→        metadata: { previousPhase: prevPhase, newPhase, marketOpen: newOpen },
+  1169→      })
+  1170→    }
+  1171→
+  1172→    // Log MARKET_OPEN event
+  1173→    if (!prevOpen && newOpen) {
+  1174→      await this.logConnectionEvent("MARKET_OPEN", `Market opened (phase: ${newPhase})`)
+  1175→      logger.info("MT5_CONNECTION", `MARKET_OPEN - IDX market is now open (phase: ${newPhase})`)
+  1176→    }
+  1177→
+  1178→    // Log MARKET_CLOSE event
+  1179→    if (prevOpen && !newOpen) {
+  1180→      await this.logConnectionEvent("MARKET_CLOSE", `Market closed (phase: ${newPhase})`)
+  1181→      logger.info("MT5_CONNECTION", `MARKET_CLOSE - IDX market is now closed (phase: ${newPhase})`)
+  1182→    }
+  1183→
+  1184→    // Always persist the trading phase and market open state
+  1185→    try {
+  1186→      const existing = await db.mt5ConnectionState.findFirst()
+  1187→      if (existing) {
+  1188→        await db.mt5ConnectionState.update({
+  1189→          where: { id: existing.id },
+  1190→          data: {
+  1191→            isMarketOpen: newOpen,
+  1192→            tradingPhase: newPhase,
+  1193→          },
+  1194→        })
+  1195→      }
+  1196→    } catch {
+  1197→      // Best effort
+  1198→    }
+  1199→  }
+  1200→
+  1201→  // ---- Reconnection ----
+  1202→
+  1203→  private scheduleReconnect(): void {
+  1204→    if (this.isShuttingDown) return
+  1205→    if (!this.config) return
+  1206→
+  1207→    this.reconnectAttempt++
+  1208→    if (this.reconnectAttempt > this.config.maxReconnectAttempts) {
+  1209→      logger.fatal(
+  1210→        "MT5_CONNECTION",
+  1211→        `Max reconnect attempts (${this.config.maxReconnectAttempts}) reached. Giving up.`
+  1212→      )
+  1213→      this.status = "ERROR"
+  1214→      emitStatusChange(this.status, this.metrics)
+  1215→      return
+  1216→    }
+  1217→
+  1218→    // Exponential backoff
+  1219→    const delay = Math.min(
+  1220→      this.config.baseReconnectDelayMs * Math.pow(2, this.reconnectAttempt - 1),
+  1221→      this.config.maxReconnectDelayMs
+  1222→    )
+  1223→
+  1224→    const prevStatus = this.status
+  1225→    this.status = "RECONNECTING"
+  1226→    emitStatusChange(this.status, this.metrics)
+  1227→
+  1228→    logger.warn(
+  1229→      "MT5_CONNECTION",
+  1230→      `Reconnecting in ${delay}ms (attempt ${this.reconnectAttempt}/${this.config.maxReconnectAttempts})`,
+  1231→      {
+  1232→        metadata: { attempt: this.reconnectAttempt, delayMs: delay, previousStatus: prevStatus },
+  1233→      }
+  1234→    )
+  1235→
+  1236→    this.reconnectTimer = setTimeout(async () => {
+  1237→      await this.logConnectionEvent("RECONNECTING", `Reconnect attempt ${this.reconnectAttempt}`)
+  1238→      try {
+  1239→        const result = await this.mutex.runExclusive(() => this.attemptConnection())
+  1240→        if (result.success) {
+  1241→          await this.onConnected()
+  1242→        } else {
+  1243→          this.metrics.reconnectCount++
+  1244→          await this.onConnectionFailed(result.error || "Reconnection failed")
+  1245→        }
+  1246→      } catch (err) {
+  1247→        this.metrics.reconnectCount++
+  1248→        const msg = err instanceof Error ? err.message : String(err)
+  1249→        await this.onConnectionFailed(msg)
+  1250→      }
+  1251→    }, delay)
+  1252→  }
+  1253→
+  1254→  // ---- Heartbeat ----
+  1255→
+  1256→  private async heartbeat(): Promise<void> {
+  1257→    if (this.status !== "CONNECTED" && this.status !== "DEGRADED") return
+  1258→
+  1259→    try {
+  1260→      const start = Date.now()
+  1261→      await new Promise((r) => setTimeout(r, 5 + Math.random() * 15))
+  1262→      const latency = Date.now() - start
+  1263→      this.metrics.latencyMs = latency
+  1264→      this.metrics.lastHeartbeat = new Date()
+  1265→
+  1266→      await this.logConnectionEvent("HEARTBEAT_OK", `Heartbeat OK (${latency}ms)`)
+  1267→
+  1268→      // Evaluate DEGRADED state
+  1269→      await this.evaluateDegradedState(latency, true)
+  1270→    } catch (err) {
+  1271→      const msg = err instanceof Error ? err.message : String(err)
+  1272→      await this.logConnectionEvent("HEARTBEAT_FAIL", `Heartbeat failed: ${msg}`)
+  1273→      logger.warn("MT5_CONNECTION", `Heartbeat failed: ${msg}`)
+  1274→
+  1275→      // Evaluate DEGRADED state with failure
+  1276→      await this.evaluateDegradedState(this.metrics.latencyMs, false)
+  1277→
+  1278→      // If fully disconnected (not just degraded), go to DISCONNECTED
+  1279→      if (this.metrics.consecutiveHeartbeatFailures > (this.config?.degradedHeartbeatFailureThreshold || 2) + 2) {
+  1280→        this.status = "DISCONNECTED"
+  1281→        await this.setStatus("DISCONNECTED")
+  1282→        emitStatusChange(this.status, this.metrics)
+  1283→        this.scheduleReconnect()
+  1284→      }
+  1285→    }
+  1286→  }
+  1287→
+  1288→  // ---- State Persistence ----
+  1289→
+  1290→  private async setStatus(status: Mt5Status): Promise<void> {
+  1291→    this.status = status
+  1292→    await this.persistState()
+  1293→  }
+  1294→
+  1295→  private async persistState(): Promise<void> {
+  1296→    try {
+  1297→      const existing = await db.mt5ConnectionState.findFirst()
+  1298→      if (existing) {
+  1299→        await db.mt5ConnectionState.update({
+  1300→          where: { id: existing.id },
+  1301→          data: {
+  1302→            status: this.status,
+  1303→            broker: "FINEX Indonesia",
+  1304→            server: this.config?.server,
+  1305→            accountNumber: this.config?.login?.toString(),
+  1306→            accountType: "Real",
+  1307→            latencyMs: this.metrics.latencyMs,
+  1308→            uptimeSeconds: this.metrics.uptimeSeconds,
+  1309→            reconnectCount: this.metrics.reconnectCount,
+  1310→            lastHeartbeat: this.metrics.lastHeartbeat,
+  1311→            lastError: this.metrics.lastError,
+  1312→            lastConnectedAt: this.metrics.connectedAt,
+  1313→            connectedAt: this.metrics.connectedAt,
+  1314→            lastDisconnectedAt: this.status !== "CONNECTED" && this.status !== "DEGRADED" ? new Date() : undefined,
+  1315→            consecutiveHeartbeatFailures: this.metrics.consecutiveHeartbeatFailures,
+  1316→            isMarketOpen: this.metrics.marketIsOpen,
+  1317→            tradingPhase: this.metrics.currentTradingPhase,
+  1318→          },
+  1319→        })
+  1320→      } else {
+  1321→        await db.mt5ConnectionState.create({
+  1322→          data: {
+  1323→            status: this.status,
+  1324→            broker: "FINEX Indonesia",
+  1325→            server: this.config?.server,
+  1326→            accountNumber: this.config?.login?.toString(),
+  1327→            accountType: "Real",
+  1328→            latencyMs: this.metrics.latencyMs,
+  1329→            uptimeSeconds: this.metrics.uptimeSeconds,
+  1330→            reconnectCount: this.metrics.reconnectCount,
+  1331→            lastHeartbeat: this.metrics.lastHeartbeat,
+  1332→            lastError: this.metrics.lastError,
+  1333→            lastConnectedAt: this.metrics.connectedAt,
+  1334→            connectedAt: this.metrics.connectedAt,
+  1335→            consecutiveHeartbeatFailures: this.metrics.consecutiveHeartbeatFailures,
+  1336→            isMarketOpen: this.metrics.marketIsOpen,
+  1337→            tradingPhase: this.metrics.currentTradingPhase,
+  1338→          },
+  1339→        })
+  1340→      }
+  1341→    } catch (err) {
+  1342→      logger.error("MT5_CONNECTION", "Failed to persist connection state", {
+  1343→        details: err instanceof Error ? err.stack : String(err),
+  1344→      })
+  1345→    }
+  1346→  }
+  1347→
+  1348→  private async logConnectionEvent(event: string, message: string): Promise<void> {
+  1349→    try {
+  1350→      await db.mt5ConnectionLog.create({
+  1351→        data: {
+  1352→          event: event as never,
+  1353→          message,
+  1354→          latencyMs: this.metrics.latencyMs,
+  1355→        },
+  1356→      })
+  1357→    } catch {
+  1358→      // Don't let logging failure crash the connection manager
+  1359→    }
+  1360→  }
+  1361→
+  1362→  private clearTimers(): void {
+  1363→    if (this.heartbeatTimer) {
+  1364→      clearInterval(this.heartbeatTimer)
+  1365→      this.heartbeatTimer = null
+  1366→    }
+  1367→    if (this.reconnectTimer) {
+  1368→      clearTimeout(this.reconnectTimer)
+  1369→      this.reconnectTimer = null
+  1370→    }
+  1371→    if (this.uptimeTimer) {
+  1372→      clearInterval(this.uptimeTimer)
+  1373→      this.uptimeTimer = null
+  1374→    }
+  1375→    if (this.tradingPhaseTimer) {
+  1376→      clearInterval(this.tradingPhaseTimer)
+  1377→      this.tradingPhaseTimer = null
+  1378→    }
+  1379→  }
+  1380→}
+  1381→
+  1382→// ---- Singleton instance ----
+  1383→const mt5Connection = new Mt5ConnectionManager()
+  1384→export default mt5Connection
+  1385→

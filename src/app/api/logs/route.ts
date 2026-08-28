@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import logger, { getLogAnalytics } from "@/lib/trading-logger"
 
+/** Deep Audit Fix #4: Cache log stats for 10 seconds to reduce DB load */
+let cachedStats: Awaited<ReturnType<typeof getLogStats>> | null = null
+let statsCacheTime = 0
+const STATS_CACHE_MS = 10_000
+
+/** Deep Audit Fix #4: Cache log analytics for 30 seconds */
+let cachedAnalytics: Awaited<ReturnType<typeof getLogAnalytics>> | null = null
+let analyticsCacheTime = 0
+const ANALYTICS_CACHE_MS = 30_000
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -30,14 +40,23 @@ export async function GET(request: NextRequest) {
       take: Math.min(limit, 200),
     })
 
-    const stats = await getLogStats()
+    // Use cached stats
+    const now = Date.now()
+    if (!cachedStats || now - statsCacheTime > STATS_CACHE_MS) {
+      cachedStats = await getLogStats()
+      statsCacheTime = now
+    }
 
     let analytics = null
     if (includeAnalytics) {
-      analytics = await getLogAnalytics()
+      if (!cachedAnalytics || now - analyticsCacheTime > ANALYTICS_CACHE_MS) {
+        cachedAnalytics = await getLogAnalytics()
+        analyticsCacheTime = now
+      }
+      analytics = cachedAnalytics
     }
 
-    return NextResponse.json({ success: true, data: { logs, stats, analytics } })
+    return NextResponse.json({ success: true, data: { logs, stats: cachedStats, analytics } })
   } catch (error) {
     logger.error("SYSTEM", "Error fetching logs", {
       details: error instanceof Error ? error.stack : undefined,
@@ -60,6 +79,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    // Invalidate cache on new log
+    cachedStats = null
 
     const validLevels = ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL", "FATAL"]
     const logLevel = validLevels.includes(level) ? level : "INFO"

@@ -776,6 +776,9 @@ class Mt5ConnectionManager {
   private previousPhase: TradingPhase | null = null
   private previousMarketOpen: boolean | null = null
 
+  /** Deep Audit Fix #3: Counter to throttle DB writes on heartbeat */
+  private _heartbeatCountSinceLastPersist = 0
+
   /** Async mutex to serialize all MT5 API calls */
   public readonly mutex = new AsyncMutex()
 
@@ -1264,6 +1267,14 @@ class Mt5ConnectionManager {
       this.metrics.lastHeartbeat = new Date()
 
       await this.logConnectionEvent("HEARTBEAT_OK", `Heartbeat OK (${latency}ms)`)
+
+      // Deep Audit Fix #3: Throttle DB persistence on heartbeat
+      // Only persist state every 30s instead of every 5s heartbeat
+      this._heartbeatCountSinceLastPersist++
+      if (this._heartbeatCountSinceLastPersist >= 6) {
+        this._heartbeatCountSinceLastPersist = 0
+        await this.persistState()
+      }
 
       // Evaluate DEGRADED state
       await this.evaluateDegradedState(latency, true)

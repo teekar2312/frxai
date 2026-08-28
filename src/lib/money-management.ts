@@ -17,6 +17,7 @@
 import { db } from "./db"
 import logger from "./trading-logger"
 import { getRiskConfig } from "./risk-engine"
+import { isMarketOpen } from "./mt5-connection"
 
 export type SizingMethod = "FIXED_FRACTIONAL" | "KELLY" | "FIXED_DOLLAR" | "ANTI_MARTINGALE"
 
@@ -718,5 +719,510 @@ function mapDailyPerformanceToData(row: {
     reserveCapital: row.reserveCapital,
     sizingMethodUsed: row.sizingMethodUsed,
     scalingFactor: row.scalingFactor,
+  }
+}
+
+// ============================================================================
+// PHASE 3: ENHANCED MONEY MANAGEMENT
+// ============================================================================
+
+// ---- 1. Maximum Consecutive Loss Protection ----
+
+export interface ConsecutiveLossResult {
+  isHalted: boolean
+  consecutiveLosses: number
+  maxAllowed: number
+  haltReason: string | null
+  cooldownRemainingMinutes: number
+  lastLossTime: Date | null
+}
+
+/**
+ * Check whether trading should be halted due to consecutive losses.
+ *
+ * Queries recent CLOSED trades ordered by closeTime desc, counts consecutive
+ * losses (pnl < 0) from the most recent trade. If the count reaches or exceeds
+ * maxConsecutiveLosses (default 5), trading is halted.
+ *
+ * A cooldown period (default 60 minutes) must elapse before trading resumes.
+ * Once the cooldown elapses, the counter is effectively reset and trading is allowed.
+ */
+export async function checkConsecutiveLossHalt(): Promise<ConsecutiveLossResult> {
+  // Defaults (these fields exist in the DB RiskConfig model but are not yet
+  // exposed through the TypeScript RiskConfigData interface).
+  const maxAllowed = 5
+  const cooldownMinutes = 60
+
+  const closedTrades = await db.trade.findMany({
+    where: { status: "CLOSED", closeTime: { not: null } },
+    orderBy: { closeTime: "desc" },
+    select: { pnl: true, closeTime: true },
+    take: maxAllowed + 1,
+  })
+
+  // Count consecutive losses from the most recent trade
+  let consecutiveLosses = 0
+  let lastLossTime: Date | null = null
+
+  for (const trade of closedTrades) {
+    if (trade.pnl < 0) {
+      consecutiveLosses++
+      if (lastLossTime === null && trade.closeTime) {
+        lastLossTime = trade.closeTime
+      }
+    } else {
+      break // Stop counting at first non-loss
+    }
+  }
+
+  const result: ConsecutiveLossResult = {
+    isHalted: false,
+    consecutiveLosses,
+    maxAllowed,
+    haltReason: null,
+    cooldownRemainingMinutes: 0,
+    lastLossTime,
+  }
+
+  if (consecutiveLosses >= maxAllowed && lastLossTime) {
+    const elapsedMs = Date.now() - lastLossTime.getTime()
+    const cooldownMs = cooldownMinutes * 60 * 1000
+    const remainingMs = cooldownMs - elapsedMs
+
+    if (remainingMs > 0) {
+      const remainingMinutes = Math.ceil(remainingMs / (60 * 1000))
+      result.isHalted = true
+      result.cooldownRemainingMinutes = remainingMinutes
+      result.haltReason = `Consecutive loss halt: ${consecutiveLosses} consecutive losses (max ${maxAllowed}). Cooldown: ${remainingMinutes} minutes remaining.`
+
+      logger.warn(
+        "MONEY_MANAGEMENT",
+        result.haltReason,
+        {
+          metadata: {
+            consecutiveLosses,
+            maxAllowed,
+            cooldownMinutes,
+            cooldownRemainingMinutes: remainingMinutes,
+            lastLossTime: lastLossTime.toISOString(),
+          },
+        },
+      )
+    }
+    // If cooldown has elapsed, isHalted stays false — counter is effectively reset
+  }
+
+  return result
+}
+
+// ---- 2. Equity Curve Trading ----
+
+export type EquityCurveStatus = "NORMAL" | "BELOW_MA" | "RECOVERING"
+
+export interface EquityCurveResult {
+  status: EquityCurveStatus
+  currentEquity: number
+  equityCurveMa: number
+  maPeriod: number
+}
+
+/**
+ * Check equity curve status against its simple moving average.
+ *
+ * Queries DailyPerformance for the last N days (maPeriod, default 20),
+ * calculates the SMA of endBalance, and compares the current equity.
+ *
+ * - BELOW_MA: current equity is below the SMA → trading should be disabled/reduced
+ * - RECOVERING: current equity was below MA recently but now above
+ * - NORMAL: current equity is above the SMA
+ */
+export async function checkEquityCurveStatus(): Promise<EquityCurveResult> {
+  const maPeriod = 20
+
+  const recentPerf = await db.dailyPerformance.findMany({
+    orderBy: { date: "desc" },
+    take: maPeriod + 1, // +1 to detect RECOVERING (was below, now above)
+  })
+
+  // Need at least a few days of data to compute a meaningful MA
+  if (recentPerf.length < 3) {
+    const currentEquity = recentPerf.length > 0 ? recentPerf[0].endBalance : 0
+    return {
+      status: "NORMAL",
+      currentEquity,
+      equityCurveMa: currentEquity,
+      maPeriod,
+    }
+  }
+
+  // Calculate SMA of endBalance over the available period (up to maPeriod)
+  const effectivePeriod = Math.min(maPeriod, recentPerf.length)
+  const balancesForMa = recentPerf.slice(0, effectivePeriod).map((p) => p.endBalance)
+  const equityCurveMa = balancesForMa.reduce((s, v) => s + v, 0) / balancesForMa.length
+
+  const currentEquity = recentPerf[0].endBalance
+
+  // Determine if the previous day was below MA (for RECOVERING detection)
+  const prevEquity = recentPerf.length > 1 ? recentPerf[1].endBalance : currentEquity
+  const prevBelowMa = prevEquity < equityCurveMa
+  const currentBelowMa = currentEquity < equityCurveMa
+
+  let status: EquityCurveStatus
+  if (currentBelowMa) {
+    status = "BELOW_MA"
+    logger.warn(
+      "MONEY_MANAGEMENT",
+      `[Equity Curve] BELOW moving average. Current: ${currentEquity.toFixed(2)}, MA(${effectivePeriod}): ${equityCurveMa.toFixed(2)}. Consider reducing or halting trading.`,
+      {
+        metadata: {
+          currentEquity: Math.round(currentEquity * 100) / 100,
+          equityCurveMa: Math.round(equityCurveMa * 100) / 100,
+          maPeriod: effectivePeriod,
+          deviationPct: equityCurveMa > 0
+            ? Math.round(((currentEquity - equityCurveMa) / equityCurveMa) * 10000) / 100
+            : 0,
+        },
+      },
+    )
+  } else if (prevBelowMa && !currentBelowMa) {
+    status = "RECOVERING"
+    logger.info(
+      "MONEY_MANAGEMENT",
+      `[Equity Curve] RECOVERING — above MA after being below. Current: ${currentEquity.toFixed(2)}, MA(${effectivePeriod}): ${equityCurveMa.toFixed(2)}.`,
+      {
+        metadata: {
+          currentEquity: Math.round(currentEquity * 100) / 100,
+          equityCurveMa: Math.round(equityCurveMa * 100) / 100,
+          maPeriod: effectivePeriod,
+        },
+      },
+    )
+  } else {
+    status = "NORMAL"
+  }
+
+  return {
+    status,
+    currentEquity: Math.round(currentEquity * 100) / 100,
+    equityCurveMa: Math.round(equityCurveMa * 100) / 100,
+    maPeriod: effectivePeriod,
+  }
+}
+
+// ---- 3. Session-Based Risk Limits ----
+
+export interface SessionRiskResult {
+  isLimitReached: boolean
+  sessionPnl: number
+  sessionLimit: number
+  sessionTrades: number
+  remainingRiskBudget: number
+}
+
+/**
+ * Check whether the intraday session risk limit has been reached.
+ *
+ * The trading session window is 09:00–15:00 WIB (UTC+7).
+ * Uses sessionRiskLimitPct from RiskConfig (default 1.0% of equity).
+ * Calculates the session's realized P&L by summing PnL of all trades
+ * closed within the current session window today.
+ */
+export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
+  const sessionRiskLimitPct = 1.0 // default 1.0% of equity
+
+  const now = new Date()
+  const wibOffsetMs = 7 * 60 * 60 * 1000
+  const nowWib = new Date(now.getTime() + wibOffsetMs)
+  const wibHours = nowWib.getUTCHours()
+  const wibMinutes = nowWib.getUTCMinutes()
+  const currentWibMinutes = wibHours * 60 + wibMinutes
+
+  // Session window: 09:00 (540) - 15:00 (900) WIB
+  const SESSION_START = 540
+  const SESSION_END = 900
+
+  // If outside session, return clean state
+  if (currentWibMinutes < SESSION_START || currentWibMinutes > SESSION_END) {
+    return {
+      isLimitReached: false,
+      sessionPnl: 0,
+      sessionLimit: 0,
+      sessionTrades: 0,
+      remainingRiskBudget: 0,
+    }
+  }
+
+  // Get today's start balance from DailyPerformance
+  const todayStr = now.toISOString().split("T")[0]
+  const todayPerf = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
+  const equity = todayPerf ? todayPerf.startBalance : 10000
+  const sessionLimit = (sessionRiskLimitPct / 100) * equity
+
+  // Calculate session start/end in UTC for DB query
+  // WIB 09:00 today = UTC 02:00 today
+  // WIB 15:00 today = UTC 08:00 today
+  const sessionStartUtc = new Date(now)
+  sessionStartUtc.setUTCHours(2, 0, 0, 0) // 09:00 WIB
+  const sessionEndUtc = new Date(now)
+  sessionEndUtc.setUTCHours(8, 0, 0, 0) // 15:00 WIB
+
+  // Query trades closed within today's session
+  const sessionClosedTrades = await db.trade.findMany({
+    where: {
+      status: "CLOSED",
+      closeTime: {
+        gte: sessionStartUtc,
+        lte: sessionEndUtc,
+      },
+    },
+    select: { pnl: true },
+  })
+
+  // Session P&L only counts losses (negative PnL) against the limit
+  const sessionPnl = sessionClosedTrades.reduce((sum, t) => sum + t.pnl, 0)
+  const sessionLosses = sessionClosedTrades.filter((t) => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0)
+  const sessionTrades = sessionClosedTrades.length
+
+  // Remaining risk budget is based on how much loss capacity is left
+  const remainingRiskBudget = Math.max(0, Math.round((sessionLimit + sessionLosses) * 100) / 100)
+  const isLimitReached = sessionLosses <= -sessionLimit
+
+  if (isLimitReached) {
+    logger.warn(
+      "MONEY_MANAGEMENT",
+      `Session risk limit reached. Session loss: ${sessionLosses.toFixed(2)}, Limit: ${sessionLimit.toFixed(2)}, Trades: ${sessionTrades}`,
+      {
+        metadata: {
+          sessionPnl: Math.round(sessionPnl * 100) / 100,
+          sessionLoss: Math.round(sessionLosses * 100) / 100,
+          sessionLimit: Math.round(sessionLimit * 100) / 100,
+          sessionTrades,
+          remainingRiskBudget: 0,
+        },
+      },
+    )
+  }
+
+  return {
+    isLimitReached,
+    sessionPnl: Math.round(sessionPnl * 100) / 100,
+    sessionLimit: Math.round(sessionLimit * 100) / 100,
+    sessionTrades,
+    remainingRiskBudget,
+  }
+}
+
+// ---- 4. Partial Profit Taking Model ----
+
+export interface PartialProfitLevel {
+  level: number        // 1, 2, 3
+  price: number        // Target price for this level
+  closePercent: number // % of position to close at this level (0-100)
+  reason: string       // Human-readable explanation
+}
+
+export interface PartialProfitResult {
+  levels: PartialProfitLevel[]
+}
+
+/**
+ * Calculate systematic partial profit-taking levels for a trade.
+ *
+ * Default: 3 levels at R:R ratios of 1:1, 1:2, 1:3 with 30%, 30%, 40% closes.
+ * The levels are distributed evenly along the path from entry to TP.
+ *
+ * For BUY:  price = entry + (tp - entry) * level / 3
+ * For SELL: price = entry - (entry - tp) * level / 3
+ *
+ * @param entryPrice  - Trade entry price
+ * @param direction   - BUY or SELL
+ * @param tp          - Take-profit price
+ * @param riskRewardRatio - Optional override; if provided, adjusts level spacing
+ */
+export function calculatePartialProfitLevels(params: {
+  entryPrice: number
+  direction: "BUY" | "SELL"
+  tp: number
+  riskRewardRatio?: number
+}): PartialProfitResult {
+  const { entryPrice, direction, tp, riskRewardRatio } = params
+
+  const isBuy = direction === "BUY"
+  const totalRange = isBuy ? tp - entryPrice : entryPrice - tp
+
+  // Validate inputs
+  if (totalRange <= 0) {
+    return { levels: [] }
+  }
+
+  // Default: 3 levels at 1:1, 1:2, 1:3 R:R with 30%/30%/40% allocation
+  const levels: PartialProfitLevel[] = [
+    {
+      level: 1,
+      price: isBuy
+        ? Math.round((entryPrice + totalRange * (1 / 3)) * 100) / 100
+        : Math.round((entryPrice - totalRange * (1 / 3)) * 100) / 100,
+      closePercent: 30,
+      reason: "R:R 1:1 — Lock in first profit, reduce risk exposure",
+    },
+    {
+      level: 2,
+      price: isBuy
+        ? Math.round((entryPrice + totalRange * (2 / 3)) * 100) / 100
+        : Math.round((entryPrice - totalRange * (2 / 3)) * 100) / 100,
+      closePercent: 30,
+      reason: "R:R 1:2 — Second profit target, trail remaining stop",
+    },
+    {
+      level: 3,
+      price: isBuy
+        ? Math.round(tp * 100) / 100
+        : Math.round(tp * 100) / 100,
+      closePercent: 40,
+      reason: "R:R 1:3 — Final profit target, close remainder",
+    },
+  ]
+
+  // If a custom risk-reward ratio is provided, adjust the level distances
+  // while keeping the same close percentages
+  if (riskRewardRatio && riskRewardRatio > 0) {
+    const scaledRange = totalRange * (riskRewardRatio / 3)
+    levels[0].price = isBuy
+      ? Math.round((entryPrice + scaledRange) * 100) / 100
+      : Math.round((entryPrice - scaledRange) * 100) / 100
+    levels[0].reason = `R:R ${riskRewardRatio.toFixed(1)}:1 — First scaled profit target (30%)`
+
+    levels[1].price = isBuy
+      ? Math.round((entryPrice + scaledRange * 2) * 100) / 100
+      : Math.round((entryPrice - scaledRange * 2) * 100) / 100
+    levels[1].reason = `R:R ${(riskRewardRatio * 2).toFixed(1)}:1 — Second scaled profit target (30%)`
+
+    levels[2].price = isBuy
+      ? Math.round((entryPrice + scaledRange * 3) * 100) / 100
+      : Math.round((entryPrice - scaledRange * 3) * 100) / 100
+    levels[2].reason = `R:R ${(riskRewardRatio * 3).toFixed(1)}:1 — Final scaled profit target (40%)`
+  }
+
+  logger.debug(
+    "MONEY_MANAGEMENT",
+    `Calculated ${levels.length} partial profit levels for ${direction} @ ${entryPrice} → TP ${tp}`,
+    {
+      metadata: { direction, entryPrice, tp, levels: levels.length, riskRewardRatio },
+    },
+  )
+
+  return { levels }
+}
+
+// ---- 5. Enhanced Pre-Trade Halt Status ----
+
+export interface PreTradeHaltStatus {
+  canTrade: boolean
+  haltReasons: string[]
+  consecutiveLossHalted: boolean
+  equityCurveHalted: boolean
+  sessionLimitReached: boolean
+  marketClosed: boolean
+}
+
+/**
+ * Combine all pre-trade halt checks into a single call.
+ *
+ * Checks:
+ *  1. Consecutive loss halt
+ *  2. Equity curve status (BELOW_MA → halted)
+ *  3. Session risk limit
+ *  4. Market hours (uses isMarketOpen from mt5-connection)
+ *
+ * If ANY halt condition is true, canTrade is set to false.
+ */
+export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
+  const haltReasons: string[] = []
+  let consecutiveLossHalted = false
+  let equityCurveHalted = false
+  let sessionLimitReached = false
+  let marketClosed = false
+
+  // 1. Consecutive loss check
+  try {
+    const clResult = await checkConsecutiveLossHalt()
+    if (clResult.isHalted) {
+      consecutiveLossHalted = true
+      haltReasons.push(clResult.haltReason || "Consecutive loss halt active")
+    }
+  } catch (err) {
+    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking consecutive loss halt", {
+      details: err instanceof Error ? err.stack : undefined,
+    })
+  }
+
+  // 2. Equity curve check
+  try {
+    const ecResult = await checkEquityCurveStatus()
+    if (ecResult.status === "BELOW_MA") {
+      equityCurveHalted = true
+      haltReasons.push(
+        `Equity curve below MA: current ${ecResult.currentEquity} < MA(${ecResult.maPeriod}) ${ecResult.equityCurveMa}`,
+      )
+    }
+  } catch (err) {
+    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking equity curve status", {
+      details: err instanceof Error ? err.stack : undefined,
+    })
+  }
+
+  // 3. Session risk limit check
+  try {
+    const srResult = await checkSessionRiskLimit()
+    if (srResult.isLimitReached) {
+      sessionLimitReached = true
+      haltReasons.push(
+        `Session risk limit reached: session P&L ${srResult.sessionPnl}, limit ${srResult.sessionLimit}`,
+      )
+    }
+  } catch (err) {
+    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking session risk limit", {
+      details: err instanceof Error ? err.stack : undefined,
+    })
+  }
+
+  // 4. Market hours check
+  try {
+    marketClosed = !isMarketOpen()
+    if (marketClosed) {
+      haltReasons.push("Market is currently closed (outside 09:00-15:00 WIB trading hours)")
+    }
+  } catch (err) {
+    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking market hours", {
+      details: err instanceof Error ? err.stack : undefined,
+    })
+  }
+
+  const canTrade = haltReasons.length === 0
+
+  if (!canTrade) {
+    logger.warn(
+      "MONEY_MANAGEMENT",
+      `[Pre-Trade Halt] Trading HALTED: ${haltReasons.length} condition(s) active`,
+      {
+        metadata: {
+          canTrade: false,
+          haltReasons,
+          consecutiveLossHalted,
+          equityCurveHalted,
+          sessionLimitReached,
+          marketClosed,
+        },
+      },
+    )
+  }
+
+  return {
+    canTrade,
+    haltReasons,
+    consecutiveLossHalted,
+    equityCurveHalted,
+    sessionLimitReached,
+    marketClosed,
   }
 }

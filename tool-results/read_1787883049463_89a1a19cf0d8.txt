@@ -1,0 +1,1178 @@
+     1→/**
+     2→ * Risk Management Engine - FINEX Indonesia
+     3→ * ===========================================
+     4→ * Pre-trade validation, margin monitoring, daily loss limits,
+     5→ * margin call/stop out detection, correlation risk, risk scoring,
+     6→ * proactive margin monitoring, portfolio risk cap, leverage cap,
+     7→ * position concentration limits, slippage modeling, reserve capital,
+     8→ * and dynamic risk scaling.
+     9→ *
+    10→ * FINEX Broker Specs:
+    11→ *  - Leverage: 1:25
+    12→ *  - Proactive Margin Call 70%: Warning zone
+    13→ *  - Proactive Margin Call 60%: Strong warning, reduce sizes 50%
+    14→ *  - Margin Call Level: 50%
+    15→ *  - Stop Out Level: 20%
+    16→ *  - Max Order: 50 lots per trade
+    17→ *  - Max Open Positions: 200
+    18→ */
+    19→
+    20→import { db } from "./db"
+    21→import logger from "./trading-logger"
+    22→
+    23→// ---- Types ----
+    24→
+    25→export type ProactiveMarginZone =
+    26→  | "SAFE"
+    27→  | "PROACTIVE_70"
+    28→  | "PROACTIVE_60"
+    29→  | "MARGIN_CALL"
+    30→  | "STOP_OUT"
+    31→
+    32→export interface SectorExposureEntry {
+    33→  sector: string
+    34→  exposurePct: number
+    35→  positionCount: number
+    36→  marginUsed: number
+    37→}
+    38→
+    39→export interface RiskConfigData {
+    40→  maxRiskPerTrade: number          // % of equity
+    41→  maxDailyLoss: number             // % of equity
+    42→  maxWeeklyLoss: number            // % of equity
+    43→  maxMonthlyLoss: number           // % of equity
+    44→  maxMarginUsage: number           // % of equity
+    45→  maxDrawdown: number              // % of peak equity
+    46→  maxOpenPositions: number
+    47→  maxLotPerTrade: number
+    48→  maxLotPerSymbol: number
+    49→  marginCallLevel: number          // %
+    50→  stopOutLevel: number             // %
+    51→  maxCorrelatedExposure: number    // %
+    52→  cooldownAfterLossMinutes: number
+    53→  // --- Deep audit fields ---
+    54→  proactiveMcLevel70: boolean      // Warn at 70% margin level
+    55→  proactiveMcLevel60: boolean      // Warn at 60% margin level
+    56→  maxPortfolioRiskPct: number      // Max total risk across all positions (% of equity)
+    57→  maxLeveragePerTrade: number      // Max effective leverage per single trade
+    58→  maxSingleStockPct: number        // Max % of equity in single stock
+    59→  maxSectorPct: number             // Max % of equity in single sector
+    60→  slippageTolerancePips: number    // Max acceptable slippage in pips
+    61→  reserveCapitalPct: number        // % of equity to keep as cash reserve
+    62→}
+    63→
+    64→export interface PreTradeCheck {
+    65→  approved: boolean
+    66→  reason?: string
+    67→  riskAmount: number               // Dollar risk for this trade
+    68→  riskPercent: number              // % of equity
+    69→  suggestedLotSize: number         // Lot size within risk limits
+    70→  warnings: string[]
+    71→  positionSizeReduction?: number   // 0-1, fraction to reduce size by (e.g. 0.5 for 50% reduction at PROACTIVE_60)
+    72→}
+    73→
+    74→export interface RiskSnapshot {
+    75→  equity: number
+    76→  balance: number
+    77→  freeMargin: number
+    78→  marginUsed: number
+    79→  marginLevelPercent: number
+    80→  dailyPnl: number
+    81→  dailyPnlPercent: number
+    82→  weeklyPnl: number
+    83→  weeklyPnlPercent: number
+    84→  monthlyPnl: number
+    85→  monthlyPnlPercent: number
+    86→  currentDrawdown: number
+    87→  maxDrawdown: number
+    88→  maxAllowedDrawdown: number
+    89→  riskScore: number                 // 0-10
+    90→  riskLevel: "LOW" | "MODERATE" | "ELEVATED" | "HIGH" | "CRITICAL"
+    91→  openPositions: number
+    92→  maxPositionsAllowed: number
+    93→  marginUsagePercent: number
+    94→  maxMarginAllowed: number
+    95→  dailyLossRemaining: number
+    96→  dailyLossLimit: number
+    97→  isDailyLimitReached: boolean
+    98→  isMarginCallWarning: boolean
+    99→  isStopOutWarning: boolean
+   100→  isTradingAllowed: boolean
+   101→  tradingBlockReason?: string
+   102→  recentRiskEvents: RiskEventSummary[]
+   103→  recommendations: string[]
+   104→  positions: PositionRiskBreakdown[]
+   105→  // --- Deep audit fields ---
+   106→  proactiveMarginZone: ProactiveMarginZone
+   107→  sectorExposure: SectorExposureEntry[]
+   108→  portfolioTotalRiskPct: number    // Total risk across all positions as % of equity
+   109→  leverageUsed: number             // Current effective leverage
+   110→  reserveCapitalPct: number        // Current reserve capital %
+   111→  scalingFactor: number            // Dynamic risk scaling factor
+   112→}
+   113→
+   114→interface RiskEventSummary {
+   115→  eventType: string
+   116→  severity: string
+   117→  message: string
+   118→  createdAt: string
+   119→  resolved: boolean
+   120→}
+   121→
+   122→interface PositionRiskBreakdown {
+   123→  tradeId: string
+   124→  symbol: string
+   125→  direction: string
+   126→  lotSize: number
+   127→  entryPrice: number
+   128→  currentPrice: number
+   129→  sl: number | null
+   130→  tp: number | null
+   131→  margin: number
+   132→  pnl: number
+   133→  pnlPercent: number
+   134→  riskAmount: number
+   135→  riskPercent: number
+   136→  strategy: string | null
+   137→  trailingStop: boolean
+   138→}
+   139→
+   140→// ---- Sector mapping for correlation risk ----
+   141→// Extended with additional IDX stocks
+   142→export const SYMBOL_SECTORS: Record<string, string> = {
+   143→  // Banking
+   144→  BBCA: "Banking", BBRI: "Banking", BMRI: "Banking", BRIS: "Banking", BBNI: "Banking",
+   145→  ARTO: "Banking", NISP: "Banking", BTPS: "Banking", MEGA: "Banking",
+   146→  // Telecommunication
+   147→  TLKM: "Telecommunication", EXCL: "Telecommunication", TBIG: "Telecommunication",
+   148→  ISAT: "Telecommunication", 
+   149→  // Conglomerate
+   150→  ASII: "Conglomerate",
+   151→  // Consumer Goods
+   152→  UNVR: "Consumer Goods", ICBP: "Consumer Goods",
+   153→  ACST: "Consumer Goods", INDF: "Consumer Goods", MYOR: "Consumer Goods",
+   154→  // Technology
+   155→  GOTO: "Technology", BUKA: "Technology",
+   156→  // Mining
+   157→  ANTM: "Mining", TINS: "Mining", ADRO: "Mining",
+   158→  PTBA: "Mining", MDKA: "Mining", TKIM: "Mining",
+   159→  // Energy
+   160→  PGAS: "Energy", MEDC: "Energy", AKRA: "Energy",
+   161→  // Infrastructure
+   162→  WSKT: "Infrastructure", JSMR: "Infrastructure",
+   163→  TOWR: "Infrastructure", SMRA: "Infrastructure",
+   164→  // Industrial
+   165→  INKP: "Industrial", SMGR: "Industrial",
+   166→  ASRI: "Industrial", CTRA: "Industrial",
+   167→  // Media
+   168→  EMTK: "Media", MNCN: "Media", 
+   169→  // Property
+   170→  BSDE: "Property", CTRA: "Property",
+   171→}
+   172→
+   173→// ---- Default Config ----
+   174→
+   175→const DEFAULT_CONFIG: RiskConfigData = {
+   176→  maxRiskPerTrade: 0.5,
+   177→  maxDailyLoss: 2.0,
+   178→  maxWeeklyLoss: 5.0,
+   179→  maxMonthlyLoss: 10.0,
+   180→  maxMarginUsage: 50.0,
+   181→  maxDrawdown: 10.0,
+   182→  maxOpenPositions: 200,
+   183→  maxLotPerTrade: 50.0,
+   184→  maxLotPerSymbol: 100.0,
+   185→  marginCallLevel: 50.0,
+   186→  stopOutLevel: 20.0,
+   187→  maxCorrelatedExposure: 15.0,
+   188→  cooldownAfterLossMinutes: 15,
+   189→  // Deep audit defaults
+   190→  proactiveMcLevel70: true,
+   191→  proactiveMcLevel60: true,
+   192→  maxPortfolioRiskPct: 5.0,
+   193→  maxLeveragePerTrade: 10.0,
+   194→  maxSingleStockPct: 5.0,
+   195→  maxSectorPct: 15.0,
+   196→  slippageTolerancePips: 3.0,
+   197→  reserveCapitalPct: 20.0,
+   198→}
+   199→
+   200→// ---- Core Functions ----
+   201→
+   202→/**
+   203→ * Load risk config from DB, falling back to defaults.
+   204→ */
+   205→export async function getRiskConfig(): Promise<RiskConfigData> {
+   206→  try {
+   207→    const cfg = await db.riskConfig.findUnique({ where: { name: "default" } })
+   208→    if (cfg) {
+   209→      return {
+   210→        maxRiskPerTrade: cfg.maxRiskPerTrade,
+   211→        maxDailyLoss: cfg.maxDailyLoss,
+   212→        maxWeeklyLoss: cfg.maxWeeklyLoss,
+   213→        maxMonthlyLoss: cfg.maxMonthlyLoss,
+   214→        maxMarginUsage: cfg.maxMarginUsage,
+   215→        maxDrawdown: cfg.maxDrawdown,
+   216→        maxOpenPositions: cfg.maxOpenPositions,
+   217→        maxLotPerTrade: cfg.maxLotPerTrade,
+   218→        maxLotPerSymbol: cfg.maxLotPerSymbol,
+   219→        marginCallLevel: cfg.marginCallLevel,
+   220→        stopOutLevel: cfg.stopOutLevel,
+   221→        maxCorrelatedExposure: cfg.maxCorrelatedExposure,
+   222→        cooldownAfterLossMinutes: cfg.cooldownAfterLossMinutes,
+   223→        // Deep audit fields
+   224→        proactiveMcLevel70: cfg.proactiveMcLevel70,
+   225→        proactiveMcLevel60: cfg.proactiveMcLevel60,
+   226→        maxPortfolioRiskPct: cfg.maxPortfolioRiskPct,
+   227→        maxLeveragePerTrade: cfg.maxLeveragePerTrade,
+   228→        maxSingleStockPct: cfg.maxSingleStockPct,
+   229→        maxSectorPct: cfg.maxSectorPct,
+   230→        slippageTolerancePips: cfg.slippageTolerancePips,
+   231→        reserveCapitalPct: cfg.reserveCapitalPct,
+   232→      }
+   233→    }
+   234→  } catch (err) {
+   235→    logger.error("RISK_MANAGEMENT", "Failed to load risk config from DB, using defaults", {
+   236→      details: err instanceof Error ? err.stack : undefined,
+   237→    })
+   238→  }
+   239→  return { ...DEFAULT_CONFIG }
+   240→}
+   241→
+   242→/**
+   243→ * Determine the proactive margin zone based on margin level percentage.
+   244→ * Zone 1: PROACTIVE at 70% - warning, log event, continue trading
+   245→ * Zone 2: PROACTIVE at 60% - strong warning, reduce new position sizes by 50%, log event
+   246→ * Zone 3: MARGIN CALL at 50% - critical, block new trades
+   247→ * Zone 4: STOP OUT at 20% - fatal, emergency close all positions
+   248→ */
+   249→export function determineProactiveMarginZone(
+   250→  marginLevelPercent: number,
+   251→  config: RiskConfigData,
+   252→): ProactiveMarginZone {
+   253→  // When no margin is used, we're in SAFE zone
+   254→  if (marginLevelPercent === 0) {
+   255→    return "SAFE"
+   256→  }
+   257→  if (marginLevelPercent <= config.stopOutLevel) {
+   258→    return "STOP_OUT"
+   259→  }
+   260→  if (marginLevelPercent <= config.marginCallLevel) {
+   261→    return "MARGIN_CALL"
+   262→  }
+   263→  if (config.proactiveMcLevel60 && marginLevelPercent <= 60) {
+   264→    return "PROACTIVE_60"
+   265→  }
+   266→  if (config.proactiveMcLevel70 && marginLevelPercent <= 70) {
+   267→    return "PROACTIVE_70"
+   268→  }
+   269→  return "SAFE"
+   270→}
+   271→
+   272→/**
+   273→ * Process proactive margin monitoring: log events for zone transitions.
+   274→ * Returns the zone and any actions taken.
+   275→ */
+   276→export async function processProactiveMarginMonitoring(
+   277→  marginLevelPercent: number,
+   278→  config: RiskConfigData,
+   279→): Promise<{ zone: ProactiveMarginZone; actionTaken: string }> {
+   280→  const zone = determineProactiveMarginZone(marginLevelPercent, config)
+   281→  let actionTaken = "NONE"
+   282→
+   283→  // Check if we recently logged the same zone to avoid spam
+   284→  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000)
+   285→
+   286→  if (zone === "PROACTIVE_70") {
+   287→    const recent = await db.riskEvent.findFirst({
+   288→      where: {
+   289→        eventType: "PROACTIVE_MC_70",
+   290→        createdAt: { gte: fiveMinutesAgo },
+   291→      },
+   292→    })
+   293→    if (!recent) {
+   294→      await logRiskEvent({
+   295→        eventType: "PROACTIVE_MC_70",
+   296→        severity: "MEDIUM",
+   297→        message: `Proactive margin warning: margin level at ${marginLevelPercent.toFixed(1)}% (zone 70%)`,
+   298→        details: `Margin level has dropped below 70% threshold. Current level: ${marginLevelPercent.toFixed(1)}%. Trading continues but monitor closely.`,
+   299→        actionTaken: "NOTIFICATION_SENT",
+   300→      })
+   301→      logger.warn("RISK_MANAGEMENT", `Proactive MC 70% triggered: margin level at ${marginLevelPercent.toFixed(1)}%`)
+   302→    }
+   303→    actionTaken = "NOTIFICATION_SENT"
+   304→  } else if (zone === "PROACTIVE_60") {
+   305→    const recent = await db.riskEvent.findFirst({
+   306→      where: {
+   307→        eventType: "PROACTIVE_MC_60",
+   308→        createdAt: { gte: fiveMinutesAgo },
+   309→      },
+   310→    })
+   311→    if (!recent) {
+   312→      await logRiskEvent({
+   313→        eventType: "PROACTIVE_MC_60",
+   314→        severity: "HIGH",
+   315→        message: `Proactive margin strong warning: margin level at ${marginLevelPercent.toFixed(1)}% (zone 60%)`,
+   316→        details: `Margin level has dropped below 60% threshold. Current level: ${marginLevelPercent.toFixed(1)}%. New position sizes will be reduced by 50%.`,
+   317→        actionTaken: "REDUCED_SIZE",
+   318→      })
+   319→      logger.warn("RISK_MANAGEMENT", `Proactive MC 60% triggered: margin level at ${marginLevelPercent.toFixed(1)}%, sizes reduced 50%`)
+   320→    }
+   321→    actionTaken = "REDUCED_SIZE"
+   322→  } else if (zone === "MARGIN_CALL") {
+   323→    const recent = await db.riskEvent.findFirst({
+   324→      where: {
+   325→        eventType: "MARGIN_CALL_WARNING",
+   326→        createdAt: { gte: fiveMinutesAgo },
+   327→      },
+   328→    })
+   329→    if (!recent) {
+   330→      await logRiskEvent({
+   331→        eventType: "MARGIN_CALL_WARNING",
+   332→        severity: "CRITICAL",
+   333→        message: `Margin call level reached: margin level at ${marginLevelPercent.toFixed(1)}% (threshold: ${config.marginCallLevel}%)`,
+   334→        details: `Margin level has reached margin call threshold. All new trades blocked. Monitor for stop out.`,
+   335→        actionTaken: "TRADE_BLOCKED",
+   336→      })
+   337→      logger.critical("RISK_MANAGEMENT", `Margin call at ${marginLevelPercent.toFixed(1)}%: new trades blocked`)
+   338→    }
+   339→    actionTaken = "TRADE_BLOCKED"
+   340→  } else if (zone === "STOP_OUT") {
+   341→    const recent = await db.riskEvent.findFirst({
+   342→      where: {
+   343→        eventType: "STOP_OUT_WARNING",
+   344→        createdAt: { gte: fiveMinutesAgo },
+   345→      },
+   346→    })
+   347→    if (!recent) {
+   348→      await logRiskEvent({
+   349→        eventType: "STOP_OUT_WARNING",
+   350→        severity: "CRITICAL",
+   351→        message: `STOP OUT level reached: margin level at ${marginLevelPercent.toFixed(1)}% (threshold: ${config.stopOutLevel}%)`,
+   352→        details: `Margin level has reached stop out threshold. Emergency: all positions should be closed immediately.`,
+   353→        actionTaken: "ALL_POSITIONS_CLOSED",
+   354→      })
+   355→      logger.critical("RISK_MANAGEMENT", `STOP OUT at ${marginLevelPercent.toFixed(1)}%: emergency close all positions`)
+   356→    }
+   357→    actionTaken = "ALL_POSITIONS_CLOSED"
+   358→  }
+   359→
+   360→  return { zone, actionTaken }
+   361→}
+   362→
+   363→/**
+   364→ * Calculate dynamic risk scaling factor based on recent performance.
+   365→ * - If daily loss > 1% of limit, scale down by 50%
+   366→ * - If drawdown > 80% of max, scale down by 75%
+   367→ * - If winning streak > 3, can scale up by 25% (max 1.5x)
+   368→ */
+   369→export function calculateScalingFactor(params: {
+   370→  dailyPnl: number
+   371→  dailyLossLimit: number
+   372→  currentDrawdown: number
+   373→  maxDrawdown: number
+   374→  equity: number
+   375→}): number {
+   376→  let factor = 1.0
+   377→
+   378→  // Scale down if daily loss is more than 1% of the limit
+   379→  if (params.dailyPnl < 0 && params.dailyLossLimit > 0) {
+   380→    const dailyLossPct = Math.abs(params.dailyPnl) / params.dailyLossLimit
+   381→    if (dailyLossPct > 0.5) {
+   382→      factor = Math.min(factor, 0.5) // 50% reduction
+   383→    }
+   384→  }
+   385→
+   386→  // Scale down if drawdown > 80% of max
+   387→  if (params.maxDrawdown > 0 && params.currentDrawdown > params.maxDrawdown * 0.8) {
+   388→    factor = Math.min(factor, 0.25) // 75% reduction
+   389→  }
+   390→
+   391→  // Scale up if on a winning streak > 3 consecutive wins
+   392→  // This is a bonus that can only increase factor up to 1.5x
+   393→  // The winning streak check requires trade history, so we apply a
+   394→  // conservative boost. The actual streak check is in the caller.
+   395→  // Here we use a positive daily P&L as a proxy for the upward boost.
+   396→  if (params.dailyPnl > 0 && factor >= 1.0) {
+   397→    // Only allow scaling up if no drawdown pressure
+   398→    if (params.currentDrawdown < params.maxDrawdown * 0.3) {
+   399→      factor = Math.min(factor * 1.25, 1.5)
+   400→    }
+   401→  }
+   402→
+   403→  return Math.round(factor * 1000) / 1000
+   404→}
+   405→
+   406→/**
+   407→ * Calculate sector exposure breakdown for all open positions.
+   408→ */
+   409→export function calculateSectorExposure(
+   410→  openTrades: PositionRiskBreakdown[],
+   411→  equity: number,
+   412→): SectorExposureEntry[] {
+   413→  const sectorMap = new Map<string, { margin: number; count: number }>()
+   414→
+   415→  for (const pos of openTrades) {
+   416→    const sector = SYMBOL_SECTORS[pos.symbol] || "Unknown"
+   417→    const existing = sectorMap.get(sector)
+   418→    if (existing) {
+   419→      existing.margin += pos.margin
+   420→      existing.count += 1
+   421→    } else {
+   422→      sectorMap.set(sector, { margin: pos.margin, count: 1 })
+   423→    }
+   424→  }
+   425→
+   426→  const entries: SectorExposureEntry[] = []
+   427→  for (const [sector, data] of sectorMap.entries()) {
+   428→    entries.push({
+   429→      sector,
+   430→      exposurePct: equity > 0 ? Math.round((data.margin / equity) * 10000) / 100 : 0,
+   431→      positionCount: data.count,
+   432→      marginUsed: Math.round(data.margin * 100) / 100,
+   433→    })
+   434→  }
+   435→
+   436→  // Sort by exposure descending
+   437→  entries.sort((a, b) => b.exposurePct - a.exposurePct)
+   438→  return entries
+   439→}
+   440→
+   441→/**
+   442→ * Calculate a full risk snapshot of the current account state.
+   443→ */
+   444→export async function getRiskSnapshot(): Promise<RiskSnapshot> {
+   445→  const config = await getRiskConfig()
+   446→  const openTrades = await db.trade.findMany({ where: { status: "OPEN" } })
+   447→  const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
+   448→
+   449→  const BASE_BALANCE = 10000
+   450→  const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
+   451→  const currentBalance = Math.round((BASE_BALANCE + totalClosedPnl) * 100) / 100
+   452→  const totalOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
+   453→  const equity = Math.round((currentBalance + totalOpenPnl) * 100) / 100
+   454→  const totalMarginUsed = openTrades.reduce((s, t) => s + t.margin, 0)
+   455→  const freeMargin = Math.max(0, Math.round((equity - totalMarginUsed) * 100) / 100)
+   456→  const marginLevelPercent = totalMarginUsed > 0 ? Math.round((equity / totalMarginUsed) * 10000) / 100 : 0
+   457→
+   458→  // ---- Time-based P&L ----
+   459→  const now = new Date()
+   460→  const todayStr = now.toISOString().split("T")[0]
+   461→  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+   462→  const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+   463→
+   464→  const closedToday = allClosed.filter((t) => t.closeTime && t.closeTime >= new Date(todayStr))
+   465→  const closedWeek = allClosed.filter((t) => t.closeTime && t.closeTime >= weekAgo)
+   466→  const closedMonth = allClosed.filter((t) => t.closeTime && t.closeTime >= monthAgo)
+   467→
+   468→  const dailyPnl = closedToday.reduce((s, t) => s + t.pnl, 0) + totalOpenPnl
+   469→  const weeklyPnl = closedWeek.reduce((s, t) => s + t.pnl, 0) + totalOpenPnl
+   470→  const monthlyPnl = closedMonth.reduce((s, t) => s + t.pnl, 0) + totalOpenPnl
+   471→
+   472→  // ---- Drawdown calculation ----
+   473→  let peak = currentBalance
+   474→  let maxDrawdown = 0
+   475→  let runningBalance = currentBalance - totalClosedPnl
+   476→  for (const trade of allClosed) {
+   477→    runningBalance += trade.pnl
+   478→    if (runningBalance > peak) peak = runningBalance
+   479→    const dd = peak > 0 ? ((peak - runningBalance) / peak) * 100 : 0
+   480→    if (dd > maxDrawdown) maxDrawdown = dd
+   481→  }
+   482→  // Factor in open P&L for current drawdown
+   483→  if (equity < peak) {
+   484→    const currentDD = ((peak - equity) / peak) * 100
+   485→    if (currentDD > maxDrawdown) maxDrawdown = currentDD
+   486→  }
+   487→  const currentDrawdown = peak > 0 ? Math.round(((peak - equity) / peak) * 10000) / 100 : 0
+   488→
+   489→  // ---- Proactive margin monitoring (4 zones) ----
+   490→  const proactiveMarginZone = determineProactiveMarginZone(marginLevelPercent, config)
+   491→
+   492→  // Process zone transitions and log events
+   493→  if (proactiveMarginZone !== "SAFE") {
+   494→    await processProactiveMarginMonitoring(marginLevelPercent, config)
+   495→  }
+   496→
+   497→  const isMarginCallWarning =
+   498→    proactiveMarginZone === "MARGIN_CALL" ||
+   499→    proactiveMarginZone === "STOP_OUT"
+   500→  const isStopOutWarning = proactiveMarginZone === "STOP_OUT"
+   501→
+   502→  // ---- Risk Score (deterministic, not random) ----
+   503→  const riskScore = calculateRiskScore({
+   504→    dailyPnlPercent: (dailyPnl / equity) * 100,
+   505→    marginUsagePercent: equity > 0 ? (totalMarginUsed / equity) * 100 : 0,
+   506→    currentDrawdown,
+   507→    maxDrawdown,
+   508→    config,
+   509→    openPositionCount: openTrades.length,
+   510→    marginLevelPercent,
+   511→  })
+   512→
+   513→  const riskLevel = getRiskLevel(riskScore)
+   514→
+   515→  // ---- Daily loss limit ----
+   516→  const dailyLossLimit = (config.maxDailyLoss / 100) * equity
+   517→  const isDailyLimitReached = dailyPnl < 0 && Math.abs(dailyPnl) >= dailyLossLimit
+   518→
+   519→  // ---- Trading allowed? ----
+   520→  let isTradingAllowed = true
+   521→  let tradingBlockReason: string | undefined
+   522→
+   523→  if (isStopOutWarning) {
+   524→    isTradingAllowed = false
+   525→    tradingBlockReason = `Stop out level reached (${config.stopOutLevel}%)`
+   526→  }
+   527→  if (proactiveMarginZone === "MARGIN_CALL") {
+   528→    isTradingAllowed = false
+   529→    tradingBlockReason = `Margin call level reached (${config.marginCallLevel}%)`
+   530→  }
+   531→  if (isDailyLimitReached) {
+   532→    isTradingAllowed = false
+   533→    tradingBlockReason = `Daily loss limit reached (${config.maxDailyLoss}% / $${dailyLossLimit.toFixed(2)})`
+   534→  }
+   535→  if (currentDrawdown >= config.maxDrawdown) {
+   536→    isTradingAllowed = false
+   537→    tradingBlockReason = `Max drawdown limit reached (${config.maxDrawdown}%)`
+   538→  }
+   539→  if (openTrades.length >= config.maxOpenPositions) {
+   540→    isTradingAllowed = false
+   541→    tradingBlockReason = `Max open positions reached (${config.maxOpenPositions})`
+   542→  }
+   543→
+   544→  // ---- Recent risk events ----
+   545→  const recentEvents = await db.riskEvent.findMany({
+   546→    orderBy: { createdAt: "desc" },
+   547→    take: 10,
+   548→  })
+   549→
+   550→  // ---- Recommendations ----
+   551→  const recommendations = generateRecommendations({
+   552→    riskScore,
+   553→    riskLevel,
+   554→    dailyPnl,
+   555→    dailyPnlPercent: (dailyPnl / equity) * 100,
+   556→    currentDrawdown,
+   557→    marginUsagePercent: equity > 0 ? (totalMarginUsed / equity) * 100 : 0,
+   558→    config,
+   559→    isDailyLimitReached,
+   560→    isMarginCallWarning,
+   561→    isStopOutWarning,
+   562→    isTradingAllowed,
+   563→    tradingBlockReason,
+   564→    proactiveMarginZone,
+   565→  })
+   566→
+   567→  // ---- Position risk breakdown ----
+   568→  const positions: PositionRiskBreakdown[] = openTrades.map((t) => {
+   569→    let riskAmount = 0
+   570→    if (t.sl) {
+   571→      riskAmount = t.direction === "BUY"
+   572→        ? (t.entryPrice - t.sl) * t.lotSize * 100000
+   573→        : (t.sl - t.entryPrice) * t.lotSize * 100000
+   574→    }
+   575→    return {
+   576→      tradeId: t.id,
+   577→      symbol: t.symbol,
+   578→      direction: t.direction,
+   579→      lotSize: t.lotSize,
+   580→      entryPrice: t.entryPrice,
+   581→      currentPrice: t.currentPrice,
+   582→      sl: t.sl,
+   583→      tp: t.tp,
+   584→      margin: t.margin,
+   585→      pnl: t.pnl,
+   586→      pnlPercent: t.pnlPercent,
+   587→      riskAmount: Math.round(Math.abs(riskAmount) * 100) / 100,
+   588→      riskPercent: equity > 0 ? Math.round((Math.abs(riskAmount) / equity) * 10000) / 100 : 0,
+   589→      strategy: t.strategy,
+   590→      trailingStop: t.trailingStop,
+   591→    }
+   592→  })
+   593→
+   594→  // ---- Sector exposure ----
+   595→  const sectorExposure = calculateSectorExposure(positions, equity)
+   596→
+   597→  // ---- Portfolio total risk % ----
+   598→  const portfolioTotalRisk = positions.reduce((s, p) => s + p.riskAmount, 0)
+   599→  const portfolioTotalRiskPct = equity > 0
+   600→    ? Math.round((portfolioTotalRisk / equity) * 10000) / 100
+   601→    : 0
+   602→
+   603→  // ---- Current effective leverage ----
+   604→  const totalNotionalValue = openTrades.reduce(
+   605→    (s, t) => s + t.entryPrice * t.lotSize * 100000, 0,
+   606→  )
+   607→  const leverageUsed = equity > 0
+   608→    ? Math.round((totalNotionalValue / equity) * 100) / 100
+   609→    : 0
+   610→
+   611→  // ---- Current reserve capital % ----
+   612→  const reserveCapitalPct = equity > 0
+   613→    ? Math.round((freeMargin / equity) * 10000) / 100
+   614→    : 0
+   615→
+   616→  // ---- Dynamic risk scaling factor ----
+   617→  // Check winning streak for upward scaling
+   618→  const recentClosed = allClosed
+   619→    .filter((t) => t.closeTime && t.closeTime >= new Date(todayStr))
+   620→    .sort((a, b) => (b.closeTime?.getTime() || 0) - (a.closeTime?.getTime() || 0))
+   621→  let winningStreak = 0
+   622→  for (const t of recentClosed) {
+   623→    if (t.pnl > 0) {
+   624→      winningStreak++
+   625→    } else {
+   626→      break
+   627→    }
+   628→  }
+   629→  let scalingFactor = calculateScalingFactor({
+   630→    dailyPnl,
+   631→    dailyLossLimit,
+   632→    currentDrawdown,
+   633→    maxDrawdown: config.maxDrawdown,
+   634→    equity,
+   635→  })
+   636→  // Apply winning streak boost
+   637→  if (winningStreak > 3 && scalingFactor >= 1.0 && currentDrawdown < config.maxDrawdown * 0.3) {
+   638→    scalingFactor = Math.min(scalingFactor * 1.25, 1.5)
+   639→    scalingFactor = Math.round(scalingFactor * 1000) / 1000
+   640→  }
+   641→
+   642→  return {
+   643→    equity: Math.round(equity * 100) / 100,
+   644→    balance: Math.round(currentBalance * 100) / 100,
+   645→    freeMargin,
+   646→    marginUsed: Math.round(totalMarginUsed * 100) / 100,
+   647→    marginLevelPercent,
+   648→    dailyPnl: Math.round(dailyPnl * 100) / 100,
+   649→    dailyPnlPercent: Math.round((dailyPnl / equity) * 10000) / 100,
+   650→    weeklyPnl: Math.round(weeklyPnl * 100) / 100,
+   651→    weeklyPnlPercent: Math.round((weeklyPnl / equity) * 10000) / 100,
+   652→    monthlyPnl: Math.round(monthlyPnl * 100) / 100,
+   653→    monthlyPnlPercent: Math.round((monthlyPnl / equity) * 10000) / 100,
+   654→    currentDrawdown: Math.round(currentDrawdown * 100) / 100,
+   655→    maxDrawdown: Math.round(maxDrawdown * 100) / 100,
+   656→    maxAllowedDrawdown: config.maxDrawdown,
+   657→    riskScore,
+   658→    riskLevel,
+   659→    openPositions: openTrades.length,
+   660→    maxPositionsAllowed: config.maxOpenPositions,
+   661→    marginUsagePercent: Math.round((equity > 0 ? (totalMarginUsed / equity) * 100 : 0) * 100) / 100,
+   662→    maxMarginAllowed: config.maxMarginUsage,
+   663→    dailyLossRemaining: Math.round(Math.max(0, dailyLossLimit - Math.abs(Math.min(0, dailyPnl))) * 100) / 100,
+   664→    dailyLossLimit: Math.round(dailyLossLimit * 100) / 100,
+   665→    isDailyLimitReached,
+   666→    isMarginCallWarning,
+   667→    isStopOutWarning,
+   668→    isTradingAllowed,
+   669→    tradingBlockReason,
+   670→    recentRiskEvents: recentEvents.map((e) => ({
+   671→      eventType: e.eventType,
+   672→      severity: e.severity,
+   673→      message: e.message,
+   674→      createdAt: e.createdAt.toISOString(),
+   675→      resolved: e.resolved,
+   676→    })),
+   677→    recommendations,
+   678→    positions,
+   679→    // Deep audit fields
+   680→    proactiveMarginZone,
+   681→    sectorExposure,
+   682→    portfolioTotalRiskPct,
+   683→    leverageUsed,
+   684→    reserveCapitalPct,
+   685→    scalingFactor,
+   686→  }
+   687→}
+   688→
+   689→/**
+   690→ * Pre-trade risk validation. Call this BEFORE creating any trade.
+   691→ *
+   692→ * Checks (in order):
+   693→ *  1. Trading allowed? (global block)
+   694→ *  2. Position limit
+   695→ *  3. Lot size limits (per trade, per symbol)
+   696→ *  4. Minimum lot check
+   697→ *  5. Calculate risk amount (including slippage)
+   698→ *  6. Risk per trade limit
+   699→ *  7. No stop loss warning
+   700→ *  8. Correlation risk (sector)
+   701→ *  9. Margin usage after trade
+   702→ * 10. Cooldown after loss
+   703→ * 11. Portfolio-level risk cap
+   704→ * 12. Leverage utilization cap
+   705→ * 13. Single stock concentration limit
+   706→ * 14. Sector concentration limit
+   707→ * 15. Reserve capital check
+   708→ */
+   709→export async function preTradeCheck(params: {
+   710→  symbol: string
+   711→  direction: string
+   712→  lotSize: number
+   713→  entryPrice: number
+   714→  sl?: number | null
+   715→  tp?: number | null
+   716→  strategy?: string | null
+   717→  aiConfidence?: number | null
+   718→  expectedSlippage?: number | null
+   719→}): Promise<PreTradeCheck> {
+   720→  const config = await getRiskConfig()
+   721→  const snapshot = await getRiskSnapshot()
+   722→  const warnings: string[] = []
+   723→  let positionSizeReduction = 0
+   724→
+   725→  // ---- 1. Trading allowed? ----
+   726→  if (!snapshot.isTradingAllowed) {
+   727→    return {
+   728→      approved: false,
+   729→      reason: snapshot.tradingBlockReason || "Trading is currently blocked by risk controls",
+   730→      riskAmount: 0,
+   731→      riskPercent: 0,
+   732→      suggestedLotSize: 0,
+   733→      warnings,
+   734→    }
+   735→  }
+   736→
+   737→  // ---- 1b. Proactive 60% zone: reduce new position sizes by 50% ----
+   738→  if (snapshot.proactiveMarginZone === "PROACTIVE_60") {
+   739→    positionSizeReduction = 0.5
+   740→    warnings.push("Margin level in PROACTIVE_60 zone: new position sizes reduced by 50%")
+   741→    logger.warn("RISK_MANAGEMENT", `PROACTIVE_60 zone: reducing ${params.symbol} position size by 50%`, {
+   742→      symbol: params.symbol,
+   743→      metadata: { marginLevelPercent: snapshot.marginLevelPercent },
+   744→    })
+   745→  }
+   746→
+   747→  // ---- 2. Position limit ----
+   748→  if (snapshot.openPositions >= config.maxOpenPositions) {
+   749→    return {
+   750→      approved: false,
+   751→      reason: `Max open positions reached (${config.maxOpenPositions})`,
+   752→      riskAmount: 0,
+   753→      riskPercent: 0,
+   754→      suggestedLotSize: 0,
+   755→      warnings,
+   756→    }
+   757→  }
+   758→
+   759→  // ---- 3. Lot size limits ----
+   760→  if (params.lotSize > config.maxLotPerTrade) {
+   761→    return {
+   762→      approved: false,
+   763→      reason: `Lot size ${params.lotSize} exceeds max per trade (${config.maxLotPerTrade})`,
+   764→      riskAmount: 0,
+   765→      riskPercent: 0,
+   766→      suggestedLotSize: 0,
+   767→      warnings,
+   768→    }
+   769→  }
+   770→
+   771→  // 3b. Check total lot per symbol
+   772→  const sameSymbolTrades = snapshot.positions.filter((p) => p.symbol === params.symbol)
+   773→  const totalSymbolLots = sameSymbolTrades.reduce((s, p) => s + p.lotSize, 0) + params.lotSize
+   774→  if (totalSymbolLots > config.maxLotPerSymbol) {
+   775→    return {
+   776→      approved: false,
+   777→      reason: `Total lot for ${params.symbol} (${totalSymbolLots}) would exceed max (${config.maxLotPerSymbol})`,
+   778→      riskAmount: 0,
+   779→      riskPercent: 0,
+   780→      suggestedLotSize: 0,
+   781→      warnings,
+   782→    }
+   783→  }
+   784→
+   785→  // ---- 4. Minimum lot check (FINEX: 0.01) ----
+   786→  if (params.lotSize < 0.01) {
+   787→    return {
+   788→      approved: false,
+   789→      reason: "Minimum lot size is 0.01",
+   790→      riskAmount: 0,
+   791→      riskPercent: 0,
+   792→      suggestedLotSize: 0.01,
+   793→      warnings,
+   794→    }
+   795→  }
+   796→
+   797→  // ---- 5. Calculate risk amount (including slippage) ----
+   798→  let riskAmount = 0
+   799→  if (params.sl) {
+   800→    riskAmount = params.direction === "BUY"
+   801→      ? (params.entryPrice - params.sl) * params.lotSize * 100000
+   802→      : (params.sl - params.entryPrice) * params.lotSize * 100000
+   803→    riskAmount = Math.abs(riskAmount)
+   804→  }
+   805→
+   806→  // 5b. Slippage modeling: if expected slippage exceeds tolerance, add to risk
+   807→  let slippageCost = 0
+   808→  if (params.expectedSlippage != null && params.expectedSlippage > 0) {
+   809→    if (params.expectedSlippage > config.slippageTolerancePips) {
+   810→      slippageCost = (params.expectedSlippage * params.lotSize * 100000) / params.entryPrice
+   811→      riskAmount += slippageCost
+   812→      warnings.push(
+   813→        `Expected slippage (${params.expectedSlippage.toFixed(1)} pips) exceeds tolerance (${config.slippageTolerancePips} pips). Added $${slippageCost.toFixed(2)} to risk amount.`,
+   814→      )
+   815→      await logRiskEvent({
+   816→        eventType: "SLIPPAGE_WARNING",
+   817→        severity: "MEDIUM",
+   818→        message: `High slippage expected for ${params.symbol}: ${params.expectedSlippage.toFixed(1)} pips (tolerance: ${config.slippageTolerancePips})`,
+   819→        details: `Slippage cost $${slippageCost.toFixed(2)} added to risk. Total risk for this trade: $${riskAmount.toFixed(2)}.`,
+   820→        actionTaken: "NONE",
+   821→      })
+   822→    } else {
+   823→      // Even within tolerance, include small slippage cost in risk
+   824→      slippageCost = (params.expectedSlippage * params.lotSize * 100000) / params.entryPrice
+   825→      riskAmount += slippageCost
+   826→    }
+   827→  }
+   828→
+   829→  const riskPercent = snapshot.equity > 0 ? (riskAmount / snapshot.equity) * 100 : 0
+   830→
+   831→  // ---- 6. Risk per trade limit ----
+   832→  const maxRiskDollar = (config.maxRiskPerTrade / 100) * snapshot.equity
+   833→  let suggestedLotSize = params.lotSize
+   834→
+   835→  if (riskAmount > maxRiskDollar && params.sl) {
+   836→    // Calculate safe lot size
+   837→    const pipRisk = params.direction === "BUY"
+   838→      ? params.entryPrice - (params.sl || 0)
+   839→      : (params.sl || 0) - params.entryPrice
+   840→    if (pipRisk > 0) {
+   841→      suggestedLotSize = Math.max(0.01, Math.floor((maxRiskDollar / (pipRisk * 100000)) * 100) / 100)
+   842→    }
+   843→    warnings.push(`Risk $${riskAmount.toFixed(2)} exceeds max $${maxRiskDollar.toFixed(2)} (${config.maxRiskPerTrade}%)`)
+   844→  }
+   845→
+   846→  // ---- 7. No stop loss? ----
+   847→  if (!params.sl) {
+   848→    warnings.push("No stop loss set - this increases uncontrolled risk")
+   849→  }
+   850→
+   851→  // ---- 8. Correlation risk (existing sector check) ----
+   852→  const sector = SYMBOL_SECTORS[params.symbol]
+   853→  if (sector) {
+   854→    const sectorExposure = snapshot.positions
+   855→      .filter((p) => SYMBOL_SECTORS[p.symbol] === sector)
+   856→      .reduce((s, p) => s + p.margin, 0)
+   857→    const newMargin = (params.entryPrice * suggestedLotSize * 100000) / 25
+   858→    const sectorExposurePct = ((sectorExposure + newMargin) / snapshot.equity) * 100
+   859→    if (sectorExposurePct > config.maxCorrelatedExposure) {
+   860→      warnings.push(`Sector (${sector}) exposure would be ${sectorExposurePct.toFixed(1)}% (max ${config.maxCorrelatedExposure}%)`)
+   861→    }
+   862→  }
+   863→
+   864→  // ---- 9. Margin usage after trade ----
+   865→  const newMargin = (params.entryPrice * suggestedLotSize * 100000) / 25
+   866→  const projectedMarginUsage = ((snapshot.marginUsed + newMargin) / snapshot.equity) * 100
+   867→  if (projectedMarginUsage > config.maxMarginUsage) {
+   868→    return {
+   869→      approved: false,
+   870→      reason: `Margin usage would be ${projectedMarginUsage.toFixed(1)}% (max ${config.maxMarginUsage}%)`,
+   871→      riskAmount,
+   872→      riskPercent,
+   873→      suggestedLotSize: 0,
+   874→      warnings,
+   875→    }
+   876→  }
+   877→
+   878→  // ---- 10. Cooldown after loss ----
+   879→  if (config.cooldownAfterLossMinutes > 0) {
+   880→    const recentLosses = await db.trade.findMany({
+   881→      where: {
+   882→        status: "CLOSED",
+   883→        pnl: { lt: 0 },
+   884→        closeTime: { gte: new Date(Date.now() - config.cooldownAfterLossMinutes * 60 * 1000) },
+   885→      },
+   886→    })
+   887→    if (recentLosses.length >= 3) {
+   888→      return {
+   889→        approved: false,
+   890→        reason: `Cooldown active: ${recentLosses.length} losses in last ${config.cooldownAfterLossMinutes} min`,
+   891→        riskAmount,
+   892→        riskPercent,
+   893→        suggestedLotSize: 0,
+   894→        warnings: ["Multiple recent losses detected. Waiting for cooldown period."],
+   895→      }
+   896→    }
+   897→  }
+   898→
+   899→  // ---- 11. Portfolio-level risk cap ----
+   900→  const currentPortfolioRisk = snapshot.positions.reduce((s, p) => s + p.riskAmount, 0)
+   901→  const projectedTotalRisk = currentPortfolioRisk + riskAmount
+   902→  const projectedPortfolioRiskPct = (projectedTotalRisk / snapshot.equity) * 100
+   903→  if (projectedPortfolioRiskPct > config.maxPortfolioRiskPct) {
+   904→    await logRiskEvent({
+   905→      eventType: "PORTFOLIO_RISK_CAP",
+   906→      severity: "HIGH",
+   907→      message: `Portfolio risk cap would be exceeded: ${projectedPortfolioRiskPct.toFixed(2)}% (max ${config.maxPortfolioRiskPct}%)`,
+   908→      details: `Current portfolio risk: $${currentPortfolioRisk.toFixed(2)} (${((currentPortfolioRisk / snapshot.equity) * 100).toFixed(2)}%). New trade risk: $${riskAmount.toFixed(2)} (${riskPercent.toFixed(2)}%). Combined: $${projectedTotalRisk.toFixed(2)} (${projectedPortfolioRiskPct.toFixed(2)}%).`,
+   909→      actionTaken: "TRADE_BLOCKED",
+   910→    })
+   911→    return {
+   912→      approved: false,
+   913→      reason: `Portfolio risk would be ${projectedPortfolioRiskPct.toFixed(2)}% (max ${config.maxPortfolioRiskPct}% of equity)`,
+   914→      riskAmount,
+   915→      riskPercent,
+   916→      suggestedLotSize: 0,
+   917→      warnings,
+   918→    }
+   919→  }
+   920→
+   921→  // ---- 12. Leverage utilization cap ----
+   922→  const effectiveLeverage = (params.entryPrice * suggestedLotSize * 100000) / snapshot.equity
+   923→  if (effectiveLeverage > config.maxLeveragePerTrade) {
+   924→    // Suggest smaller lot size
+   925→    const safeLotForLeverage = (config.maxLeveragePerTrade * snapshot.equity) / (params.entryPrice * 100000)
+   926→    const suggestedLotFromLeverage = Math.max(0.01, Math.floor(safeLotForLeverage * 100) / 100)
+   927→    await logRiskEvent({
+   928→      eventType: "LEVERAGE_CAP",
+   929→      severity: "HIGH",
+   930→      message: `Leverage cap exceeded for ${params.symbol}: ${effectiveLeverage.toFixed(1)}x (max ${config.maxLeveragePerTrade}x)`,
+   931→      details: `Entry ${params.entryPrice} x ${suggestedLotSize} lots = ${effectiveLeverage.toFixed(1)}x leverage. Suggested max lot: ${suggestedLotFromLeverage}.`,
+   932→      actionTaken: "TRADE_BLOCKED",
+   933→    })
+   934→    return {
+   935→      approved: false,
+   936→      reason: `Effective leverage ${effectiveLeverage.toFixed(1)}x exceeds max ${config.maxLeveragePerTrade}x. Suggested lot size: ${suggestedLotFromLeverage}`,
+   937→      riskAmount,
+   938→      riskPercent,
+   939→      suggestedLotSize: suggestedLotFromLeverage,
+   940→      warnings: [`Leverage ${effectiveLeverage.toFixed(1)}x exceeds cap ${config.maxLeveragePerTrade}x. Reduce lot to ${suggestedLotFromLeverage}.`],
+   941→    }
+   942→  }
+   943→
+   944→  // ---- 13. Single stock concentration limit ----
+   945→  const sameSymbolMargin = sameSymbolTrades.reduce((s, p) => s + p.margin, 0)
+   946→  const tradeMargin = (params.entryPrice * suggestedLotSize * 100000) / 25
+   947→  const totalSymbolMargin = sameSymbolMargin + tradeMargin
+   948→  const singleStockPct = (totalSymbolMargin / snapshot.equity) * 100
+   949→  if (singleStockPct > config.maxSingleStockPct) {
+   950→    await logRiskEvent({
+   951→      eventType: "CONCENTRATION_LIMIT",
+   952→      severity: "HIGH",
+   953→      message: `Single stock concentration exceeded for ${params.symbol}: ${singleStockPct.toFixed(2)}% (max ${config.maxSingleStockPct}%)`,
+   954→      details: `Current margin in ${params.symbol}: $${sameSymbolMargin.toFixed(2)}. New trade margin: $${tradeMargin.toFixed(2)}. Total: $${totalSymbolMargin.toFixed(2)} = ${singleStockPct.toFixed(2)}% of equity.`,
+   955→      actionTaken: "TRADE_BLOCKED",
+   956→    })
+   957→    return {
+   958→      approved: false,
+   959→      reason: `Single stock ${params.symbol} concentration would be ${singleStockPct.toFixed(2)}% (max ${config.maxSingleStockPct}% of equity)`,
+   960→      riskAmount,
+   961→      riskPercent,
+   962→      suggestedLotSize: 0,
+   963→      warnings,
+   964→    }
+   965→  }
+   966→
+   967→  // ---- 14. Sector concentration limit ----
+   968→  if (sector) {
+   969→    const sectorMarginUsed = snapshot.sectorExposure.find((se) => se.sector === sector)?.marginUsed || 0
+   970→    const totalSectorMargin = sectorMarginUsed + tradeMargin
+   971→    const sectorPct = (totalSectorMargin / snapshot.equity) * 100
+   972→    if (sectorPct > config.maxSectorPct) {
+   973→      await logRiskEvent({
+   974→        eventType: "CONCENTRATION_LIMIT",
+   975→        severity: "HIGH",
+   976→        message: `Sector concentration exceeded for ${sector}: ${sectorPct.toFixed(2)}% (max ${config.maxSectorPct}%)`,
+   977→        details: `Current sector (${sector}) margin: $${sectorMarginUsed.toFixed(2)}. New trade margin: $${tradeMargin.toFixed(2)}. Total: $${totalSectorMargin.toFixed(2)} = ${sectorPct.toFixed(2)}% of equity.`,
+   978→        actionTaken: "TRADE_BLOCKED",
+   979→      })
+   980→      return {
+   981→        approved: false,
+   982→        reason: `Sector ${sector} concentration would be ${sectorPct.toFixed(2)}% (max ${config.maxSectorPct}% of equity)`,
+   983→        riskAmount,
+   984→        riskPercent,
+   985→        suggestedLotSize: 0,
+   986→        warnings,
+   987→      }
+   988→    }
+   989→  }
+   990→
+   991→  // ---- 15. Reserve capital check ----
+   992→  const requiredReserve = (config.reserveCapitalPct / 100) * snapshot.equity
+   993→  const freeMarginAfterTrade = snapshot.freeMargin - tradeMargin
+   994→  if (freeMarginAfterTrade < requiredReserve) {
+   995→    const currentReservePct = (snapshot.freeMargin / snapshot.equity) * 100
+   996→    return {
+   997→      approved: false,
+   998→      reason: `Insufficient reserve capital: $${freeMarginAfterTrade.toFixed(2)} remaining (need ${config.reserveCapitalPct}% = $${requiredReserve.toFixed(2)}). Current reserve: ${currentReservePct.toFixed(1)}%.`,
+   999→      riskAmount,
+  1000→      riskPercent,
+  1001→      suggestedLotSize: 0,
+  1002→      warnings: [`Reserve capital requirement: ${config.reserveCapitalPct}% of equity ($${requiredReserve.toFixed(2)}).`],
+  1003→    }
+  1004→  }
+  1005→
+  1006→  // ---- Apply position size reduction from PROACTIVE_60 zone ----
+  1007→  if (positionSizeReduction > 0) {
+  1008→    suggestedLotSize = Math.max(0.01, Math.round(suggestedLotSize * (1 - positionSizeReduction) * 100) / 100)
+  1009→    // Recalculate risk amount with reduced lot
+  1010→    if (params.sl) {
+  1011→      riskAmount = params.direction === "BUY"
+  1012→        ? (params.entryPrice - params.sl) * suggestedLotSize * 100000
+  1013→        : (params.sl - params.entryPrice) * suggestedLotSize * 100000
+  1014→      riskAmount = Math.abs(riskAmount) + slippageCost
+  1015→    }
+  1016→  }
+  1017→
+  1018→  // ---- Apply dynamic scaling factor ----
+  1019→  if (snapshot.scalingFactor < 1.0) {
+  1020→    const scaledLot = Math.max(0.01, Math.round(suggestedLotSize * snapshot.scalingFactor * 100) / 100)
+  1021→    if (scaledLot < suggestedLotSize) {
+  1022→      warnings.push(
+  1023→        `Dynamic risk scaling applied: lot reduced from ${suggestedLotSize} to ${scaledLot} (factor: ${snapshot.scalingFactor})`,
+  1024→      )
+  1025→      suggestedLotSize = scaledLot
+  1026→    }
+  1027→  }
+  1028→
+  1029→  // ---- Approved ----
+  1030→  return {
+  1031→    approved: true,
+  1032→    riskAmount: Math.round(riskAmount * 100) / 100,
+  1033→    riskPercent: Math.round(riskPercent * 100) / 100,
+  1034→    suggestedLotSize: Math.round(suggestedLotSize * 100) / 100,
+  1035→    warnings,
+  1036→    positionSizeReduction: positionSizeReduction > 0 ? positionSizeReduction : undefined,
+  1037→  }
+  1038→}
+  1039→
+  1040→/**
+  1041→ * Log a risk event to the database.
+  1042→ */
+  1043→export async function logRiskEvent(params: {
+  1044→  eventType: string
+  1045→  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  1046→  message: string
+  1047→  details?: string
+  1048→  actionTaken?: string
+  1049→}): Promise<void> {
+  1050→  try {
+  1051→    await db.riskEvent.create({
+  1052→      data: {
+  1053→        eventType: params.eventType,
+  1054→        severity: params.severity,
+  1055→        message: params.message,
+  1056→        details: params.details || null,
+  1057→        actionTaken: params.actionTaken || null,
+  1058→      },
+  1059→    })
+  1060→    logger.warn("RISK_MANAGEMENT", params.message, {
+  1061→      details: params.details,
+  1062→      metadata: {
+  1063→        eventType: params.eventType,
+  1064→        severity: params.severity,
+  1065→        actionTaken: params.actionTaken,
+  1066→      },
+  1067→    })
+  1068→  } catch (err) {
+  1069→    logger.error("RISK_MANAGEMENT", "Failed to log risk event", {
+  1070→      details: err instanceof Error ? err.stack : undefined,
+  1071→    })
+  1072→  }
+  1073→}
+  1074→
+  1075→// ---- Internal helpers ----
+  1076→
+  1077→function calculateRiskScore(factors: {
+  1078→  dailyPnlPercent: number
+  1079→  marginUsagePercent: number
+  1080→  currentDrawdown: number
+  1081→  maxDrawdown: number
+  1082→  config: RiskConfigData
+  1083→  openPositionCount: number
+  1084→  marginLevelPercent: number
+  1085→}): number {
+  1086→  let score = 0
+  1087→
+  1088→  // Daily loss contribution (0-3 points)
+  1089→  const dailyLossPct = Math.abs(Math.min(0, factors.dailyPnlPercent))
+  1090→  score += Math.min(3, (dailyLossPct / factors.config.maxDailyLoss) * 3)
+  1091→
+  1092→  // Margin usage (0-2 points)
+  1093→  score += Math.min(2, (factors.marginUsagePercent / factors.config.maxMarginUsage) * 2)
+  1094→
+  1095→  // Drawdown (0-3 points)
+  1096→  score += Math.min(3, (factors.currentDrawdown / factors.config.maxDrawdown) * 3)
+  1097→
+  1098→  // Margin level proximity to stop out (0-2 points)
+  1099→  // Enhanced to account for 4-zone system
+  1100→  if (factors.marginLevelPercent > 0) {
+  1101→    if (factors.marginLevelPercent <= factors.config.stopOutLevel) {
+  1102→      score += 2 // STOP_OUT
+  1103→    } else if (factors.marginLevelPercent <= factors.config.marginCallLevel) {
+  1104→      score += 2 // MARGIN_CALL
+  1105→    } else if (factors.config.proactiveMcLevel60 && factors.marginLevelPercent <= 60) {
+  1106→      score += 1.5 // PROACTIVE_60
+  1107→    } else if (factors.config.proactiveMcLevel70 && factors.marginLevelPercent <= 70) {
+  1108→      score += 0.75 // PROACTIVE_70
+  1109→    }
+  1110→  }
+  1111→
+  1112→  return Math.min(10, Math.round(score * 10) / 10)
+  1113→}
+  1114→
+  1115→function getRiskLevel(score: number): RiskSnapshot["riskLevel"] {
+  1116→  if (score <= 2) return "LOW"
+  1117→  if (score <= 4) return "MODERATE"
+  1118→  if (score <= 6) return "ELEVATED"
+  1119→  if (score <= 8) return "HIGH"
+  1120→  return "CRITICAL"
+  1121→}
+  1122→
+  1123→function generateRecommendations(ctx: {
+  1124→  riskScore: number
+  1125→  riskLevel: string
+  1126→  dailyPnl: number
+  1127→  dailyPnlPercent: number
+  1128→  currentDrawdown: number
+  1129→  marginUsagePercent: number
+  1130→  config: RiskConfigData
+  1131→  isDailyLimitReached: boolean
+  1132→  isMarginCallWarning: boolean
+  1133→  isStopOutWarning: boolean
+  1134→  isTradingAllowed: boolean
+  1135→  tradingBlockReason?: string
+  1136→  proactiveMarginZone?: ProactiveMarginZone
+  1137→}): string[] {
+  1138→  const recs: string[] = []
+  1139→
+  1140→  if (ctx.isStopOutWarning) {
+  1141→    recs.push("CRITICAL: Stop out level reached. All positions at risk of forced closure.")
+  1142→    recs.push("Immediately reduce positions or deposit additional funds.")
+  1143→  } else if (ctx.isMarginCallWarning) {
+  1144→    recs.push("WARNING: Margin call level reached. All new trades blocked.")
+  1145→    recs.push("Consider reducing exposure on losing positions.")
+  1146→  } else if (ctx.proactiveMarginZone === "PROACTIVE_70") {
+  1147→    recs.push("CAUTION: Margin level in proactive warning zone (70%). Monitor closely.")
+  1148→  } else if (ctx.proactiveMarginZone === "PROACTIVE_60") {
+  1149→    recs.push("WARNING: Margin level in strong warning zone (60%). New positions reduced by 50%.")
+  1150→    recs.push("Consider closing losing positions to free up margin.")
+  1151→  }
+  1152→
+  1153→  if (ctx.isDailyLimitReached) {
+  1154→    recs.push(`Daily loss limit of ${ctx.config.maxDailyLoss}% reached. No new trades allowed today.`)
+  1155→  } else if (ctx.dailyPnlPercent < -1) {
+  1156→    recs.push("Daily losses are accumulating. Consider reducing position sizes.")
+  1157→  }
+  1158→
+  1159→  if (ctx.currentDrawdown > ctx.config.maxDrawdown * 0.8) {
+  1160→    recs.push(`Drawdown (${ctx.currentDrawdown.toFixed(1)}%) approaching max limit (${ctx.config.maxDrawdown}%).`)
+  1161→  }
+  1162→
+  1163→  if (ctx.marginUsagePercent > ctx.config.maxMarginUsage * 0.7) {
+  1164→    recs.push(`Margin usage is high (${ctx.marginUsagePercent.toFixed(1)}%). Avoid opening new positions.`)
+  1165→  }
+  1166→
+  1167→  if (ctx.riskLevel === "LOW" && ctx.isTradingAllowed) {
+  1168→    recs.push("Risk levels are within acceptable parameters.")
+  1169→    recs.push("Continue with standard position sizing.")
+  1170→  }
+  1171→
+  1172→  if (!ctx.isTradingAllowed && ctx.tradingBlockReason) {
+  1173→    recs.push(`Trading blocked: ${ctx.tradingBlockReason}`)
+  1174→  }
+  1175→
+  1176→  return recs
+  1177→}
+  1178→

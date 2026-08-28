@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ShieldAlert, TrendingDown, Activity, Percent, Gauge, AlertTriangle, Ban, AlertOctagon, CheckCircle2, XCircle, TriangleAlert, PieChart, Layers, TrendingUp, DollarSign } from 'lucide-react'
+import { ShieldAlert, TrendingDown, Activity, Percent, Gauge, AlertTriangle, Ban, AlertOctagon, CheckCircle2, XCircle, TriangleAlert, PieChart, Layers, TrendingUp, DollarSign, Hand, BarChart3, Zap, Loader2 } from 'lucide-react'
 
 interface PositionRisk {
   tradeId: string
@@ -133,9 +133,22 @@ function formatCurrency(value: number): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value)
 }
 
+interface HaltStatusData {
+  canTrade: boolean
+  reasons: Array<{ type: string; message: string; active: boolean }>
+  consecutiveLosses: number
+  maxConsecutiveLosses: number
+  equityCurveStatus: string
+  sessionPnl: number
+  sessionPnlLimit: number
+  sessionRiskUsedPct: number
+}
+
 export default function RiskManagement() {
   const [data, setData] = useState<RiskData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [haltData, setHaltData] = useState<HaltStatusData | null>(null)
+  const [haltLoading, setHaltLoading] = useState(true)
 
   const fetchRisk = useCallback(async () => {
     try {
@@ -151,11 +164,30 @@ export default function RiskManagement() {
     }
   }, [])
 
+  const fetchHaltStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/money-management/halt-status')
+      if (res.ok) {
+        const json = await res.json()
+        setHaltData(json.data)
+      }
+    } catch {
+      // use stale data
+    } finally {
+      setHaltLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     fetchRisk()
+    fetchHaltStatus()
     const interval = setInterval(fetchRisk, 10000)
-    return () => clearInterval(interval)
-  }, [fetchRisk])
+    const haltInterval = setInterval(fetchHaltStatus, 10000)
+    return () => {
+      clearInterval(interval)
+      clearInterval(haltInterval)
+    }
+  }, [fetchRisk, fetchHaltStatus])
 
   const dailyPnLPct = data ? Math.min(Math.abs(data.dailyPnl / data.dailyLossLimit) * 100, 100) : 0
   const isDailyLoss = data ? data.dailyPnl < 0 : false
@@ -392,6 +424,99 @@ export default function RiskManagement() {
           </Card>
         ))}
       </div>
+
+      {/* TRADING HALT STATUS - Phase 3 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Hand className="h-4 w-4 text-amber-500" />
+            Trading Halt Status
+            <Badge className={haltData?.canTrade ? 'bg-emerald-600 hover:bg-emerald-700 text-white ml-auto' : 'bg-red-600 hover:bg-red-700 text-white ml-auto'}>
+              {haltLoading ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : haltData?.canTrade ? (
+                'CAN TRADE'
+              ) : (
+                'HALTED'
+              )}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {/* Consecutive Losses */}
+            <div className="rounded-lg border p-3 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <TrendingDown className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Consecutive Losses</span>
+              </div>
+              <div className="flex items-baseline gap-1">
+                <span className={`text-lg font-bold ${haltData ? (haltData.consecutiveLosses >= haltData.maxConsecutiveLosses ? 'text-red-600' : 'text-emerald-600') : 'text-muted-foreground'}`}>
+                  {haltLoading ? '-' : haltData?.consecutiveLosses ?? 0}
+                </span>
+                <span className="text-xs text-muted-foreground">/ {haltLoading ? '-' : haltData?.maxConsecutiveLosses ?? 5} max</span>
+              </div>
+              {haltData && haltData.consecutiveLosses > 0 && (
+                <Progress
+                  value={Math.min((haltData.consecutiveLosses / haltData.maxConsecutiveLosses) * 100, 100)}
+                  className={`h-1.5 ${(haltData.consecutiveLosses / haltData.maxConsecutiveLosses) >= 0.8 ? '[&>div]:bg-red-500' : (haltData.consecutiveLosses / haltData.maxConsecutiveLosses) >= 0.6 ? '[&>div]:bg-amber-500' : '[&>div]:bg-emerald-500'}`}
+                />
+              )}
+            </div>
+
+            {/* Equity Curve Status */}
+            <div className="rounded-lg border p-3 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <BarChart3 className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Equity Curve</span>
+              </div>
+              <Badge className={haltData?.equityCurveStatus === 'TRADING' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : haltData?.equityCurveStatus === 'HALTED_DRAWDOWN' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-amber-600 hover:bg-amber-700 text-white'}>
+                {haltLoading ? '...' : haltData?.equityCurveStatus ?? 'TRADING'}
+              </Badge>
+              <p className="text-[10px] text-muted-foreground">
+                {haltData?.equityCurveStatus === 'TRADING' ? 'Curve above threshold' : haltData?.equityCurveStatus === 'HALTED_DRAWDOWN' ? 'Drawdown halt active' : 'Recovery mode'}
+              </p>
+            </div>
+
+            {/* Session P&L vs Limit */}
+            <div className="rounded-lg border p-3 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <Zap className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Session P&L</span>
+              </div>
+              <p className={`text-lg font-bold ${haltData ? (haltData.sessionPnl < 0 ? 'text-red-600' : 'text-emerald-600') : 'text-muted-foreground'}`}>
+                {haltLoading ? '-' : haltData ? `${haltData.sessionPnl >= 0 ? '+' : ''}${formatCurrency(haltData.sessionPnl)}` : '-'}
+              </p>
+              <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                <span>Limit: {haltLoading ? '-' : haltData ? formatCurrency(haltData.sessionPnlLimit) : '-'}</span>
+                <span>{haltLoading ? '-' : haltData ? `${haltData.sessionRiskUsedPct.toFixed(0)}%` : '-'} used</span>
+              </div>
+            </div>
+
+            {/* Active Halt Reasons */}
+            <div className="rounded-lg border p-3 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">Halt Reasons</span>
+              </div>
+              {haltData && haltData.reasons.filter(r => r.active).length > 0 ? (
+                <div className="space-y-1">
+                  {haltData.reasons.filter(r => r.active).map((r, i) => (
+                    <Badge key={i} variant="destructive" className="text-[10px] block w-full text-left mb-1">
+                      {r.type}: {r.message}
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                  <span className="text-xs text-emerald-600 font-medium">No active halts</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* SECTOR EXPOSURE - New deep audit feature */}
       {data && data.sectorExposure.length > 0 && (

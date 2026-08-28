@@ -11,6 +11,7 @@ import {
   Newspaper,
   Bell,
   Shield,
+  ShieldCheck,
   FlaskConical,
   Cpu,
   Globe,
@@ -34,6 +35,7 @@ import StrategyMonitor from '@/components/trading/StrategyMonitor'
 import TradingSessions from '@/components/trading/TradingSessions'
 import EquityChart from '@/components/trading/EquityChart'
 import LogViewer from '@/components/trading/LogViewer'
+import AuditCompliance from '@/components/trading/AuditCompliance'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -46,6 +48,7 @@ const NAV_ITEMS = [
   { id: 'backtest', label: 'Backtest', icon: FlaskConical },
   { id: 'sessions', label: 'Sessions', icon: Globe },
   { id: 'logs', label: 'System Logs', icon: Terminal },
+  { id: 'audit', label: 'Audit', icon: ShieldCheck },
 ] as const
 
 type TabId = (typeof NAV_ITEMS)[number]['id']
@@ -221,6 +224,10 @@ export default function TradingDashboard() {
 
           <TabsContent value="backtest" className="space-y-6">
             <BacktestPanel />
+          </TabsContent>
+
+          <TabsContent value="audit" className="space-y-6">
+            <AuditCompliance />
           </TabsContent>
 
           <TabsContent value="sessions" className="space-y-6">

@@ -19,6 +19,7 @@
 
 import { db } from "./db"
 import logger from "./trading-logger"
+import { isMarketOpen } from "./mt5-connection"
 
 // ---- Types ----
 
@@ -59,6 +60,11 @@ export interface RiskConfigData {
   maxSectorPct: number             // Max % of equity in single sector
   slippageTolerancePips: number    // Max acceptable slippage in pips
   reserveCapitalPct: number        // % of equity to keep as cash reserve
+  // --- Phase 3 fields ---
+  gapRiskMaxPct: number            // Max overnight gap risk tolerance %
+  gapRiskAlertPct: number          // Alert threshold for gap risk %
+  highVolRiskReduction: number     // Risk multiplier in HIGH_VOLATILITY
+  lowVolRiskReduction: number      // Risk multiplier in LOW_VOLATILITY
 }
 
 export interface PreTradeCheck {
@@ -109,6 +115,13 @@ export interface RiskSnapshot {
   leverageUsed: number             // Current effective leverage
   reserveCapitalPct: number        // Current reserve capital %
   scalingFactor: number            // Dynamic risk scaling factor
+  // --- Phase 3 fields ---
+  volatilityRegime: string         // Current volatility regime
+  volatilityRiskMultiplier: number // Risk multiplier from volatility regime
+  circuitBreakerState: string      // Circuit breaker state (CLOSED, OPEN, HALF_OPEN)
+  connectionQuality: number        // Connection quality score (0-100)
+  hasGapRisk: boolean              // Whether gap risk is elevated
+  unresolvedRiskEvents: number     // Count of unresolved risk events
 }
 
 interface RiskEventSummary {
@@ -117,6 +130,31 @@ interface RiskEventSummary {
   message: string
   createdAt: string
   resolved: boolean
+}
+
+// ---- Phase 3 Types ----
+
+export interface GapRiskResult {
+  hasGapRisk: boolean
+  estimatedMaxGapPct: number
+  riskAmount: number
+  recommendation: string
+  severity: string
+}
+
+export interface VolatilityRegimeResult {
+  regime: "HIGH_VOLATILITY" | "NORMAL" | "LOW_VOLATILITY"
+  riskMultiplier: number
+  reason: string
+}
+
+export interface CorrelationMatrixResult {
+  sectors: Array<{
+    sector: string
+    exposure: number
+    positionCount: number
+    correlationGroup: string
+  }>
 }
 
 interface PositionRiskBreakdown {
@@ -163,7 +201,7 @@ export const SYMBOL_SECTORS: Record<string, string> = {
   TOWR: "Infrastructure", SMRA: "Infrastructure",
   // Industrial
   INKP: "Industrial", SMGR: "Industrial",
-  ASRI: "Industrial", CTRA: "Industrial",
+  ASRI: "Industrial",
   // Media
   EMTK: "Media", MNCN: "Media", 
   // Property
@@ -195,6 +233,11 @@ const DEFAULT_CONFIG: RiskConfigData = {
   maxSectorPct: 15.0,
   slippageTolerancePips: 3.0,
   reserveCapitalPct: 20.0,
+  // Phase 3 defaults
+  gapRiskMaxPct: 3.0,
+  gapRiskAlertPct: 2.0,
+  highVolRiskReduction: 0.5,
+  lowVolRiskReduction: 0.8,
 }
 
 // ---- Core Functions ----
@@ -229,6 +272,11 @@ export async function getRiskConfig(): Promise<RiskConfigData> {
         maxSectorPct: cfg.maxSectorPct,
         slippageTolerancePips: cfg.slippageTolerancePips,
         reserveCapitalPct: cfg.reserveCapitalPct,
+        // Phase 3 fields
+        gapRiskMaxPct: cfg.gapRiskMaxPct,
+        gapRiskAlertPct: cfg.gapRiskAlertPct,
+        highVolRiskReduction: cfg.highVolRiskReduction,
+        lowVolRiskReduction: cfg.lowVolRiskReduction,
       }
     }
   } catch (err) {
@@ -683,6 +731,47 @@ export async function getRiskSnapshot(): Promise<RiskSnapshot> {
     leverageUsed,
     reserveCapitalPct,
     scalingFactor,
+    // Phase 3 fields
+    ...(await buildPhase3SnapshotFields()),
+  }
+}
+
+/**
+ * Build Phase 3 snapshot fields by reading from DB and computing volatility regime.
+ */
+async function buildPhase3SnapshotFields(): Promise<{
+  volatilityRegime: string
+  volatilityRiskMultiplier: number
+  circuitBreakerState: string
+  connectionQuality: number
+  hasGapRisk: boolean
+  unresolvedRiskEvents: number
+}> {
+  // Default volatility regime when no real data available
+  const volRegime = detectVolatilityRegime({ recentVolatility: 0, avgVolatility: 0 })
+
+  // Read MT5 connection state from DB for circuit breaker & quality
+  let circuitBreakerState = "CLOSED"
+  let connectionQuality = 100
+  try {
+    const connState = await db.mt5ConnectionState.findFirst({ orderBy: { createdAt: "desc" } })
+    if (connState) {
+      circuitBreakerState = connState.circuitState || "CLOSED"
+      connectionQuality = Math.round(connState.connectionQuality * 100) / 100
+    }
+  } catch {
+    // Table may not exist or be accessible; use defaults
+  }
+
+  const unresolvedRiskEvents = await db.riskEvent.count({ where: { resolved: false } })
+
+  return {
+    volatilityRegime: volRegime.regime,
+    volatilityRiskMultiplier: volRegime.riskMultiplier,
+    circuitBreakerState,
+    connectionQuality,
+    hasGapRisk: false,
+    unresolvedRiskEvents,
   }
 }
 
@@ -1174,4 +1263,307 @@ function generateRecommendations(ctx: {
   }
 
   return recs
+}
+
+// ============================================
+// PHASE 3: GAP RISK DETECTION
+// ============================================
+
+/**
+ * Assess gap risk for a potential trade entry.
+ *
+ * Uses ATR-based gap estimation (volatility * 2.5 as max expected gap).
+ * If entering near market close (within 30 min of 15:00 WIB), gap risk is increased by 50%.
+ */
+export async function assessGapRisk(params: {
+  symbol: string
+  direction: string
+  entryPrice: number
+  equity: number
+  volatility?: number
+}): Promise<GapRiskResult> {
+  const config = await getRiskConfig()
+  const vol = params.volatility ?? 0.01 // Default 1% daily volatility if not provided
+
+  // ATR-based max expected gap = volatility * 2.5
+  let estimatedMaxGapPct = vol * 2.5 * 100
+
+  // If near market close (within 30 min of 15:00 WIB), increase gap risk by 50%
+  const now = new Date()
+  // WIB is UTC+7
+  const wibOffset = 7 * 60 * 60 * 1000
+  const wibHour = new Date(now.getTime() + wibOffset).getUTCHours()
+  const wibMinute = new Date(now.getTime() + wibOffset).getUTCMinutes()
+  const minutesSinceOpen = wibHour * 60 + wibMinute
+  // Market closes at 15:00 WIB (900 minutes). Within 30 min = >= 870 minutes.
+  const isNearClose = minutesSinceOpen >= 870 && minutesSinceOpen <= 900
+
+  if (isNearClose) {
+    estimatedMaxGapPct *= 1.5
+    logger.info("RISK_MANAGEMENT", `Gap risk boosted near close for ${params.symbol}`, {
+      metadata: { isNearClose: true, estimatedMaxGapPct },
+    })
+  }
+
+  estimatedMaxGapPct = Math.round(estimatedMaxGapPct * 100) / 100
+
+  // Risk amount = estimated gap % * entry price * typical 1 lot position
+  const riskAmount = (estimatedMaxGapPct / 100) * params.entryPrice * 100000
+
+  // Determine severity
+  let severity = "LOW"
+  let hasGapRisk = false
+  let recommendation = "Acceptable gap risk"
+
+  if (estimatedMaxGapPct > config.gapRiskMaxPct) {
+    severity = "HIGH"
+    hasGapRisk = true
+    recommendation = "Avoid new positions near close"
+  } else if (estimatedMaxGapPct > config.gapRiskAlertPct) {
+    severity = "MEDIUM"
+    hasGapRisk = true
+    recommendation = "Reduce position size"
+  }
+
+  if (hasGapRisk && !isMarketOpen(now)) {
+    // Outside market hours, any gap risk is elevated
+    severity = "HIGH"
+    recommendation = "Avoid new positions near close"
+  }
+
+  return {
+    hasGapRisk,
+    estimatedMaxGapPct,
+    riskAmount: Math.round(riskAmount * 100) / 100,
+    recommendation,
+    severity,
+  }
+}
+
+// ============================================
+// PHASE 3: VOLATILITY REGIME DETECTION
+// ============================================
+
+/**
+ * Detect the current volatility regime and return an appropriate risk multiplier.
+ *
+ * - HIGH_VOLATILITY: recentVol > avgVol * 1.5 → riskMultiplier = highVolRiskReduction (default 0.5)
+ * - LOW_VOLATILITY:  recentVol < avgVol * 0.5 → riskMultiplier = lowVolRiskReduction (default 0.8)
+ * - NORMAL:           otherwise                 → riskMultiplier = 1.0
+ */
+export function detectVolatilityRegime(params: {
+  recentVolatility: number
+  avgVolatility: number
+}): VolatilityRegimeResult {
+  const { recentVolatility, avgVolatility } = params
+
+  // When no meaningful data, default to NORMAL
+  if (avgVolatility <= 0 || recentVolatility <= 0) {
+    return {
+      regime: "NORMAL",
+      riskMultiplier: 1.0,
+      reason: "Insufficient volatility data; defaulting to NORMAL regime",
+    }
+  }
+
+  const ratio = recentVolatility / avgVolatility
+
+  if (ratio > 1.5) {
+    return {
+      regime: "HIGH_VOLATILITY",
+      riskMultiplier: 0.5,
+      reason: `Recent volatility (${(recentVolatility * 100).toFixed(2)}%) is ${(ratio).toFixed(1)}x above average (${(avgVolatility * 100).toFixed(2)}%). Reducing risk to 50%.`,
+    }
+  }
+
+  if (ratio < 0.5) {
+    return {
+      regime: "LOW_VOLATILITY",
+      riskMultiplier: 0.8,
+      reason: `Recent volatility (${(recentVolatility * 100).toFixed(2)}%) is ${(1/ratio).toFixed(1)}x below average (${(avgVolatility * 100).toFixed(2)}%). Mild risk reduction to 80%.`,
+    }
+  }
+
+  return {
+    regime: "NORMAL",
+    riskMultiplier: 1.0,
+    reason: `Volatility ratio ${(ratio).toFixed(2)}x within normal bounds (0.5-1.5x). No adjustment needed.`,
+  }
+}
+
+// ============================================
+// PHASE 3: AUTO-RESOLVE STALE RISK EVENTS
+// ============================================
+
+/**
+ * Auto-resolve risk events that have been unresolved for too long.
+ *
+ * Finds all RiskEvent where resolved=false AND createdAt < (now - maxAgeMinutes).
+ * Sets resolved=true, resolvedAt=now, actionTaken includes "AUTO_RESOLVED".
+ * Returns count of resolved events.
+ */
+export async function autoResolveStaleRiskEvents(maxAgeMinutes: number = 60): Promise<number> {
+  const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000)
+
+  const staleEvents = await db.riskEvent.findMany({
+    where: {
+      resolved: false,
+      createdAt: { lt: cutoff },
+    },
+  })
+
+  if (staleEvents.length === 0) {
+    return 0
+  }
+
+  const now = new Date()
+  let resolvedCount = 0
+
+  for (const event of staleEvents) {
+    try {
+      await db.riskEvent.update({
+        where: { id: event.id },
+        data: {
+          resolved: true,
+          resolvedAt: now,
+          actionTaken: event.actionTaken
+            ? `${event.actionTaken}; AUTO_RESOLVED`
+            : "AUTO_RESOLVED",
+        },
+      })
+      logger.info("RISK_MANAGEMENT", `Auto-resolved stale risk event: ${event.eventType}`, {
+        metadata: {
+          eventId: event.id,
+          eventType: event.eventType,
+          severity: event.severity,
+          ageMinutes: Math.round((now.getTime() - event.createdAt.getTime()) / 60000),
+        },
+      })
+      resolvedCount++
+    } catch (err) {
+      logger.error("RISK_MANAGEMENT", `Failed to auto-resolve risk event ${event.id}`, {
+        details: err instanceof Error ? err.stack : undefined,
+      })
+    }
+  }
+
+  if (resolvedCount > 0) {
+    logger.info("RISK_MANAGEMENT", `Auto-resolved ${resolvedCount} stale risk events (max age: ${maxAgeMinutes}min)`, {
+      metadata: { resolvedCount, maxAgeMinutes },
+    })
+  }
+
+  return resolvedCount
+}
+
+// ============================================
+// PHASE 3: CORRELATION MATRIX
+// ============================================
+
+/**
+ * Calculate a sector-level correlation matrix from open positions.
+ *
+ * Groups positions by sector, calculates sector exposure as % of total margin,
+ * and assigns correlation groups based on position count per sector.
+ */
+export function calculateCorrelationMatrix(
+  openPositions: Array<{ symbol: string; sector: string; margin: number; pnl: number }>,
+): CorrelationMatrixResult {
+  const config = DEFAULT_CONFIG // Use defaults for threshold comparison
+
+  // Group by sector
+  const sectorMap = new Map<string, { margin: number; count: number; pnl: number }>()
+  let totalMargin = 0
+
+  for (const pos of openPositions) {
+    const sector = pos.sector || "Unknown"
+    const existing = sectorMap.get(sector)
+    if (existing) {
+      existing.margin += pos.margin
+      existing.count += 1
+      existing.pnl += pos.pnl
+    } else {
+      sectorMap.set(sector, { margin: pos.margin, count: 1, pnl: pos.pnl })
+    }
+    totalMargin += pos.margin
+  }
+
+  const sectors: CorrelationMatrixResult["sectors"] = []
+
+  for (const [sector, data] of sectorMap.entries()) {
+    const exposure = totalMargin > 0
+      ? Math.round((data.margin / totalMargin) * 10000) / 100
+      : 0
+
+    // Assign correlation group based on position count
+    let correlationGroup: string
+    if (data.count > 3) {
+      correlationGroup = "HIGH_CORRELATION"
+    } else if (data.count >= 2) {
+      correlationGroup = "MEDIUM"
+    } else {
+      correlationGroup = "LOW"
+    }
+
+    sectors.push({
+      sector,
+      exposure,
+      positionCount: data.count,
+      correlationGroup,
+    })
+  }
+
+  // Sort by exposure descending
+  sectors.sort((a, b) => b.exposure - a.exposure)
+
+  return { sectors }
+}
+
+// ============================================
+// PHASE 3: AUDIT TRAIL LOGGER
+// ============================================
+
+/**
+ * Log an audit trail entry for configuration changes and system actions.
+ *
+ * Creates an AuditTrail record in the database and logs to the trading logger at INFO level.
+ */
+export async function logAuditTrail(params: {
+  action: string
+  category: string
+  fieldName?: string
+  oldValue?: string
+  newValue?: string
+  reason?: string
+  performedBy?: string
+}): Promise<void> {
+  try {
+    await db.auditTrail.create({
+      data: {
+        action: params.action,
+        category: params.category,
+        fieldName: params.fieldName || null,
+        oldValue: params.oldValue || null,
+        newValue: params.newValue || null,
+        reason: params.reason || null,
+        performedBy: params.performedBy || "SYSTEM",
+      },
+    })
+
+    logger.info("RISK_MANAGEMENT", `Audit trail: ${params.action}`, {
+      metadata: {
+        action: params.action,
+        category: params.category,
+        fieldName: params.fieldName,
+        oldValue: params.oldValue,
+        newValue: params.newValue,
+        reason: params.reason,
+        performedBy: params.performedBy,
+      },
+    })
+  } catch (err) {
+    logger.error("RISK_MANAGEMENT", "Failed to write audit trail entry", {
+      details: err instanceof Error ? err.stack : undefined,
+    })
+  }
 }

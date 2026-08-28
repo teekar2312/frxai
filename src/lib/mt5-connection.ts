@@ -1390,6 +1390,431 @@ class Mt5ConnectionManager {
   }
 }
 
+// ============================================
+// CIRCUIT BREAKER PATTERN
+// ============================================
+
+export type CircuitBreakerState = "CLOSED" | "OPEN" | "HALF_OPEN"
+
+/**
+ * Error thrown when the circuit breaker is OPEN and rejects a call.
+ */
+export class CircuitBreakerOpenError extends Error {
+  public readonly state: CircuitBreakerState
+  public readonly failureCount: number
+  public readonly nextRetryAt: Date
+
+  constructor(failureCount: number, nextRetryAt: Date) {
+    super(
+      `Circuit breaker is OPEN (${failureCount} failures). Next retry allowed at ${nextRetryAt.toISOString()}`
+    )
+    this.name = "CircuitBreakerOpenError"
+    this.state = "OPEN"
+    this.failureCount = failureCount
+    this.nextRetryAt = nextRetryAt
+  }
+}
+
+interface CircuitBreakerConfig {
+  /** Number of consecutive failures before tripping to OPEN */
+  failureThreshold: number
+  /** Milliseconds to wait before transitioning OPEN → HALF_OPEN */
+  recoveryTimeoutMs: number
+  /** Maximum calls allowed during HALF_OPEN probe */
+  halfOpenMaxAttempts: number
+}
+
+/**
+ * Circuit breaker that wraps MT5 API calls to prevent cascading failures.
+ *
+ * States:
+ *   CLOSED  — Normal operation. Failures are counted; successes reset the counter.
+ *   OPEN    — Tripped. All calls are rejected immediately with CircuitBreakerOpenError.
+ *   HALF_OPEN — Recovery probe. A limited number of calls are allowed to test the service.
+ */
+export class CircuitBreaker {
+  private _state: CircuitBreakerState = "CLOSED"
+  private _failureCount = 0
+  private _successCount = 0
+  private _halfOpenAttempts = 0
+  private _openedAt: Date | null = null
+  private readonly _config: CircuitBreakerConfig
+
+  constructor(config?: Partial<CircuitBreakerConfig>) {
+    this._config = {
+      failureThreshold: config?.failureThreshold ?? 5,
+      recoveryTimeoutMs: config?.recoveryTimeoutMs ?? 30_000,
+      halfOpenMaxAttempts: config?.halfOpenMaxAttempts ?? 1,
+    }
+  }
+
+  get state(): CircuitBreakerState {
+    this._maybeTransitionToHalfOpen()
+    return this._state
+  }
+
+  get failureCount(): number {
+    return this._failureCount
+  }
+
+  get successCount(): number {
+    return this._successCount
+  }
+
+  /** Execute a function through the circuit breaker. */
+  async execute<T>(fn: () => Promise<T>): Promise<T> {
+    this._maybeTransitionToHalfOpen()
+
+    if (this._state === "OPEN") {
+      throw new CircuitBreakerOpenError(this._failureCount, this._nextRetryAt())
+    }
+
+    if (this._state === "HALF_OPEN") {
+      if (this._halfOpenAttempts >= this._config.halfOpenMaxAttempts) {
+        throw new CircuitBreakerOpenError(this._failureCount, this._nextRetryAt())
+      }
+      this._halfOpenAttempts++
+    }
+
+    try {
+      const result = await fn()
+      this._onSuccess()
+      return result
+    } catch (err) {
+      this._onFailure()
+      throw err
+    }
+  }
+
+  /** Manually reset the circuit breaker to CLOSED. */
+  reset(): void {
+    this._state = "CLOSED"
+    this._failureCount = 0
+    this._successCount = 0
+    this._halfOpenAttempts = 0
+    this._openedAt = null
+    logger.info("MT5_CONNECTION", "Circuit breaker manually reset to CLOSED")
+  }
+
+  /** Manually trip the circuit breaker to OPEN. */
+  trip(): void {
+    this._state = "OPEN"
+    this._openedAt = new Date()
+    logger.warn("MT5_CONNECTION", `Circuit breaker manually tripped to OPEN (${this._failureCount} failures)`)
+  }
+
+  private _onSuccess(): void {
+    this._successCount++
+    if (this._state === "HALF_OPEN") {
+      // Recovery probe succeeded → close the circuit
+      this._state = "CLOSED"
+      this._failureCount = 0
+      this._halfOpenAttempts = 0
+      this._openedAt = null
+      logger.info("MT5_CONNECTION", "HALF_OPEN probe succeeded → CLOSED")
+    } else {
+      // In CLOSED state, reset failure counter on success
+      this._failureCount = 0
+    }
+  }
+
+  private _onFailure(): void {
+    this._failureCount++
+    if (this._state === "HALF_OPEN") {
+      // Recovery probe failed → back to OPEN
+      this._state = "OPEN"
+      this._openedAt = new Date()
+      this._halfOpenAttempts = 0
+      logger.warn(
+        "MT5_CONNECTION",
+        `HALF_OPEN probe failed → OPEN (failures: ${this._failureCount})`
+      )
+    } else if (this._failureCount >= this._config.failureThreshold) {
+      // Threshold reached → trip to OPEN
+      this._state = "OPEN"
+      this._openedAt = new Date()
+      logger.warn(
+        "MT5_CONNECTION",
+        `CLOSED → OPEN (failures: ${this._failureCount}/${this._config.failureThreshold})`
+      )
+    }
+  }
+
+  private _maybeTransitionToHalfOpen(): void {
+    if (this._state === "OPEN" && this._openedAt) {
+      const elapsed = Date.now() - this._openedAt.getTime()
+      if (elapsed >= this._config.recoveryTimeoutMs) {
+        this._state = "HALF_OPEN"
+        this._halfOpenAttempts = 0
+        logger.info("MT5_CONNECTION", "OPEN → HALF_OPEN (recovery timeout elapsed)")
+      }
+    }
+  }
+
+  private _nextRetryAt(): Date {
+    if (!this._openedAt) return new Date()
+    return new Date(this._openedAt.getTime() + this._config.recoveryTimeoutMs)
+  }
+}
+
+// ============================================
+// CONNECTION QUALITY SCORE
+// ============================================
+
+interface ConnectionQualityParams {
+  latencyMs: number
+  successRate: number       // 0.0 – 1.0
+  consecutiveFailures: number
+  uptimeSeconds: number
+}
+
+/**
+ * Calculate a single 0–100 connection quality score from multiple metrics.
+ *
+ * Components:
+ *   - Latency score:   <50ms → 100, 50–100 → 90, 100–200 → 70, 200–500 → 40, >500 → 10
+ *   - Success rate:    weighted 40%
+ *   - Consecutive failures: 0 → 100, 1 → 80, 2 → 50, 3+ → 10
+ *   - Uptime:          <1min → 50, 1–10min → 70, >10min → 90, >1h → 100
+ *
+ * Final = latency*30% + successRate*40% + consecutiveFailures*15% + uptime*15%
+ */
+export function calculateConnectionQuality(params: ConnectionQualityParams): number {
+  const { latencyMs, successRate, consecutiveFailures, uptimeSeconds } = params
+
+  // --- Latency score (30% weight) ---
+  let latencyScore: number
+  if (latencyMs < 50) {
+    latencyScore = 100
+  } else if (latencyMs <= 100) {
+    latencyScore = 90
+  } else if (latencyMs <= 200) {
+    latencyScore = 70
+  } else if (latencyMs <= 500) {
+    latencyScore = 40
+  } else {
+    latencyScore = 10
+  }
+
+  // --- Success rate score (40% weight, already 0-100 when multiplied) ---
+  const successRateScore = successRate * 100
+
+  // --- Consecutive failures score (15% weight) ---
+  let failureScore: number
+  if (consecutiveFailures === 0) {
+    failureScore = 100
+  } else if (consecutiveFailures === 1) {
+    failureScore = 80
+  } else if (consecutiveFailures === 2) {
+    failureScore = 50
+  } else {
+    failureScore = 10
+  }
+
+  // --- Uptime score (15% weight) ---
+  let uptimeScore: number
+  if (uptimeSeconds < 60) {
+    uptimeScore = 50
+  } else if (uptimeSeconds <= 600) {
+    uptimeScore = 70
+  } else if (uptimeSeconds <= 3600) {
+    uptimeScore = 90
+  } else {
+    uptimeScore = 100
+  }
+
+  const total =
+    latencyScore * 0.30 +
+    successRateScore * 0.40 +
+    failureScore * 0.15 +
+    uptimeScore * 0.15
+
+  // Clamp to 0-100
+  return Math.round(Math.max(0, Math.min(100, total)))
+}
+
+// ============================================
+// ORDER EXECUTION PIPELINE
+// ============================================
+
+export interface OrderExecutionResult {
+  success: boolean
+  orderId?: string
+  fillPrice?: number
+  fillLot?: number
+  mt5ErrorCode?: number
+  mt5ErrorDesc?: string
+  attempts: number
+  totalLatencyMs: number
+}
+
+/** Retryable MT5 trade error codes */
+const RETRYABLE_MT5_ERRORS = new Set([10004, 10015, 10020, 10021, 10023, 10028, 10031])
+
+/** Suggested retry delays (ms) per MT5 error code */
+const MT5_RETRY_DELAY_MS: Record<number, number> = {
+  10004: 1000,  // Requote — wait for fresh quotes
+  10015: 500,   // Invalid price — brief delay then retry with updated price
+  10020: 750,   // Prices changed — moderate delay for price stabilisation
+  10021: 2000,  // No quotes — longer wait for data feed to resume
+  10023: 500,   // Order state changed — brief delay then re-fetch
+  10028: 1000,  // Request locked — wait for prior operation to complete
+  10031: 3000,  // No connection — longest delay for reconnection attempt
+}
+
+/**
+ * Execute an order with automatic retry for transient MT5 errors.
+ *
+ * **SIMULATED EXECUTION** — Since this environment does not have a live MT5
+ * terminal, the function simulates the API call (small delay, simulated
+ * success). Replace the inner `_simulateExecution` block with a real
+ * `mt5.order_send()` call when integrating with the actual MT5 bridge.
+ *
+ * Uses CircuitBreaker to guard against cascading failures.
+ * On retryable errors (10004, 10015, 10020, 10021, 10023, 10028, 10031)
+ * the function retries up to `maxRetries` times with delays derived from
+ * the MT5 error code.
+ */
+export async function executeOrderWithRetry(params: {
+  symbol: string
+  direction: string
+  lotSize: number
+  price: number
+  sl?: number
+  tp?: number
+  comment?: string
+  maxRetries?: number
+  circuitBreaker?: CircuitBreaker
+}): Promise<OrderExecutionResult> {
+  const {
+    symbol,
+    direction,
+    lotSize,
+    price,
+    sl,
+    tp,
+    comment,
+    maxRetries = 3,
+    circuitBreaker,
+  } = params
+
+  const startTime = Date.now()
+  let attempts = 0
+  const totalRetries = maxRetries
+
+  // Use provided circuit breaker or create a default one
+  const cb = circuitBreaker ?? new CircuitBreaker()
+
+  for (let attempt = 0; attempt <= totalRetries; attempt++) {
+    attempts = attempt + 1
+
+    try {
+      const result = await cb.execute(async () => {
+        // ---- SIMULATED EXECUTION ----
+        // In production, replace this block with a real MT5 order_send call.
+        // Example:
+        //   const ticket = await mt5Connection.runExclusive(() => mt5.order_send({
+        //     symbol, type: direction === 'BUY' ? mt5.ORDER_TYPE_BUY : mt5.ORDER_TYPE_SELL,
+        //     volume: lotSize, price, sl, tp, comment,
+        //   }))
+        //   if (ticket.retcode !== mt5.TRADE_RETCODE_DONE) throw { retcode: ticket.retcode }
+        //   return ticket
+
+        logger.info("TRADE_EXECUTION", `[SIMULATED] Order attempt ${attempts}/${totalRetries + 1}`, {
+          symbol,
+          metadata: { direction, lotSize, price, sl, tp, comment, attempt: attempts },
+        })
+
+        // Simulate network latency (50-150ms)
+        await new Promise((r) => setTimeout(r, 50 + Math.random() * 100))
+
+        // Simulate a successful fill
+        const simulatedTicket = `SIM-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+        const simulatedFillPrice = price + (Math.random() - 0.5) * 2 // slight slippage
+
+        return {
+          success: true,
+          orderId: simulatedTicket,
+          fillPrice: Math.round(simulatedFillPrice * 100) / 100,
+          fillLot: lotSize,
+        }
+      })
+
+      const totalLatencyMs = Date.now() - startTime
+      logger.info("TRADE_EXECUTION", `Order succeeded on attempt ${attempts}`, {
+        symbol,
+        tradeId: result.orderId,
+        metadata: { fillPrice: result.fillPrice, fillLot: result.fillLot, totalLatencyMs },
+      })
+
+      return {
+        ...result,
+        attempts,
+        totalLatencyMs,
+      }
+    } catch (err) {
+      const totalLatencyMs = Date.now() - startTime
+
+      // If circuit breaker itself is open, bail out immediately
+      if (err instanceof CircuitBreakerOpenError) {
+        logger.error("TRADE_EXECUTION", `Circuit breaker OPEN — order aborted`, {
+          symbol,
+          metadata: { direction, attempts, totalLatencyMs, circuitBreakerFailures: err.failureCount },
+        })
+        return {
+          success: false,
+          attempts,
+          totalLatencyMs,
+        }
+      }
+
+      // Extract MT5 error code from the thrown error if available
+      const mt5ErrorCode =
+        (err as { retcode?: number })?.retcode ??
+        (err as { code?: number })?.code
+      const errorEntry = mt5ErrorCode != null ? MT5_ERROR_CODE_MAP.get(mt5ErrorCode) : undefined
+      const isRetryable = mt5ErrorCode != null && RETRYABLE_MT5_ERRORS.has(mt5ErrorCode)
+
+      logger.warn("TRADE_EXECUTION", `Order attempt ${attempts} failed`, {
+        symbol,
+        metadata: {
+          direction,
+          mt5ErrorCode: mt5ErrorCode ?? "unknown",
+          errorDescription: errorEntry?.description ?? (err instanceof Error ? err.message : String(err)),
+          retryable: isRetryable,
+          remainingRetries: totalRetries - attempt,
+        },
+      })
+
+      // Non-retryable error or out of retries → return failure
+      if (!isRetryable || attempt >= totalRetries) {
+        return {
+          success: false,
+          mt5ErrorCode: mt5ErrorCode,
+          mt5ErrorDesc: errorEntry?.description ?? (err instanceof Error ? err.message : String(err)),
+          attempts,
+          totalLatencyMs,
+        }
+      }
+
+      // Wait before retrying — use error-specific delay or exponential backoff
+      const retryDelay = MT5_RETRY_DELAY_MS[mt5ErrorCode] ?? Math.min(1000 * Math.pow(2, attempt), 5000)
+      logger.info("TRADE_EXECUTION", `Retrying in ${retryDelay}ms (error ${mt5ErrorCode})`, {
+        symbol,
+        metadata: { attempt: attempts, nextAttempt: attempts + 1, retryDelay },
+      })
+      await new Promise((r) => setTimeout(r, retryDelay))
+    }
+  }
+
+  // Should not reach here, but satisfy TypeScript
+  return {
+    success: false,
+    attempts,
+    totalLatencyMs: Date.now() - startTime,
+  }
+}
+
 // ---- Singleton instance ----
 const mt5Connection = new Mt5ConnectionManager()
 export default mt5Connection

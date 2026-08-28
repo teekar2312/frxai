@@ -65,7 +65,7 @@ model PriceAlert {
 
 model Mt5ConnectionState {
   id              String   @id @default(cuid())
-  status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, RECONNECTING, ERROR, AUTH_FAILED, DEGRADED
+  status          String   @default("DISCONNECTED") // CONNECTED, DISCONNECTED, RECONNECTING, ERROR, AUTH_FAILED, DEGRADED, CIRCUIT_OPEN
   broker          String   @default("FINEX Indonesia")
   server          String?
   accountNumber   String?
@@ -81,13 +81,19 @@ model Mt5ConnectionState {
   consecutiveHeartbeatFailures Int @default(0)
   isMarketOpen    Boolean  @default(false)
   tradingPhase    String   @default("CLOSED") // PRE_OPEN, OPEN, PRE_CLOSE, CLOSED, AFTER_HOURS
+  // Phase 3: Circuit Breaker
+  circuitState        String   @default("CLOSED") // CLOSED (normal), OPEN (tripped), HALF_OPEN (probing)
+  circuitFailureCount Int      @default(0)
+  circuitLastFailure  DateTime?
+  circuitOpenUntil    DateTime?
+  connectionQuality   Float    @default(100.0) // 0-100 quality score
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
 model Mt5ConnectionLog {
   id          String   @id @default(cuid())
-  event       String   // CONNECTED, DISCONNECTED, RECONNECTING, AUTH_FAILED, TIMEOUT, HEARTBEAT_OK, HEARTBEAT_FAIL, ERROR, DEGRADED, RECOVERED, MARKET_OPEN, MARKET_CLOSE
+  event       String   // CONNECTED, DISCONNECTED, RECONNECTING, AUTH_FAILED, TIMEOUT, HEARTBEAT_OK, HEARTBEAT_FAIL, ERROR, DEGRADED, RECOVERED, MARKET_OPEN, MARKET_CLOSE, CIRCUIT_OPEN, CIRCUIT_HALF_OPEN, CIRCUIT_CLOSED, ORDER_RETRY, ORDER_FAILED, ORDER_EXECUTED
   message     String
   details     String?
   latencyMs   Int?
@@ -101,7 +107,7 @@ model Mt5ErrorCode {
   category    String @default("TRADE_EXECUTION") // MT5_CONNECTION, TRADE_EXECUTION, DATA_FEED
   remediation String // Auto-remediation action
   retryable   Boolean @default(false)
- createdAt   DateTime @default(now())
+  createdAt   DateTime @default(now())
 }
 
 // ============================================
@@ -110,13 +116,14 @@ model Mt5ErrorCode {
 
 model RiskEvent {
   id            String   @id @default(cuid())
-  eventType     String   // DAILY_LIMIT_APPROACHING, DAILY_LIMIT_REACHED, MARGIN_CALL_WARNING, STOP_OUT_WARNING, MARGIN_EXCEEDED, POSITION_LIMIT_REACHED, LOT_LIMIT_EXCEEDED, RISK_SCORE_HIGH, CORRELATION_RISK, DRAWDOWN_LIMIT, PROACTIVE_MC_70, PROACTIVE_MC_60, LEVERAGE_CAP, CONCENTRATION_LIMIT, PORTFOLIO_RISK_CAP, SLIPPAGE_WARNING, GAP_RISK
+  eventType     String   // DAILY_LIMIT_APPROACHING, DAILY_LIMIT_REACHED, MARGIN_CALL_WARNING, STOP_OUT_WARNING, MARGIN_EXCEEDED, POSITION_LIMIT_REACHED, LOT_LIMIT_EXCEEDED, RISK_SCORE_HIGH, CORRELATION_RISK, DRAWDOWN_LIMIT, PROACTIVE_MC_70, PROACTIVE_MC_60, LEVERAGE_CAP, CONCENTRATION_LIMIT, PORTFOLIO_RISK_CAP, SLIPPAGE_WARNING, GAP_RISK, VOLATILITY_REGIME_CHANGE, CONSECUTIVE_LOSS_HALT, EQUITY_CURVE_HALT
   severity      String   // LOW, MEDIUM, HIGH, CRITICAL
   message       String
   details       String?
-  actionTaken   String?  // TRADE_BLOCKED, ALL_POSITIONS_CLOSED, REDUCED_SIZE, NOTIFICATION_SENT, NONE, AUTO_RECONNECT
+  actionTaken   String?  // TRADE_BLOCKED, ALL_POSITIONS_CLOSED, REDUCED_SIZE, NOTIFICATION_SENT, NONE, AUTO_RECONNECT, AUTO_RESOLVED
   resolved      Boolean  @default(false)
   resolvedAt    DateTime?
+  autoResolveAt DateTime? // Phase 3: When this event should auto-resolve
   createdAt     DateTime @default(now())
 }
 
@@ -136,15 +143,30 @@ model RiskConfig {
   stopOutLevel      Float    @default(20.0)  // %
   maxCorrelatedExposure Float  @default(15.0) // % max for same-sector positions
   cooldownAfterLossMinutes Int @default(15)
-  // --- New deep audit fields ---
-  proactiveMcLevel70    Boolean @default(true)  // Warn at 70% margin level
-  proactiveMcLevel60    Boolean @default(true)  // Warn at 60% margin level
-  maxPortfolioRiskPct    Float   @default(5.0)   // Max total risk across all positions (% of equity)
-  maxLeveragePerTrade    Float   @default(10.0)  // Max effective leverage per single trade
-  maxSingleStockPct      Float   @default(5.0)   // Max % of equity in single stock
-  maxSectorPct           Float   @default(15.0)  // Max % of equity in single sector
-  slippageTolerancePips  Float   @default(3.0)   // Max acceptable slippage in pips
-  reserveCapitalPct      Float   @default(20.0)  // % of equity to keep as cash reserve
+  // --- Deep audit Phase 2 fields ---
+  proactiveMcLevel70    Boolean @default(true)
+  proactiveMcLevel60    Boolean @default(true)
+  maxPortfolioRiskPct    Float   @default(5.0)
+  maxLeveragePerTrade    Float   @default(10.0)
+  maxSingleStockPct      Float   @default(5.0)
+  maxSectorPct           Float   @default(15.0)
+  slippageTolerancePips  Float   @default(3.0)
+  reserveCapitalPct      Float   @default(20.0)
+  // --- Phase 3: Gap Risk ---
+  gapRiskMaxPct          Float   @default(3.0)   // Max overnight gap risk tolerance %
+  gapRiskAlertPct        Float   @default(2.0)   // Alert threshold for gap risk %
+  // --- Phase 3: Volatility Regime ---
+  volatilityRegimeEnabled Boolean @default(true)
+  highVolRiskReduction  Float   @default(0.5)   // Reduce risk by 50% in HIGH_VOLATILITY
+  lowVolRiskReduction   Float   @default(0.8)   // Reduce risk by 20% in LOW_VOLATILITY
+  // --- Phase 3: Consecutive Loss ---
+  maxConsecutiveLosses  Int     @default(5)     // Halt after N consecutive losses
+  consecutiveLossCooldownMinutes Int @default(60) // Cooldown after halt
+  // --- Phase 3: Equity Curve ---
+  equityCurveEnabled     Boolean @default(true)
+  equityCurveMaPeriod    Int     @default(20)    // Moving average period for equity curve
+  // --- Phase 3: Session Risk ---
+  sessionRiskLimitPct    Float   @default(1.0)   // Max loss per trading session % of equity
   updatedAt         DateTime @updatedAt
   createdAt         DateTime @default(now())
 }
@@ -170,13 +192,20 @@ model DailyPerformance {
   peakEquity    Float
   troughEquity  Float
   riskScoreAvg  Float    @default(0)
-  // --- New deep audit fields ---
+  // --- Phase 2 fields ---
   commissionPaid     Float    @default(0)
   slippageCost       Float    @default(0)
   deployedCapital    Float    @default(0)
   reserveCapital     Float    @default(0)
   sizingMethodUsed   String   @default("FIXED_FRACTIONAL")
-  scalingFactor      Float    @default(1.0)   // Dynamic risk scaling multiplier
+  scalingFactor      Float    @default(1.0)
+  // --- Phase 3: Consecutive Loss & Equity Curve ---
+  consecutiveLosses     Int     @default(0)
+  maxConsecutiveLosses  Int     @default(0)
+  equityCurveStatus      String  @default("NORMAL") // NORMAL, BELOW_MA (halt), RECOVERING
+  equityCurveMaValue     Float   @default(0)
+  sessionPnl             Float   @default(0)  // P&L for current session
+  sessionTrades          Int     @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -235,12 +264,13 @@ model NewsArticle {
   source         String?
   url            String?
   imageUrl       String?
-  sentiment      String   @default("NEUTRAL") // POSITIVE, NEGATIVE, NEUTRAL
+  sentiment      String   @default("NEUTRAL")
   sentimentScore Float    @default(0)
-  symbols        String   @default("[]") // JSON array of related symbols
+  symbols        String   @default("[]")
   publishedAt    DateTime?
   fetchedAt      DateTime @default(now())
-  category       String?  // ECONOMIC, POLITICAL, CENTRAL_BANK, FISCAL, COMMODITY, BREAKING
+  category       String?
+  createdAt      DateTime @default(now())
 }
 
 model EmailNotification {
@@ -248,7 +278,7 @@ model EmailNotification {
   to        String
   subject   String
   body      String
-  status    String   @default("PENDING") // PENDING, SENT, FAILED
+  status    String   @default("PENDING")
   sentAt    DateTime?
   error     String?
   createdAt DateTime @default(now())
@@ -260,16 +290,16 @@ model EmailNotification {
 
 model TradingLog {
   id          String   @id @default(cuid())
-  level       String   // DEBUG, INFO, WARN, ERROR, CRITICAL, FATAL
-  category    String   @default("SYSTEM") // MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT, MONEY_MANAGEMENT, DATA_FEED, AI_ENGINE, SYSTEM, NOTIFICATION, API_RATE_LIMIT
+  level       String
+  category    String   @default("SYSTEM")
   message     String
   source      String?
   details     String?
   stackTrace  String?
   tradeId     String?
   symbol      String?
-  metadata    String   @default("{}") // JSON for extensible context
-  fingerprint  String?  // Hash of (category+message+first50chars) for dedup
+  metadata    String   @default("{}")
+  fingerprint  String?
   createdAt   DateTime @default(now())
 }
 
@@ -279,7 +309,7 @@ model TradingLog {
 
 model ApiRateLimit {
   id            String   @id @default(cuid())
-  service       String   // FINNHUB, MARKETAUX, MT5
+  service       String
   callsThisMinute Int    @default(0)
   callsThisHour   Int    @default(0)
   limitPerMinute Int    @default(60)
@@ -288,4 +318,36 @@ model ApiRateLimit {
   warningSentAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+// ============================================
+// PHASE 3: AUDIT TRAIL
+// ============================================
+
+model AuditTrail {
+  id          String   @id @default(cuid())
+  action      String   // CONFIG_UPDATED, RISK_OVERRIDE, TRADING_ENABLED, TRADING_DISABLED, SYSTEM_SHUTDOWN, MANUAL_INTERVENTION
+  category    String   // RISK_CONFIG, MONEY_MANAGEMENT, MT5_CONNECTION, SYSTEM, TRADE_EXECUTION
+  fieldName   String?  // Which config field changed
+  oldValue    String?  // Previous value
+  newValue    String?  // New value
+  reason      String?  // Why the change was made
+  performedBy String   @default("SYSTEM") // SYSTEM, USER, AUTO_RECOVERY
+  createdAt   DateTime @default(now())
+}
+
+// ============================================
+// PHASE 3: ESCALATION PIPELINE
+// ============================================
+
+model EscalationEvent {
+  id              String   @id @default(cuid())
+  triggerLevel    String   // ERROR, CRITICAL, FATAL
+  triggerCategory String
+  triggerMessage  String
+  escalationLevel Int      @default(1) // 1=logged, 2=alert sent, 3=recovery attempted, 4=emergency action
+  actions         String   @default("[]") // JSON array of actions taken
+  resolved        Boolean  @default(false)
+  resolvedAt      DateTime?
+  createdAt       DateTime @default(now())
 }

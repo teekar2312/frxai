@@ -429,8 +429,11 @@ class LogBuffer {
           fingerprint: entry.fingerprint,
         })),
       })
+      logHealthMonitor.recordFlushSuccess()
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
       console.error("[Logger] FAILED TO FLUSH LOG BUFFER:", err)
+      logHealthMonitor.recordFlushFailure(errMsg)
       this.buffer.unshift(...batch.slice(-20))
     } finally {
       this.isFlushing = false
@@ -440,6 +443,10 @@ class LogBuffer {
   async shutdown() {
     if (this.flushTimer) clearInterval(this.flushTimer)
     await this.flush()
+  }
+
+  size(): number {
+    return this.buffer.length
   }
 }
 
@@ -477,6 +484,13 @@ async function log(level: LogLevel, category: LogCategory, message: string, ctx:
     symbol: ctx.symbol || null,
     metadata: ctx.metadata ? JSON.stringify(ctx.metadata) : "{}",
   })
+
+  // Auto-escalate ERROR, CRITICAL, FATAL
+  if (SEVERITY_PRIORITY[level] >= SEVERITY_PRIORITY["ERROR"]) {
+    try {
+      await escalationManager.escalate(level, category, message, ctx)
+    } catch { /* escalation failure is non-critical, don't recurse */ }
+  }
 }
 
 // Convenience methods
@@ -553,6 +567,449 @@ export async function getLogAnalytics(): Promise<LogAnalytics> {
     bursts,
     topMessages: topMessages.map((g) => ({ message: g.message, count: g._count })),
   }
+}
+
+// ============================================
+// PHASE 3: STRUCTURED ERROR RECOVERY ACTIONS
+// ============================================
+
+export interface RecoveryAction {
+  action: string
+  description: string
+  priority: 'IMMEDIATE' | 'HIGH' | 'MEDIUM' | 'LOW'
+  automated: boolean
+}
+
+/**
+ * Returns suggested recovery actions based on error category and severity level.
+ */
+export function getRecoveryActions(category: LogCategory, level: LogLevel): RecoveryAction[] {
+  // Category + level specific mappings
+  const key = `${category}:${level}` as const
+
+  const MAP: Record<string, RecoveryAction[]> = {
+    'MT5_CONNECTION:CRITICAL': [
+      { action: 'RECONNECT', description: 'Attempt MT5 reconnection', priority: 'IMMEDIATE', automated: true },
+      { action: 'CHECK_NETWORK', description: 'Verify network connectivity', priority: 'IMMEDIATE', automated: false },
+      { action: 'LOG_STATE', description: 'Persist current connection state for diagnostics', priority: 'HIGH', automated: true },
+    ],
+    'MT5_CONNECTION:FATAL': [
+      { action: 'GRACEFUL_SHUTDOWN', description: 'Initiate graceful system shutdown', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send critical connection failure notification', priority: 'IMMEDIATE', automated: true },
+    ],
+    'MT5_CONNECTION:ERROR': [
+      { action: 'RECONNECT', description: 'Attempt MT5 reconnection', priority: 'HIGH', automated: true },
+      { action: 'CHECK_NETWORK', description: 'Verify network connectivity', priority: 'HIGH', automated: false },
+    ],
+    'TRADE_EXECUTION:CRITICAL': [
+      { action: 'VERIFY_POSITIONS', description: 'Verify all open positions match expected state', priority: 'IMMEDIATE', automated: true },
+      { action: 'HALT_TRADING', description: 'Halt new trade submissions temporarily', priority: 'IMMEDIATE', automated: true },
+      { action: 'RECONCILE', description: 'Reconcile local state with broker positions', priority: 'HIGH', automated: false },
+    ],
+    'TRADE_EXECUTION:FATAL': [
+      { action: 'HALT_TRADING', description: 'Halt all trading immediately', priority: 'IMMEDIATE', automated: true },
+      { action: 'VERIFY_POSITIONS', description: 'Verify all open positions', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send emergency trade execution failure notification', priority: 'IMMEDIATE', automated: true },
+    ],
+    'RISK_MANAGEMENT:CRITICAL': [
+      { action: 'CLOSE_ALL', description: 'Close all positions immediately', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send emergency notification', priority: 'IMMEDIATE', automated: true },
+    ],
+    'RISK_MANAGEMENT:FATAL': [
+      { action: 'CLOSE_ALL', description: 'Close all positions immediately', priority: 'IMMEDIATE', automated: true },
+      { action: 'GRACEFUL_SHUTDOWN', description: 'Initiate graceful system shutdown', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send emergency risk management failure notification', priority: 'IMMEDIATE', automated: true },
+    ],
+    'MONEY_MANAGEMENT:ERROR': [
+      { action: 'RESET_SIZING', description: 'Reset to minimum position sizing', priority: 'HIGH', automated: true },
+      { action: 'VERIFY_BALANCE', description: 'Verify account balance accuracy', priority: 'HIGH', automated: true },
+    ],
+    'MONEY_MANAGEMENT:CRITICAL': [
+      { action: 'RESET_SIZING', description: 'Reset to minimum position sizing', priority: 'IMMEDIATE', automated: true },
+      { action: 'HALT_TRADING', description: 'Halt new trade submissions', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send money management critical alert', priority: 'HIGH', automated: true },
+    ],
+    'DATA_FEED:ERROR': [
+      { action: 'SWITCH_SOURCE', description: 'Switch to backup data source', priority: 'MEDIUM', automated: false },
+      { action: 'RECONNECT_FEED', description: 'Reconnect to primary data feed', priority: 'HIGH', automated: true },
+    ],
+    'DATA_FEED:CRITICAL': [
+      { action: 'SWITCH_SOURCE', description: 'Switch to backup data source', priority: 'IMMEDIATE', automated: false },
+      { action: 'HALT_TRADING', description: 'Halt trading until data feed is restored', priority: 'IMMEDIATE', automated: true },
+    ],
+    'AI_ENGINE:ERROR': [
+      { action: 'FALLBACK_STRATEGY', description: 'Switch to fallback trading strategy', priority: 'MEDIUM', automated: true },
+      { action: 'RESTART_ENGINE', description: 'Restart AI engine process', priority: 'HIGH', automated: false },
+    ],
+    'AI_ENGINE:CRITICAL': [
+      { action: 'HALT_AI', description: 'Disable AI-driven trading signals', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Notify of AI engine failure', priority: 'HIGH', automated: true },
+    ],
+    'SYSTEM:CRITICAL': [
+      { action: 'CHECK_HEALTH', description: 'Run full system health diagnostic', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send system critical alert', priority: 'IMMEDIATE', automated: true },
+    ],
+    'SYSTEM:FATAL': [
+      { action: 'GRACEFUL_SHUTDOWN', description: 'Initiate graceful system shutdown', priority: 'IMMEDIATE', automated: true },
+      { action: 'NOTIFY', description: 'Send emergency system failure notification', priority: 'IMMEDIATE', automated: true },
+    ],
+    'NOTIFICATION:ERROR': [
+      { action: 'QUEUE_RETRY', description: 'Queue notifications for retry', priority: 'LOW', automated: true },
+    ],
+    'API_RATE_LIMIT:CRITICAL': [
+      { action: 'BACKOFF', description: 'Enter full API backoff mode', priority: 'IMMEDIATE', automated: true },
+      { action: 'SWITCH_SOURCE', description: 'Switch to lower-frequency data source', priority: 'HIGH', automated: false },
+    ],
+  }
+
+  // Category-only fallback for ERROR level
+  const categoryFallback: Partial<Record<LogCategory, RecoveryAction[]>> = {
+    MT5_CONNECTION: [
+      { action: 'RECONNECT', description: 'Attempt MT5 reconnection', priority: 'HIGH', automated: true },
+    ],
+    TRADE_EXECUTION: [
+      { action: 'VERIFY_POSITIONS', description: 'Verify all open positions', priority: 'HIGH', automated: true },
+    ],
+    RISK_MANAGEMENT: [
+      { action: 'RECALCULATE', description: 'Recalculate risk parameters', priority: 'HIGH', automated: true },
+    ],
+    MONEY_MANAGEMENT: [
+      { action: 'RESET_SIZING', description: 'Reset to minimum position sizing', priority: 'HIGH', automated: true },
+    ],
+    DATA_FEED: [
+      { action: 'SWITCH_SOURCE', description: 'Switch to backup data source', priority: 'MEDIUM', automated: false },
+    ],
+    AI_ENGINE: [
+      { action: 'FALLBACK_STRATEGY', description: 'Switch to fallback trading strategy', priority: 'MEDIUM', automated: true },
+    ],
+    SYSTEM: [
+      { action: 'CHECK_HEALTH', description: 'Check system health', priority: 'HIGH', automated: true },
+    ],
+    NOTIFICATION: [
+      { action: 'QUEUE_RETRY', description: 'Queue notifications for retry', priority: 'LOW', automated: true },
+    ],
+    API_RATE_LIMIT: [
+      { action: 'BACKOFF', description: 'Enter API backoff mode', priority: 'HIGH', automated: true },
+    ],
+  }
+
+  if (MAP[key]) return MAP[key]
+  if (level === 'ERROR' && categoryFallback[category]) return categoryFallback[category]!
+
+  // Universal default
+  return [
+    { action: 'INVESTIGATE', description: 'Manual investigation required', priority: 'MEDIUM', automated: false },
+  ]
+}
+
+// ============================================
+// PHASE 3: LOG HEALTH MONITORING
+// ============================================
+
+export interface LogHealthResult {
+  isHealthy: boolean
+  flushSuccessRate: number
+  totalFlushes: number
+  failedFlushes: number
+  lastFlushTime: Date | null
+  lastFailureTime: Date | null
+  lastFailureReason: string | null
+  bufferBacklog: number
+}
+
+class LogHealthMonitor {
+  private recentFlushes: Array<{ success: boolean; time: Date }> = []
+  private readonly WINDOW_SIZE = 20
+  private _lastFlushTime: Date | null = null
+  private _lastFailureTime: Date | null = null
+  private _lastFailureReason: string | null = null
+  private _totalFlushes = 0
+  private _failedFlushes = 0
+
+  recordFlushSuccess(): void {
+    const now = new Date()
+    this.recentFlushes.push({ success: true, time: now })
+    if (this.recentFlushes.length > this.WINDOW_SIZE) {
+      this.recentFlushes.shift()
+    }
+    this._lastFlushTime = now
+    this._totalFlushes++
+  }
+
+  recordFlushFailure(error: string): void {
+    const now = new Date()
+    this.recentFlushes.push({ success: false, time: now })
+    if (this.recentFlushes.length > this.WINDOW_SIZE) {
+      this.recentFlushes.shift()
+    }
+    this._lastFlushTime = now
+    this._lastFailureTime = now
+    this._lastFailureReason = error
+    this._totalFlushes++
+    this._failedFlushes++
+  }
+
+  getHealth(): LogHealthResult {
+    const successCount = this.recentFlushes.filter(f => f.success).length
+    const flushSuccessRate = this.recentFlushes.length > 0
+      ? (successCount / this.recentFlushes.length) * 100
+      : 100
+
+    const isHealthy = this.recentFlushes.length === 0 || flushSuccessRate >= 90
+
+    return {
+      isHealthy,
+      flushSuccessRate: Math.round(flushSuccessRate * 100) / 100,
+      totalFlushes: this._totalFlushes,
+      failedFlushes: this._failedFlushes,
+      lastFlushTime: this._lastFlushTime,
+      lastFailureTime: this._lastFailureTime,
+      lastFailureReason: this._lastFailureReason,
+      bufferBacklog: getBuffer().size(),
+    }
+  }
+}
+
+export const logHealthMonitor = new LogHealthMonitor()
+
+// ============================================
+// PHASE 3: ALERT ESCALATION PIPELINE
+// ============================================
+
+interface EscalationEventRecord {
+  id: string
+  triggerLevel: LogLevel
+  triggerCategory: LogCategory
+  triggerMessage: string
+  escalationLevel: number
+  actions: string[]
+  resolved: boolean
+  createdAt: Date
+}
+
+class EscalationManager {
+  private recentEvents: EscalationEventRecord[] = []
+  private readonly MAX_EVENTS = 100
+
+  async escalate(
+    level: LogLevel,
+    category: LogCategory,
+    message: string,
+    ctx?: LogContext
+  ): Promise<void> {
+    let escalationLevel: number
+    let actions: string[] = []
+
+    switch (level) {
+      case 'ERROR':
+        escalationLevel = 1
+        break
+      case 'CRITICAL':
+        escalationLevel = 2
+        // Create EscalationEvent in DB for CRITICAL
+        try {
+          const record = await db.escalationEvent.create({
+            data: {
+              triggerLevel: level,
+              triggerCategory: category,
+              triggerMessage: message.substring(0, 500),
+              escalationLevel: 2,
+              actions: JSON.stringify(['LOG_AND_TRACK']),
+              resolved: false,
+            },
+          })
+          this.trackEvent({
+            id: record.id,
+            triggerLevel: level,
+            triggerCategory: category,
+            triggerMessage: message,
+            escalationLevel: 2,
+            actions: ['LOG_AND_TRACK'],
+            resolved: false,
+            createdAt: record.createdAt,
+          })
+        } catch (err) {
+          console.error('[EscalationManager] Failed to persist CRITICAL escalation event:', err)
+        }
+        actions.push('LOG_AND_TRACK')
+        return
+
+      case 'FATAL':
+        escalationLevel = 3
+        // Create EscalationEvent in DB for FATAL
+        const fatalActions: string[] = []
+
+        // Attempt auto-recovery based on category
+        const recoveryAction = this.getAutoRecoveryAction(category)
+        fatalActions.push(recoveryAction)
+        actions.push(recoveryAction)
+
+        try {
+          const record = await db.escalationEvent.create({
+            data: {
+              triggerLevel: level,
+              triggerCategory: category,
+              triggerMessage: message.substring(0, 500),
+              escalationLevel: 3,
+              actions: JSON.stringify(fatalActions),
+              resolved: false,
+            },
+          })
+          this.trackEvent({
+            id: record.id,
+            triggerLevel: level,
+            triggerCategory: category,
+            triggerMessage: message,
+            escalationLevel: 3,
+            actions: fatalActions,
+            resolved: false,
+            createdAt: record.createdAt,
+          })
+        } catch (err) {
+          console.error('[EscalationManager] Failed to persist FATAL escalation event:', err)
+        }
+        return
+
+      default:
+        // DEBUG, INFO, WARN — no escalation
+        return
+    }
+  }
+
+  private getAutoRecoveryAction(category: LogCategory): string {
+    switch (category) {
+      case 'MT5_CONNECTION':
+        return 'suggest_reconnect'
+      case 'TRADE_EXECUTION':
+        return 'verify_all_open_positions'
+      case 'SYSTEM':
+        return 'check_system_health'
+      default:
+        return 'manual_investigation_required'
+    }
+  }
+
+  private trackEvent(event: EscalationEventRecord): void {
+    this.recentEvents.push(event)
+    if (this.recentEvents.length > this.MAX_EVENTS) {
+      this.recentEvents.shift()
+    }
+  }
+
+  async getPendingEscalations(): Promise<EscalationEventRecord[]> {
+    try {
+      const dbEvents = await db.escalationEvent.findMany({
+        where: { resolved: false },
+        orderBy: { createdAt: 'desc' },
+      })
+
+      // Merge in-memory events that may not yet be in DB
+      const merged = new Map<string, EscalationEventRecord>()
+      for (const mem of this.recentEvents) {
+        if (!mem.resolved) merged.set(mem.id, mem)
+      }
+      for (const dbEvt of dbEvents) {
+        merged.set(dbEvt.id, {
+          id: dbEvt.id,
+          triggerLevel: dbEvt.triggerLevel as LogLevel,
+          triggerCategory: dbEvt.triggerCategory as LogCategory,
+          triggerMessage: dbEvt.triggerMessage,
+          escalationLevel: dbEvt.escalationLevel,
+          actions: JSON.parse(dbEvt.actions),
+          resolved: dbEvt.resolved,
+          createdAt: dbEvt.createdAt,
+        })
+      }
+      return Array.from(merged.values()).sort(
+        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+      )
+    } catch (err) {
+      console.error('[EscalationManager] Failed to query pending escalations:', err)
+      // Fall back to in-memory events
+      return this.recentEvents.filter(e => !e.resolved)
+    }
+  }
+
+  async resolveEscalation(id: string): Promise<void> {
+    // Update in-memory
+    const memEvent = this.recentEvents.find(e => e.id === id)
+    if (memEvent) memEvent.resolved = true
+
+    // Update DB
+    try {
+      await db.escalationEvent.update({
+        where: { id },
+        data: { resolved: true, resolvedAt: new Date() },
+      })
+    } catch (err) {
+      console.error(`[EscalationManager] Failed to resolve escalation ${id}:`, err)
+      throw err
+    }
+  }
+}
+
+export const escalationManager = new EscalationManager()
+
+// ============================================
+// PHASE 3: LOG EXPORT API
+// ============================================
+
+/**
+ * Export logs with optional filters in JSON or CSV format.
+ */
+export async function exportLogs(params: {
+  level?: LogLevel
+  category?: LogCategory
+  startDate?: Date
+  endDate?: Date
+  format?: 'json' | 'csv'
+}): Promise<string> {
+  const { level, category, startDate, endDate, format = 'json' } = params
+
+  const where: Record<string, unknown> = {}
+  if (level) where.level = level
+  if (category) where.category = category
+  if (startDate || endDate) {
+    const createdAtFilter: Record<string, unknown> = {}
+    if (startDate) createdAtFilter.gte = startDate
+    if (endDate) createdAtFilter.lte = endDate
+    where.createdAt = createdAtFilter
+  }
+
+  const logs = await db.tradingLog.findMany({
+    where,
+    orderBy: { createdAt: 'desc' },
+    take: 10000,
+  })
+
+  if (format === 'csv') {
+    const headers = 'id,timestamp,level,category,message,source,symbol,tradeId'
+    const rows = logs.map(l => {
+      const id = l.id
+      const timestamp = l.createdAt.toISOString()
+      const lvl = l.level
+      const cat = l.category
+      // Escape double quotes in message
+      const msg = `"${(l.message ?? '').replace(/"/g, '""')}"`
+      const src = l.source ? `"${l.source.replace(/"/g, '""')}"` : ''
+      const sym = l.symbol ?? ''
+      const tid = l.tradeId ?? ''
+      return `${id},${timestamp},${lvl},${cat},${msg},${src},${sym},${tid}`
+    })
+    return [headers, ...rows].join('\n')
+  }
+
+  // Default: JSON format
+  return JSON.stringify(logs.map(l => ({
+    id: l.id,
+    timestamp: l.createdAt.toISOString(),
+    level: l.level,
+    category: l.category,
+    message: l.message,
+    source: l.source,
+    symbol: l.symbol,
+    tradeId: l.tradeId,
+  })), null, 2)
 }
 
 export default logger

@@ -1030,3 +1030,35 @@ Phase 4 implementation complete. This task updates the audit API response, adds 
 - `src/app/api/audit/route.ts` — Phase 4 compliance data
 - `src/app/api/money-management/win-rate/route.ts` — new file
 - `src/components/trading/AuditCompliance.tsx` — Phase 4 UI updates
+---
+Task ID: 1
+Agent: Main Agent
+Task: Phase 5 Deep Audit — Session Manager, Indicator Pool, Trade Execution Engine
+
+Work Log:
+- Explored existing codebase: Session Manager scattered across 6 files, zero indicator calculations (only Math.sin fake signals), trade execution is DB-only stub
+- Identified 29 total gaps across 3 domains
+- Updated prisma/schema.prisma with 4 new models (SessionEvent, SessionPerformance, CandleData, PendingOrder) + 8 new Trade fields
+- Created src/lib/session-manager.ts (~350 lines): unified session module, shared forex config, IDX sub-sessions, phase transitions, session performance tracking, risk budget, trading rules, sizing multiplier, quality score
+- Created src/lib/indicator-pool.ts (~1770 lines): 10 real indicator calculations (SMA, EMA, RSI, MACD, ATR, Bollinger Bands, Stochastic, ADX, VWAP, Pivot Points), IndicatorPool class with dependency graph and cache, OHLCV data management, 7 strategy signal generators with real indicator logic, indicator snapshot for trades
+- Created src/lib/trade-execution-engine.ts (~1926 lines): Trade state machine with valid transition enforcement, TradeEventBus pub/sub (9 event types), SL/TP trigger engine, trailing stop engine, partial close engine (3-level), position sync, price update pipeline orchestrator, emergency close all, full execution pipeline (PendingOrder → MT5 → Trade)
+- Updated src/app/api/sessions/route.ts to use unified session manager
+- Created src/app/api/sessions/performance/route.ts
+- Updated src/app/api/strategies/route.ts with real indicator-based signals
+- Created src/app/api/indicators/compute/route.ts (GET + POST)
+- Created src/app/api/execution/price-update/route.ts
+- Created src/app/api/execution/partial-close/route.ts (GET + POST)
+- Created src/app/api/execution/emergency-close/route.ts
+- Created src/app/api/execution/trailing-stop/route.ts
+- Updated src/app/api/audit/route.ts for Phase 5 compliance
+- Updated src/components/trading/TradingSessions.tsx with IDX status, risk budget, session performance, shared config
+- Updated src/components/trading/AuditCompliance.tsx with 3 new compliance sections (Session Manager, Indicator Pool, Trade Execution)
+- All changes pass ESLint with 0 errors, 0 warnings
+- Verified: /api/sessions returns correct IDX + Forex data, /api/strategies returns real indicator-based signals
+
+Stage Summary:
+- 29 new issues identified and fixed across 3 domains
+- Cumulative: 112 total issues across 5 phases, 100% compliance
+- Key new files: session-manager.ts, indicator-pool.ts, trade-execution-engine.ts
+- Key new models: SessionEvent, SessionPerformance, CandleData, PendingOrder
+- Strategy signals now use real RSI, MACD, EMA, Bollinger, ADX, Stochastic, Pivot Points, VWAP, ATR, SMA

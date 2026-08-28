@@ -3,65 +3,68 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Globe, Clock } from 'lucide-react'
+import { Globe, Clock, Activity, TrendingUp, TrendingDown, AlertTriangle, Timer } from 'lucide-react'
 
+// Import shared session config from the session manager (via API response)
 interface SessionData {
   name: string
   openHour: number
   closeHour: number
   color: string
   colorLight: string
+  isActive: boolean
+  opensIn?: number
+  closesIn?: number
+  city: string
+  timezone: string
+  crossesMidnight: boolean
 }
-
-const SESSIONS: SessionData[] = [
-  { name: 'Sydney', openHour: 21, closeHour: 6, color: '#8b5cf6', colorLight: '#c4b5fd' },
-  { name: 'Tokyo', openHour: 0, closeHour: 9, color: '#f59e0b', colorLight: '#fcd34d' },
-  { name: 'London', openHour: 7, closeHour: 16, color: '#10b981', colorLight: '#6ee7b7' },
-  { name: 'New York', openHour: 12, closeHour: 21, color: '#ef4444', colorLight: '#fca5a5' },
-]
 
 const OVERLAPS = [
   { name: 'Tokyo-London', startHour: 7, endHour: 9, color: '#f97316' },
   { name: 'London-New York', startHour: 12, endHour: 16, color: '#ec4899' },
 ]
 
-interface SessionsResponse {
-  currentUtcHour: number
-  currentUtcMinute: number
-}
-
-function isSessionActive(session: SessionData, currentHour: number): boolean {
-  if (session.openHour < session.closeHour) {
-    return currentHour >= session.openHour && currentHour < session.closeHour
-  }
-  // Wraps midnight (e.g. Sydney 21-6)
-  return currentHour >= session.openHour || currentHour < session.closeHour
-}
-
-function getSessionHourPosition(session: SessionData, hour: number): number | null {
-  if (session.openHour < session.closeHour) {
-    if (hour >= session.openHour && hour < session.closeHour) {
-      return ((hour - session.openHour) / (session.closeHour - session.openHour)) * 100
+interface SessionsApiResponse {
+  success: boolean
+  data: {
+    idx: {
+      phase: string
+      subSession: string
+      isOpen: boolean
+      sessionName: string
+      timeToNextPhase: number
+      nextPhase: string
     }
-    return null
+    currentTime: string
+    utcHour: number
+    isWeekend: boolean
+    sessions: SessionData[]
+    overlaps: Array<{ name: string; sessions: string[]; startHourUtc: number; endHourUtc: number; color: string; isActive: boolean; description: string }>
+    activeSessions: string[]
+    activeOverlaps: string[]
+    recommendation: string
+    sessionPerformance?: {
+      morning: { date: string; sessionType: string; tradesOpened: number; tradesClosed: number; winTrades: number; lossTrades: number; pnl: number; winRate: number } | null
+      afternoon: { date: string; sessionType: string; tradesOpened: number; tradesClosed: number; winTrades: number; lossTrades: number; pnl: number; winRate: number } | null
+      fullDay: { date: string; sessionType: string; tradesOpened: number; tradesClosed: number; winTrades: number; lossTrades: number; pnl: number; winRate: number } | null
+    }
+    riskBudget?: {
+      sessionType: string
+      totalBudget: number
+      usedBudget: number
+      remainingBudget: number
+      usedPct: number
+      isLimitReached: boolean
+      tradesThisSession: number
+    }
   }
-  // Wraps midnight
-  const totalHours = (24 - session.openHour) + session.closeHour
-  let offset: number
-  if (hour >= session.openHour) {
-    offset = hour - session.openHour
-  } else if (hour < session.closeHour) {
-    offset = (24 - session.openHour) + hour
-  } else {
-    return null
-  }
-  return (offset / totalHours) * 100
 }
 
 function getBarStyles(session: SessionData): React.CSSProperties {
-  const totalHours = session.openHour < session.closeHour
-    ? session.closeHour - session.openHour
-    : (24 - session.openHour) + session.closeHour
+  const totalHours = session.crossesMidnight
+    ? (24 - session.openHour) + session.closeHour
+    : session.closeHour - session.openHour
 
   const startPct = (session.openHour / 24) * 100
   const widthPct = (totalHours / 24) * 100
@@ -77,18 +80,29 @@ function getBarStyles(session: SessionData): React.CSSProperties {
   }
 }
 
+function formatCountdown(seconds: number): string {
+  if (seconds >= 3600) {
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    return `${h}h ${m}m`
+  }
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return `${m}m ${s}s`
+}
+
 export default function TradingSessions() {
+  const [data, setData] = useState<SessionsApiResponse | null>(null)
   const [currentHour, setCurrentHour] = useState<number>(new Date().getUTCHours())
   const [currentMinute, setCurrentMinute] = useState<number>(new Date().getUTCMinutes())
   const [loading, setLoading] = useState(true)
 
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/sessions')
+      const res = await fetch('/api/sessions?include=performance')
       if (res.ok) {
-        const json: SessionsResponse = await res.json()
-        setCurrentHour(json.currentUtcHour)
-        setCurrentMinute(json.currentUtcMinute)
+        const json: SessionsApiResponse = await res.json()
+        setData(json)
       }
     } catch {
       // use local time
@@ -99,15 +113,11 @@ export default function TradingSessions() {
 
   useEffect(() => {
     fetchSessions()
-    const interval = setInterval(() => {
-      const now = new Date()
-      setCurrentHour(now.getUTCHours())
-      setCurrentMinute(now.getUTCMinutes())
-    }, 60000)
+    const interval = setInterval(fetchSessions, 30000) // refresh every 30s
     return () => clearInterval(interval)
   }, [fetchSessions])
 
-  // Also update local time every second for the clock
+  // Update clock every second
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date()
@@ -117,8 +127,17 @@ export default function TradingSessions() {
     return () => clearInterval(interval)
   }, [])
 
-  const currentPosPct = ((currentHour + currentMinute / 60) / 24) * 100
+  const sessions = data?.data.sessions ?? []
+  const overlaps = data?.data.overlaps ?? []
+  const idx = data?.data.idx
+  const activeSessions = data?.data.activeSessions ?? []
+  const activeOverlaps = data?.data.activeOverlaps ?? []
+  const performance = data?.data.sessionPerformance
+  const riskBudget = data?.data.riskBudget
+  const recommendation = data?.data.recommendation ?? ''
+  const isWeekend = data?.data.isWeekend ?? false
 
+  const currentPosPct = ((currentHour + currentMinute / 60) / 24) * 100
   const hours = Array.from({ length: 24 }, (_, i) => i)
 
   return (
@@ -134,10 +153,79 @@ export default function TradingSessions() {
         </div>
       </div>
 
-      {/* Session Cards */}
+      {/* IDX Session Status Card */}
+      <Card className="border-l-4 border-l-emerald-500">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Activity className="h-5 w-5 text-emerald-500" />
+              <div>
+                <p className="text-sm font-semibold">IDX Market — {idx?.sessionName ?? 'Loading...'}</p>
+                <p className="text-xs text-muted-foreground">
+                  Phase: {idx?.phase ?? '-'} | Sub-session: {idx?.subSession ?? '-'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant={idx?.isOpen ? 'default' : 'outline'} className={idx?.isOpen ? 'bg-emerald-600' : ''}>
+                {idx?.isOpen ? 'OPEN' : 'CLOSED'}
+              </Badge>
+              {idx && idx.timeToNextPhase < 600 && (
+                <div className="flex items-center gap-1 text-xs text-amber-500">
+                  <Timer className="h-3.5 w-3.5" />
+                  {formatCountdown(idx.timeToNextPhase)}
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Session Risk Budget */}
+          {riskBudget && (
+            <div className="mt-3 grid grid-cols-3 gap-3 text-xs border-t pt-3">
+              <div>
+                <span className="text-muted-foreground">Budget Used</span>
+                <p className="font-medium text-foreground">${riskBudget.usedBudget.toFixed(2)} / ${riskBudget.totalBudget.toFixed(2)}</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Remaining</span>
+                <p className={`font-medium ${riskBudget.isLimitReached ? 'text-red-500' : 'text-emerald-500'}`}>
+                  ${riskBudget.remainingBudget.toFixed(2)} ({100 - riskBudget.usedPct}%)
+                </p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Session Trades</span>
+                <p className="font-medium text-foreground">{riskBudget.tradesThisSession}</p>
+              </div>
+            </div>
+          )}
+          {/* Session Performance Mini */}
+          {performance && (performance.morning || performance.afternoon) && (
+            <div className="mt-3 grid grid-cols-2 gap-3 text-xs border-t pt-3">
+              {performance.morning && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Morning</span>
+                  <span className={`font-medium ${performance.morning.pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                    {performance.morning.pnl >= 0 ? <TrendingUp className="h-3 w-3 inline" /> : <TrendingDown className="h-3 w-3 inline" />}
+                    {' '}${performance.morning.pnl.toFixed(2)} ({performance.morning.winRate.toFixed(0)}% WR)
+                  </span>
+                </div>
+              )}
+              {performance.afternoon && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Afternoon</span>
+                  <span className={`font-medium ${performance.afternoon.pnl >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
+                    {performance.afternoon.pnl >= 0 ? <TrendingUp className="h-3 w-3 inline" /> : <TrendingDown className="h-3 w-3 inline" />}
+                    {' '}${performance.afternoon.pnl.toFixed(2)} ({performance.afternoon.winRate.toFixed(0)}% WR)
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Forex Session Cards */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        {SESSIONS.map((session) => {
-          const active = isSessionActive(session, currentHour)
+        {sessions.map((session) => {
           const closeStr = String(session.closeHour).padStart(2, '0')
           const openStr = String(session.openHour).padStart(2, '0')
           return (
@@ -157,12 +245,18 @@ export default function TradingSessions() {
                   {openStr}:00 - {closeStr}:00 UTC
                 </p>
                 <Badge
-                  variant={active ? 'default' : 'outline'}
-                  className={active ? '' : 'text-muted-foreground'}
-                  style={active ? { backgroundColor: session.color } : {}}
+                  variant={session.isActive ? 'default' : 'outline'}
+                  className={session.isActive ? '' : 'text-muted-foreground'}
+                  style={session.isActive ? { backgroundColor: session.color } : {}}
                 >
-                  {active ? 'Active' : 'Closed'}
+                  {session.isActive ? 'Active' : 'Closed'}
                 </Badge>
+                {session.isActive && session.closesIn && (
+                  <p className="text-[10px] text-muted-foreground">Closes in {session.closesIn}h</p>
+                )}
+                {!session.isActive && session.opensIn && (
+                  <p className="text-[10px] text-muted-foreground">Opens in {session.opensIn}h</p>
+                )}
               </CardContent>
             </Card>
           )
@@ -175,9 +269,7 @@ export default function TradingSessions() {
           <CardTitle className="text-sm font-medium">24-Hour Session Timeline (UTC)</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Timeline Bar */}
           <div className="relative">
-            {/* Hour labels */}
             <div className="flex justify-between mb-1">
               {hours.filter((h) => h % 3 === 0).map((h) => (
                 <span key={h} className="text-[10px] text-muted-foreground font-mono w-0">
@@ -186,17 +278,15 @@ export default function TradingSessions() {
               ))}
             </div>
 
-            {/* Main bar */}
             <div className="relative h-10 rounded-md bg-muted/50 overflow-hidden">
-              {/* Session background segments */}
-              {SESSIONS.map((session) => (
+              {sessions.map((session) => (
                 <div key={session.name} style={getBarStyles(session)} />
               ))}
 
-              {/* Overlap zones - drawn on top with stronger color */}
               {OVERLAPS.map((overlap) => {
                 const leftPct = (overlap.startHour / 24) * 100
                 const widthPct = ((overlap.endHour - overlap.startHour) / 24) * 100
+                const isActive = currentHour >= overlap.startHour && currentHour < overlap.endHour
                 return (
                   <div
                     key={overlap.name}
@@ -213,14 +303,13 @@ export default function TradingSessions() {
                 )
               })}
 
-              {/* Session labels inside bar */}
-              {SESSIONS.map((session) => {
-                const totalHours = session.openHour < session.closeHour
-                  ? session.closeHour - session.openHour
-                  : (24 - session.openHour) + session.closeHour
-                const midPct = session.openHour < session.closeHour
-                  ? ((session.openHour + totalHours / 2) / 24) * 100
-                  : (((session.openHour + totalHours / 2) % 24) / 24) * 100
+              {sessions.map((session) => {
+                const totalHours = session.crossesMidnight
+                  ? (24 - session.openHour) + session.closeHour
+                  : session.closeHour - session.openHour
+                const midPct = session.crossesMidnight
+                  ? (((session.openHour + totalHours / 2) % 24) / 24) * 100
+                  : (((session.openHour + totalHours / 2)) / 24) * 100
                 return (
                   <div
                     key={`label-${session.name}`}
@@ -236,7 +325,6 @@ export default function TradingSessions() {
                 )
               })}
 
-              {/* Current time indicator */}
               <div
                 className="absolute top-0 h-full w-0.5 bg-white z-10"
                 style={{ left: `${currentPosPct}%` }}
@@ -245,7 +333,6 @@ export default function TradingSessions() {
               </div>
             </div>
 
-            {/* Hour labels bottom */}
             <div className="flex justify-between mt-1">
               {hours.filter((h) => h % 3 === 0).map((h) => (
                 <span key={h} className="text-[10px] text-muted-foreground font-mono w-0">
@@ -255,20 +342,19 @@ export default function TradingSessions() {
             </div>
           </div>
 
-          {/* Overlap zones legend */}
           <div className="flex flex-wrap gap-3 pt-2">
-            {OVERLAPS.map((overlap) => {
-              const isOverlapActive = currentHour >= overlap.startHour && currentHour < overlap.endHour
+            {overlaps.map((overlap) => {
+              const isActive = currentHour >= overlap.startHourUtc && currentHour < overlap.endHourUtc
               return (
                 <div key={overlap.name} className="flex items-center gap-2 text-xs">
                   <div
                     className="h-2.5 w-2.5 rounded-sm"
-                    style={{ backgroundColor: overlap.color, opacity: isOverlapActive ? 1 : 0.4 }}
+                    style={{ backgroundColor: overlap.color, opacity: isActive ? 1 : 0.4 }}
                   />
-                  <span className={isOverlapActive ? 'font-medium' : 'text-muted-foreground'}>
-                    {overlap.name} ({String(overlap.startHour).padStart(2, '0')}:00-{String(overlap.endHour).padStart(2, '0')}:00 UTC)
+                  <span className={isActive ? 'font-medium' : 'text-muted-foreground'}>
+                    {overlap.name} ({String(overlap.startHourUtc).padStart(2, '0')}:00-{String(overlap.endHourUtc).padStart(2, '0')}:00 UTC)
                   </span>
-                  {isOverlapActive && (
+                  {isActive && (
                     <Badge variant="outline" className="h-4 text-[10px] px-1" style={{ color: overlap.color, borderColor: overlap.color }}>
                       LIVE
                     </Badge>
@@ -278,23 +364,27 @@ export default function TradingSessions() {
             })}
           </div>
 
-          {/* Session color legend */}
           <div className="flex flex-wrap gap-3 border-t pt-3">
-            {SESSIONS.map((session) => {
-              const active = isSessionActive(session, currentHour)
-              return (
-                <div key={`legend-${session.name}`} className="flex items-center gap-1.5 text-xs">
-                  <div
-                    className="h-2.5 w-2.5 rounded-full"
-                    style={{ backgroundColor: session.color, opacity: active ? 1 : 0.4 }}
-                  />
-                  <span className={active ? 'font-medium' : 'text-muted-foreground'}>{session.name}</span>
-                </div>
-              )
-            })}
+            {sessions.map((session) => (
+              <div key={`legend-${session.name}`} className="flex items-center gap-1.5 text-xs">
+                <div
+                  className="h-2.5 w-2.5 rounded-full"
+                  style={{ backgroundColor: session.color, opacity: session.isActive ? 1 : 0.4 }}
+                />
+                <span className={session.isActive ? 'font-medium' : 'text-muted-foreground'}>{session.name}</span>
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>
+
+      {/* Recommendation */}
+      {recommendation && (
+        <div className={`flex items-center gap-2 rounded-md p-3 text-sm ${isWeekend ? 'bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300' : 'bg-muted'}`}>
+          {isWeekend ? <AlertTriangle className="h-4 w-4" /> : <Globe className="h-4 w-4" />}
+          <span>{recommendation}</span>
+        </div>
+      )}
     </div>
   )
 }

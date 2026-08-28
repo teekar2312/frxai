@@ -1,16 +1,8 @@
 import { NextResponse } from "next/server"
+import { IndicatorPool, computeStrategySignal, fetchCandles, generateMockCandles, storeCandles } from "@/lib/indicator-pool"
+import { checkSessionTradingRules, getSessionSizingMultiplier, getSessionQualityScore } from "@/lib/session-manager"
 
-// Generate a pseudo-random but deterministic signal based on strategy name and current time
-function getSignalForStrategy(strategyName: string): string {
-  const seed = strategyName.length + new Date().getUTCHours() + new Date().getUTCMinutes()
-  const r = Math.sin(seed) * 10000
-  const val = r - Math.floor(r)
-  if (val < 0.3) return "BUY"
-  if (val < 0.6) return "SELL"
-  return "NEUTRAL"
-}
-
-const STRATEGIES = [
+const STRATEGY_DEFINITIONS = [
   {
     id: "ma-ribbon",
     name: "Moving Average Ribbon",
@@ -60,7 +52,7 @@ const STRATEGIES = [
       signalEma: 5,
       confirmationCandles: 2,
     },
-    enabled: false,
+    enabled: true,
   },
   {
     id: "rmi-trend-sync",
@@ -87,7 +79,7 @@ const STRATEGIES = [
       channelType: "Standard",
       meanReversionThreshold: 0.8,
     },
-    enabled: false,
+    enabled: true,
   },
   {
     id: "ema-rsi-filter",
@@ -104,28 +96,61 @@ const STRATEGIES = [
   },
 ]
 
-export async function GET() {
-  try {
-    const strategiesWithSignals = STRATEGIES.map((strategy) => {
-      const signal = getSignalForStrategy(strategy.id)
-      const confidence = Math.round((55 + Math.random() * 40) * 100) / 100
-      const strength = Math.round((0.3 + Math.random() * 0.7) * 100) / 100
+const DEFAULT_SYMBOLS = ["BBCA", "BBRI", "TLKM", "ASII"]
 
-      return {
-        ...strategy,
-        currentSignal: signal,
-        confidence,
-        strength,
-        lastUpdated: new Date().toISOString(),
-        // Generate mock per-symbol signals
-        symbols: [
-          { symbol: "BBCA", signal, confidence: Math.round((confidence - 5 + Math.random() * 10) * 100) / 100 },
-          { symbol: "BBRI", signal: getSignalForStrategy(strategy.id + "BBRI"), confidence: Math.round((50 + Math.random() * 45) * 100) / 100 },
-          { symbol: "TLKM", signal: getSignalForStrategy(strategy.id + "TLKM"), confidence: Math.round((50 + Math.random() * 45) * 100) / 100 },
-          { symbol: "ASII", signal: getSignalForStrategy(strategy.id + "ASII"), confidence: Math.round((50 + Math.random() * 45) * 100) / 100 },
-        ],
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const symbol = searchParams.get("symbol") || "BBCA"
+    const timeframe = searchParams.get("timeframe") || "H1"
+    const refresh = searchParams.get("refresh") === "true"
+
+    // Session rules check
+    const sessionRules = checkSessionTradingRules()
+    const sizingMultiplier = getSessionSizingMultiplier()
+    const qualityScore = getSessionQualityScore()
+
+    // Get candle data
+    let candles = await fetchCandles(symbol, timeframe, 200)
+
+    // If no candles or refresh requested, generate mock data
+    if (candles.length < 50 || refresh) {
+      const mockCandles = generateMockCandles(symbol, timeframe, 200)
+      if (candles.length < 50) {
+        await storeCandles(symbol, timeframe, mockCandles)
       }
-    })
+      candles = mockCandles
+    }
+
+    if (candles.length < 50) {
+      return NextResponse.json({
+        success: false,
+        error: "Insufficient candle data. Generate mock data first.",
+      }, { status: 400 })
+    }
+
+    // Compute signals for all enabled strategies
+    const pool = new IndicatorPool()
+    const strategiesWithSignals = await Promise.all(
+      STRATEGY_DEFINITIONS.map(async (strategy) => {
+        const result = computeStrategySignal(strategy.id, candles)
+
+        return {
+          ...strategy,
+          currentSignal: result.signal,
+          confidence: result.confidence,
+          strength: result.strength,
+          lastUpdated: new Date().toISOString(),
+          indicatorCount: result.indicators.length,
+          // Per-symbol signals (using same candles for demo)
+          symbols: DEFAULT_SYMBOLS.map((sym) => ({
+            symbol: sym,
+            signal: sym === symbol ? result.signal : computeStrategySignal(strategy.id, candles).signal,
+            confidence: sym === symbol ? result.confidence : Math.round((50 + Math.random() * 40) * 100) / 100,
+          })),
+        }
+      })
+    )
 
     const activeStrategies = strategiesWithSignals.filter((s) => s.enabled)
     const buySignals = activeStrategies.filter((s) => s.currentSignal === "BUY").length
@@ -143,13 +168,26 @@ export async function GET() {
           sellSignals,
           neutral: activeStrategies.length - buySignals - sellSignals,
         },
+        session: {
+          tradingAllowed: sessionRules.allowed,
+          reason: sessionRules.reason,
+          sizingMultiplier,
+          qualityScore,
+        },
+        dataInfo: {
+          symbol,
+          timeframe,
+          candleCount: candles.length,
+          latestCandle: candles[candles.length - 1]?.close ?? null,
+          cacheStats: pool.getCacheStats(),
+        },
       },
     })
   } catch (error) {
     console.error("Error fetching strategies:", error)
     return NextResponse.json(
       { success: false, error: "Failed to fetch strategies" },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }

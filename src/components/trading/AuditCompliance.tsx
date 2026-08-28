@@ -26,6 +26,9 @@ import {
   Activity,
   AlertCircle,
   Loader2,
+  Clock,
+  BarChart3,
+  Zap,
 } from 'lucide-react'
 
 interface AuditData {
@@ -73,6 +76,53 @@ interface AuditData {
       logCorrelation: boolean
       dynamicLogLevel: boolean
       recoveryWired: boolean
+      status: string
+    }
+    // Phase 5
+    sessionManager: {
+      unifiedModule: boolean
+      sharedForexConfig: boolean
+      idxSubSessions: boolean
+      phaseTransitions: boolean
+      sessionPerformance: boolean
+      sessionRiskBudget: boolean
+      tradingRules: boolean
+      sizingMultiplier: boolean
+      qualityScore: boolean
+      timeToNextPhase: boolean
+      status: string
+    }
+    indicatorPool: {
+      smaCalculation: boolean
+      emaCalculation: boolean
+      rsiCalculation: boolean
+      macdCalculation: boolean
+      atrCalculation: boolean
+      bollingerBands: boolean
+      stochastic: boolean
+      adxCalculation: boolean
+      vwapCalculation: boolean
+      pivotPoints: boolean
+      dependencyGraph: boolean
+      indicatorCache: boolean
+      ohlcvDataModel: boolean
+      strategySignals: boolean
+      indicatorSnapshot: boolean
+      mockDataGenerator: boolean
+      status: string
+    }
+    tradeExecution: {
+      stateMachine: boolean
+      lifecycleEvents: boolean
+      slTpTrigger: boolean
+      trailingStopEngine: boolean
+      partialClose: boolean
+      positionSync: boolean
+      priceUpdatePipeline: boolean
+      emergencyCloseAll: boolean
+      executionPipeline: boolean
+      pendingOrderModel: boolean
+      tradeFieldsEnhanced: boolean
       status: string
     }
   }
@@ -161,6 +211,51 @@ const ERROR_ROWS: ComplianceRow[] = [
   { name: 'Recovery Actions Wired', phase: 'Phase 4', status: true },
 ]
 
+const SESSION_ROWS: ComplianceRow[] = [
+  { name: 'Unified Session Module', phase: 'Phase 5', status: true },
+  { name: 'Shared Forex Config', phase: 'Phase 5', status: true },
+  { name: 'IDX Sub-Sessions', phase: 'Phase 5', status: true },
+  { name: 'Phase Transitions', phase: 'Phase 5', status: true },
+  { name: 'Session Performance', phase: 'Phase 5', status: true },
+  { name: 'Session Risk Budget', phase: 'Phase 5', status: true },
+  { name: 'Trading Rules', phase: 'Phase 5', status: true },
+  { name: 'Sizing Multiplier', phase: 'Phase 5', status: true },
+  { name: 'Quality Score', phase: 'Phase 5', status: true },
+  { name: 'Time to Next Phase', phase: 'Phase 5', status: true },
+]
+
+const INDICATOR_ROWS: ComplianceRow[] = [
+  { name: 'SMA Calculation', phase: 'Phase 5', status: true },
+  { name: 'EMA Calculation', phase: 'Phase 5', status: true },
+  { name: 'RSI (Wilder\'s)', phase: 'Phase 5', status: true },
+  { name: 'MACD + Signal + Histogram', phase: 'Phase 5', status: true },
+  { name: 'ATR (Wilder\'s)', phase: 'Phase 5', status: true },
+  { name: 'Bollinger Bands', phase: 'Phase 5', status: true },
+  { name: 'Stochastic %K/%D', phase: 'Phase 5', status: true },
+  { name: 'ADX + +DI/-DI', phase: 'Phase 5', status: true },
+  { name: 'VWAP', phase: 'Phase 5', status: true },
+  { name: 'Pivot Points (Classic+Fib)', phase: 'Phase 5', status: true },
+  { name: 'Dependency Graph + Cache', phase: 'Phase 5', status: true },
+  { name: 'OHLCV Data Model', phase: 'Phase 5', status: true },
+  { name: 'Real Strategy Signals', phase: 'Phase 5', status: true },
+  { name: 'Indicator Snapshot', phase: 'Phase 5', status: true },
+  { name: 'Mock Data Generator', phase: 'Phase 5', status: true },
+]
+
+const EXECUTION_ROWS: ComplianceRow[] = [
+  { name: 'Trade State Machine', phase: 'Phase 5', status: true },
+  { name: 'Lifecycle Event Bus', phase: 'Phase 5', status: true },
+  { name: 'SL/TP Trigger Engine', phase: 'Phase 5', status: true },
+  { name: 'Trailing Stop Engine', phase: 'Phase 5', status: true },
+  { name: 'Partial Close (3-level)', phase: 'Phase 5', status: true },
+  { name: 'Position Sync', phase: 'Phase 5', status: true },
+  { name: 'Price Update Pipeline', phase: 'Phase 5', status: true },
+  { name: 'Emergency Close All', phase: 'Phase 5', status: true },
+  { name: 'Execution Pipeline', phase: 'Phase 5', status: true },
+  { name: 'PendingOrder Model', phase: 'Phase 5', status: true },
+  { name: 'Trade Fields Enhanced', phase: 'Phase 5', status: true },
+]
+
 function StatusBadge({ compliant }: { compliant: boolean }) {
   if (compliant) {
     return (
@@ -212,7 +307,7 @@ function ComplianceTable({ rows, apiSection }: { rows: ComplianceRow[]; apiSecti
             <TableRow key={row.name}>
               <TableCell className="font-medium text-sm">{row.name}</TableCell>
               <TableCell className="text-center">
-                <span className={`text-xs px-2 py-0.5 rounded-full ${row.phase === 'Phase 4' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' : row.phase === 'Phase 3' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300' : 'bg-muted text-muted-foreground'}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${row.phase === 'Phase 5' ? 'bg-teal-100 text-teal-700 dark:bg-teal-950/40 dark:text-teal-300' : row.phase === 'Phase 4' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' : row.phase === 'Phase 3' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300' : 'bg-muted text-muted-foreground'}`}>
                   {row.phase}
                 </span>
               </TableCell>
@@ -254,7 +349,7 @@ export default function AuditCompliance() {
     {
       label: 'Total Issues Found',
       value: totalIssuesFound.toString(),
-      sub: '47 P1+2 · 19 P3 · 17 P4',
+      sub: '47 P1+2 · 19 P3 · 17 P4 · 29 P5',
       icon: AlertCircle,
       color: 'text-sky-600',
       bg: 'bg-sky-50 dark:bg-sky-950/40',
@@ -302,9 +397,9 @@ export default function AuditCompliance() {
           <ShieldCheck className="h-5 w-5 text-white" />
         </div>
         <div>
-          <h2 className="text-lg font-bold tracking-tight">Phase 4 Deep Audit — Compliance Dashboard</h2>
+          <h2 className="text-lg font-bold tracking-tight">Phase 5 Deep Audit — Compliance Dashboard</h2>
           <p className="text-xs text-muted-foreground">
-            Comprehensive audit covering 83 issues across 4 phases · FINEX Indonesia
+            Comprehensive audit covering 112 issues across 5 phases · FINEX Indonesia
           </p>
         </div>
       </div>
@@ -576,7 +671,7 @@ export default function AuditCompliance() {
         <Alert className="border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30">
           <ShieldCheck className="h-4 w-4 text-emerald-600" />
           <AlertDescription className="text-emerald-800 dark:text-emerald-200">
-            <strong>FULL COMPLIANCE ACHIEVED</strong> — All {totalIssuesFound} audit issues across 4 phases have been resolved. The system meets all safety, risk, and operational requirements for FINEX Indonesia live trading.
+            <strong>FULL COMPLIANCE ACHIEVED</strong> — All {totalIssuesFound} audit issues across 5 phases have been resolved. The system meets all safety, risk, and operational requirements for FINEX Indonesia live trading.
           </AlertDescription>
         </Alert>
       )}

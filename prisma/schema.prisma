@@ -43,6 +43,15 @@ model Trade {
   sizingMethod    String?  // Which money management method was used
   riskAmount      Float?   // Dollar risk at trade open
   sector          String?  // Sector classification for correlation
+  // --- Phase 5: Trade Execution Engine ---
+  parentId        String?  // For partial closes: references the original trade
+  originalLotSize Float?   // Lot size before any partial closes
+  partialCloses   Int      @default(0) // Number of partial closes executed
+  highestPrice    Float?   // Track highest price since open (for trailing stop)
+  lowestPrice     Float?   // Track lowest price since open (for trailing stop)
+  lastSlAdjust    DateTime? // Last time SL was adjusted by trailing stop
+  executionState  String   @default("FILLED") // FILLED, PARTIAL_FILLED, PENDING_CANCEL, CANCELLED
+  indicatorSnapshot String? @default("{}") // JSON: indicator values at trade open
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
@@ -350,4 +359,82 @@ model EscalationEvent {
   resolved        Boolean  @default(false)
   resolvedAt      DateTime?
   createdAt       DateTime @default(now())
+}
+
+// ============================================
+// PHASE 5: SESSION MANAGER
+// ============================================
+
+model SessionEvent {
+  id            String   @id @default(cuid())
+  sessionType   String   // FOREX, IDX_MORNING, IDX_AFTERNOON, IDX_FULL
+  fromPhase     String   // Previous trading phase
+  toPhase       String   // New trading phase
+  eventAction   String   // SESSION_OPEN, SESSION_CLOSE, PHASE_TRANSITION, SESSION_LIMIT_REACHED
+  details       String?
+  createdAt     DateTime @default(now())
+}
+
+model SessionPerformance {
+  id            String   @id @default(cuid())
+  date          String   // YYYY-MM-DD
+  sessionType   String   // MORNING, AFTERNOON, FULL_DAY
+  tradesOpened  Int      @default(0)
+  tradesClosed  Int      @default(0)
+  winTrades     Int      @default(0)
+  lossTrades    Int      @default(0)
+  pnl           Float    @default(0)
+  winRate       Float    @default(0)
+  avgPnl        Float    @default(0)
+  bestTrade     Float    @default(0)
+  worstTrade    Float    @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([date, sessionType])
+}
+
+// ============================================
+// PHASE 5: OHLCV CANDLE DATA
+// ============================================
+
+model CandleData {
+  id        String   @id @default(cuid())
+  symbol    String
+  timeframe String   // M1, M5, M15, H1, H4, D1
+  openTime  DateTime // Candle open timestamp
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Int      @default(0)
+
+  @@unique([symbol, timeframe, openTime])
+  @@index([symbol, timeframe, openTime(sort: Desc)])
+}
+
+// ============================================
+// PHASE 5: PENDING ORDERS
+// ============================================
+
+model PendingOrder {
+  id            String   @id @default(cuid())
+  orderId       String?  // MT5 order ticket once submitted
+  symbol        String
+  orderType     String   // MARKET, LIMIT, STOP, STOP_LIMIT
+  direction     String   // BUY or SELL
+  lotSize       Float
+  price         Float?  // Limit/stop price (null for market orders)
+  sl            Float?
+  tp            Float?
+  status        String   @default("PENDING") // PENDING, SUBMITTED, PARTIAL_FILLED, FILLED, CANCELLED, REJECTED, EXPIRED
+  reason        String?  // If rejected/cancelled
+  mt5ErrorCode  Int?
+  mt5ErrorDesc  String?
+  strategy      String?
+  timeframe     String?
+  linkedTradeId String?  // Trade ID once filled
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }

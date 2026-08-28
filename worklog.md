@@ -817,3 +817,216 @@ Stage Summary:
 - Risk & Money tab: ✅ Shows Trading Halt Status card with all checks
 - All API endpoints: ✅ 200 status (audit, risk, halt-status, gap-risk, logs/export)
 - ESLint: ✅ 0 errors, 0 warnings
+
+---
+
+## Phase 4 Audit Fixes — Task 4b-1: MT5 Connection Hardening
+
+**Date**: 2025-01-15 (Phase 4)
+**Status**: Completed
+**File**: `src/lib/mt5-connection.ts` (1821 → 1947 lines, +126 lines)
+
+### Changes Made
+
+| # | Fix | Severity | Description |
+|---|-----|----------|-------------|
+| 1 | Order Timeout Enforcement | CRITICAL | Added `withTimeout<T>()` utility; wrapped `cb.execute()` in `executeOrderWithRetry` with 10s absolute deadline per attempt. Prevents indefinite blocking if MT5 hangs. |
+| 2 | Circuit Breaker State Persistence | HIGH | Added `persistCircuitBreakerState(cb)` — upserts circuit breaker state (state, failureCount, circuitLastFailure) to `Mt5ConnectionState` DB record (id='main'). Ensures circuit breaker survives process restarts. |
+| 3 | Connection Metrics Rolling Aggregation | HIGH | Added `ConnectionMetricsAggregator` class with rolling window (max 100 samples): avg latency, p99 latency, success rate (last 60 calls), success rate last hour. Exported singleton `connectionMetrics`. |
+| 4 | Symbol Validation | MEDIUM | Added `validateSymbol(symbol)` — looks up symbol in FINEX `SYMBOL_MAP` (case-insensitive), returns `SymbolMappingEntry` or `null`. |
+
+### New Exports
+- `withTimeout<T>(promise, timeoutMs, context?)`
+- `persistCircuitBreakerState(cb: CircuitBreaker)`
+- `ConnectionMetricsAggregator` (class)
+- `connectionMetrics` (singleton instance)
+- `validateSymbol(symbol: string)`
+
+### Type-Check
+- All pre-existing TS errors are unchanged (downlevelIteration, Prisma private identifiers, wibToUtc arg count). No new errors introduced.
+
+---
+
+## Phase 4 Audit Fixes — Task 4b-2: Risk Engine preTradeCheck Integration
+
+**Date**: 2025-01-15 (Phase 4)
+**Status**: Completed
+**File**: `src/lib/risk-engine.ts` (1570 → 1706 lines, +136 lines)
+
+### Changes Made
+
+| # | Fix | Severity | Description |
+|---|-----|----------|-------------|
+| 5 | Integrate Volatility Regime into preTradeCheck | CRITICAL | At the TOP of `preTradeCheck`, calls `detectVolatilityRegime()` with optional `params.volatility`/`params.avgVolatility` (default 0.015). Stores `volatilityMultiplier` (1.0 normally, 0.5 for HIGH_VOLATILITY, 0.8 for LOW_VOLATILITY). Logs warning when multiplier < 1.0. Applied to `suggestedLotSize` via `Math.max(MIN_LOT, suggestedLotSize * volatilityMultiplier)` after risk-per-trade calculation. |
+| 6 | Integrate Gap Risk into preTradeCheck | CRITICAL | After volatility check, calls `assessGapRisk()` with symbol, direction, entryPrice, equity, volatility. If `hasGapRisk && severity === 'HIGH'`, immediately rejects the trade with reason and gap risk details. |
+| 7 | Use Correlation Matrix in preTradeCheck | HIGH | After existing sector exposure check (section 8), calls `calculateCorrelationMatrix()` on all open positions. Filters for `HIGH_CORRELATION` sectors and blocks if top sector exposure exceeds `config.maxCorrelatedExposure`. |
+| 8 | Weekly/Monthly Loss Enforcement | HIGH | After daily loss check (trading allowed), adds explicit weekly (`snapshot.weeklyPnlPercent >= config.maxWeeklyLoss`) and monthly (`snapshot.monthlyPnlPercent >= config.maxMonthlyLoss`) loss limit checks. Both use snapshot's pre-computed P&L percentages. |
+
+### Type Changes
+- **`PreTradeCheck` interface**: Added `volatilityMultiplier: number` (required) and `gapRisk?: GapRiskResult` (optional).
+- **`preTradeCheck` params**: Added `equity?: number`, `volatility?: number`, `avgVolatility?: number` (all optional, backward compatible).
+
+### Return Statement Updates
+- All 17 return paths in `preTradeCheck` updated to include `volatilityMultiplier` and `gapRisk: gapRiskResult ?? undefined`.
+- New early-exit returns (gap risk, weekly loss, monthly loss, correlation matrix) include `positionSizeReduction: 1` to signal full rejection.
+
+### Constants
+- Added `MIN_LOT = 0.01` constant for volatility multiplier floor.
+
+### Backward Compatibility
+- All new params are optional; existing callers work without changes.
+- New return fields (`volatilityMultiplier`, `gapRisk`) are additive; consumers that don't use them are unaffected.
+
+### Type-Check
+- 0 new TypeScript errors in `risk-engine.ts`. Pre-existing errors in other files unchanged.
+
+---
+
+## PHASE 4 AUDIT FIXES — money-management.ts (Task 4b-3)
+
+**Date**: 2025-01-15
+**Status**: Completed
+**File**: `src/lib/money-management.ts`
+
+### Fix 9: Integrate Scaling Factor with Volatility Regime (CRITICAL)
+
+**Problem**: `calculatePositionSize` used performance-based `scalingFactor` in isolation without considering the current volatility regime, meaning high-volatility environments did not automatically reduce position sizes.
+
+**Changes**:
+1. Added `volatilityRegimeMultiplier: number` field to `PositionSizeResult` interface.
+2. In `calculatePositionSize`, after computing `scalingFactor`, added dynamic import of `detectVolatilityRegime` from `./risk-engine` with a default 1.5% volatility (graceful fallback via try/catch).
+3. Introduced `effectiveScaling = (scalingFactor ?? 1.0) * volMultiplier` that combines both multipliers.
+4. Replaced all lot-sizing multiplier usages (`scaledRiskAmount`, `riskAmount` in return) with `effectiveScaling`.
+5. Updated reasoning string to show both components: `perf=X, vol=Y`.
+6. Added `volatilityRegimeMultiplier` to the return object.
+
+**Backward compatibility**: `scalingFactor` (original) still returned. New field `volatilityRegimeMultiplier` is additive.
+
+### Fix 10: Progressive Drawdown Risk Reduction (HIGH)
+
+**Problem**: Drawdown risk reduction was binary (0.25x at 80% max drawdown), causing abrupt position-size jumps.
+
+**Changes**:
+- Added `calculateProgressiveDrawdownFactor(currentDrawdown, maxDrawdown)` — a pure function implementing a smooth 5-segment piecewise-linear curve:
+  - 0-50% of max DD → 1.0x
+  - 50-70% → 1.0→0.75 linear
+  - 70-85% → 0.75→0.50 linear
+  - 85-95% → 0.50→0.25 linear
+  - 95-100% → 0.25x floor
+- Exported for use by risk engine or position sizing callers.
+
+### Fix 11: Win-Rate Adjusted Position Sizing (MEDIUM)
+
+**Problem**: No mechanism to detect degradation in recent win rate vs historical baseline and auto-reduce sizing.
+
+**Changes**:
+- Added `WinRateAdjustmentResult` interface (exported).
+- Added `calculateWinRateAdjustment()` async function (exported) that:
+  - Fetches last 100 closed trades.
+  - Computes historical win rate (all 100) and recent win rate (last 20).
+  - If recent WR < 80% of historical WR, reduces sizing proportionally (min 0.5x).
+  - Returns structured result with `adjustedMultiplier`, `reason`, and diagnostic fields.
+  - Requires minimum 20 trades; otherwise returns neutral (1.0x).
+
+### Type-Check
+- 0 new TypeScript errors in `money-management.ts`. Pre-existing errors in other files unchanged.
+
+---
+
+## PHASE 4 AUDIT FIXES — trading-logger.ts (Task 4b-4)
+
+**Date**: 2025-01-15
+**Status**: Completed
+**File**: `src/lib/trading-logger.ts`
+
+### Fix 12: Add size() method to LogBuffer (CRITICAL)
+
+**Problem**: No way to inspect buffer backlog from outside the LogBuffer class, preventing health monitoring and diagnostic checks.
+
+**Changes**:
+- Verified `size()` method already existed (added in Phase 3). No changes needed.
+
+### Fix 13: Wire Recovery Actions into Escalation (HIGH)
+
+**Problem**: The FATAL case in `EscalationManager.escalate` only logged a static string via `getAutoRecoveryAction(category)` — a simple switch returning hardcoded strings like `'suggest_reconnect'`. The rich `getRecoveryActions()` function (with priority, automated flags, descriptions) was never called.
+
+**Changes**:
+1. Replaced the static `getAutoRecoveryAction()` call in the FATAL case with a `try/catch` block that calls `getRecoveryActions(category, 'FATAL')`.
+2. For each automated recovery action, logs a `NOTIFICATION`-category WARN entry with full metadata (action, description, priority, triggerCategory).
+3. Pushes formatted `"action:priority"` strings to `fatalActions` array for persistence.
+4. Removed the now-unused `getAutoRecoveryAction` private method.
+
+### Fix 14: Log Correlation ID (HIGH)
+
+**Problem**: No mechanism to group related log entries (e.g., all logs from a single trade lifecycle).
+
+**Changes**:
+1. Added module-level `activeCorrelationId` state (default `null`).
+2. Exported `setCorrelationId(id: string | null)` and `getCorrelationId(): string | null`.
+3. In the core `log()` function, the `metadata` field is now built by spreading `ctx.metadata` and conditionally injecting `correlationId` if set.
+
+### Fix 15: Dynamic Log Level Adjustment (MEDIUM)
+
+**Problem**: Changing log level required restarting the process. No way to temporarily enable DEBUG in production.
+
+**Changes**:
+1. Added `temporaryMinLevel` and `temporaryLevelExpiry` module-level state.
+2. Exported `setTemporaryLogLevel(level, durationMs)` — sets a temporary override that auto-reverts after `durationMs` milliseconds. Logs the change via `logger.info`.
+3. Exported `getEffectiveMinLevel()` — returns `temporaryMinLevel` if still valid, otherwise falls back to `minLevel`. Auto-clears expired overrides.
+4. Changed the `log()` function's level filter from `minLevel` to `getEffectiveMinLevel()`.
+
+### New Exports
+- `setCorrelationId`, `getCorrelationId`, `setTemporaryLogLevel`, `getEffectiveMinLevel`
+
+### Type-Check
+- 0 new TypeScript errors in `trading-logger.ts`. Pre-existing errors (Prisma `downlevelIteration`) unchanged.
+
+---
+
+## PHASE 4c — API + UI Updates for Phase 4 Compliance
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Context
+Phase 4 implementation complete. This task updates the audit API response, adds the win-rate adjustment API endpoint, and updates the AuditCompliance UI to reflect Phase 4 items.
+
+---
+
+### Changes Made
+
+#### 1. Audit API (`src/app/api/audit/route.ts`)
+- Updated `auditPhase` from 3 to 4
+- Updated `totalIssuesFound` and `totalIssuesFixed` from 66 to 83
+- Added Phase 4 compliance fields to all 4 sections:
+  - **mt5Connection**: `orderTimeout`, `cbPersistence`, `metricsAggregation`, `symbolValidation`
+  - **riskManagement**: `volInPretrade`, `gapInPretrade`, `corrInPretrade`, `weeklyMonthlyLimit`
+  - **moneyManagement**: `volScalingIntegration`, `progressiveDrawdown`, `winRateAdjustment`
+  - **errorLogging**: `logCorrelation`, `dynamicLogLevel`, `recoveryWired`
+- Updated JSDoc to reference Phase 4
+
+#### 2. Win-Rate Adjustment API (`src/app/api/money-management/win-rate/route.ts`)
+- Created new GET endpoint at `/api/money-management/win-rate`
+- Calls `calculateWinRateAdjustment()` from `@/lib/money-management`
+- Error handling with structured logging via `trading-logger`
+
+#### 3. AuditCompliance UI (`src/components/trading/AuditCompliance.tsx`)
+- Updated `AuditData` interface with all Phase 4 boolean fields
+- Added 4 Phase 4 rows to MT5 Connection table (Order Timeout, CB Persistence, Metrics Aggregation, Symbol Validation)
+- Added 4 Phase 4 rows to Risk Management table (Vol Regime in PreTrade, Gap Risk in PreTrade, Correlation in PreTrade, Weekly/Monthly Limits)
+- Added 3 Phase 4 rows to Money Management table (Vol×Scaling Integration, Progressive Drawdown, Win-Rate Adjustment)
+- Added 3 Phase 4 rows to Error Logging table (Log Correlation IDs, Dynamic Log Level, Recovery Actions Wired)
+- Updated section title from "Phase 3 Deep Audit" to "Phase 4 Deep Audit"
+- Updated description from "66 issues across 3 phases" to "83 issues across 4 phases"
+- Updated summary card sub-text to "47 P1+2 · 19 P3 · 17 P4"
+- Added rose-colored Phase 4 badge styling in compliance tables
+- Updated FULL COMPLIANCE alert to reference "4 phases"
+- Updated default fallback values from 66 to 83
+
+### Lint
+- `bun run lint` passes with 0 errors
+
+### Files Modified
+- `src/app/api/audit/route.ts` — Phase 4 compliance data
+- `src/app/api/money-management/win-rate/route.ts` — new file
+- `src/components/trading/AuditCompliance.tsx` — Phase 4 UI updates

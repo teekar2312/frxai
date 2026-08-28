@@ -71,6 +71,55 @@ const SEVERITY_COLORS: Record<LogLevel, string> = {
 
 const RESET = "\x1b[0m"
 
+// ============================================
+// PHASE 4: LOG CORRELATION
+// ============================================
+
+let activeCorrelationId: string | null = null
+
+/**
+ * Set a correlation ID that will be attached to all subsequent log entries.
+ * Useful for grouping logs from a single trade lifecycle.
+ */
+export function setCorrelationId(id: string | null): void {
+  activeCorrelationId = id
+}
+
+/** Get the current correlation ID */
+export function getCorrelationId(): string | null {
+  return activeCorrelationId
+}
+
+// ============================================
+// PHASE 4: DYNAMIC LOG LEVEL OVERRIDE
+// ============================================
+
+let temporaryMinLevel: LogLevel | null = null
+let temporaryLevelExpiry = 0
+
+/**
+ * Temporarily set minimum log level (auto-reverts after durationMs).
+ * Useful for temporarily enabling DEBUG logging in production.
+ */
+export function setTemporaryLogLevel(level: LogLevel, durationMs: number): void {
+  temporaryMinLevel = level
+  temporaryLevelExpiry = Date.now() + durationMs
+  logger.info('SYSTEM', `Temporary log level set to ${level} for ${durationMs}ms`, {
+    metadata: { previousLevel: minLevel, temporaryLevel: level, durationMs },
+  })
+}
+
+/** Get the effective minimum level (considering temporary overrides) */
+export function getEffectiveMinLevel(): LogLevel {
+  if (temporaryMinLevel && Date.now() < temporaryLevelExpiry) {
+    return temporaryMinLevel
+  }
+  if (temporaryMinLevel && Date.now() >= temporaryLevelExpiry) {
+    temporaryMinLevel = null
+  }
+  return minLevel
+}
+
 // Simple String Hash (non-crypto, for dedup fingerprint)
 
 function simpleHash(str: string): string {
@@ -468,7 +517,8 @@ export function getMinLevel(): LogLevel { return minLevel }
 
 // Core log function
 async function log(level: LogLevel, category: LogCategory, message: string, ctx: LogContext = {}) {
-  if (SEVERITY_PRIORITY[level] < SEVERITY_PRIORITY[minLevel]) return
+  const effectiveLevel = getEffectiveMinLevel()
+  if (SEVERITY_PRIORITY[level] < SEVERITY_PRIORITY[effectiveLevel]) return
 
   const stackTrace =
     level === "ERROR" || level === "CRITICAL" || level === "FATAL"
@@ -482,7 +532,13 @@ async function log(level: LogLevel, category: LogCategory, message: string, ctx:
     stackTrace,
     tradeId: ctx.tradeId || null,
     symbol: ctx.symbol || null,
-    metadata: ctx.metadata ? JSON.stringify(ctx.metadata) : "{}",
+    metadata: (() => {
+      const metaObj = ctx.metadata ? { ...ctx.metadata } : {}
+      if (activeCorrelationId) {
+        metaObj.correlationId = activeCorrelationId
+      }
+      return JSON.stringify(metaObj)
+    })(),
   })
 
   // Auto-escalate ERROR, CRITICAL, FATAL
@@ -839,10 +895,21 @@ class EscalationManager {
         // Create EscalationEvent in DB for FATAL
         const fatalActions: string[] = []
 
-        // Attempt auto-recovery based on category
-        const recoveryAction = this.getAutoRecoveryAction(category)
-        fatalActions.push(recoveryAction)
-        actions.push(recoveryAction)
+        // Phase 4: Actually wire recovery actions
+        try {
+          const actions_list = getRecoveryActions(category, 'FATAL')
+          for (const act of actions_list) {
+            if (act.automated) {
+              logger.warn('NOTIFICATION', `Auto-recovery action: ${act.action} — ${act.description}`, {
+                metadata: { triggerCategory: category, action: act.action, priority: act.priority, automated: act.automated },
+              })
+            }
+            fatalActions.push(`${act.action}:${act.priority}`)
+          }
+        } catch (e) {
+          console.error('[EscalationManager] Error getting recovery actions:', e)
+        }
+        actions.push(...fatalActions)
 
         try {
           const record = await db.escalationEvent.create({
@@ -873,19 +940,6 @@ class EscalationManager {
       default:
         // DEBUG, INFO, WARN — no escalation
         return
-    }
-  }
-
-  private getAutoRecoveryAction(category: LogCategory): string {
-    switch (category) {
-      case 'MT5_CONNECTION':
-        return 'suggest_reconnect'
-      case 'TRADE_EXECUTION':
-        return 'verify_all_open_positions'
-      case 'SYSTEM':
-        return 'check_system_health'
-      default:
-        return 'manual_investigation_required'
     }
   }
 

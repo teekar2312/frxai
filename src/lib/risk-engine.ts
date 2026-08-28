@@ -75,6 +75,9 @@ export interface PreTradeCheck {
   suggestedLotSize: number         // Lot size within risk limits
   warnings: string[]
   positionSizeReduction?: number   // 0-1, fraction to reduce size by (e.g. 0.5 for 50% reduction at PROACTIVE_60)
+  // --- Phase 4 fields ---
+  volatilityMultiplier: number     // Risk multiplier from volatility regime detection
+  gapRisk?: GapRiskResult          // Gap risk assessment result
 }
 
 export interface RiskSnapshot {
@@ -207,6 +210,9 @@ export const SYMBOL_SECTORS: Record<string, string> = {
   // Property
   BSDE: "Property", CTRA: "Property",
 }
+
+// ---- Constants ----
+const MIN_LOT = 0.01
 
 // ---- Default Config ----
 
@@ -779,14 +785,19 @@ async function buildPhase3SnapshotFields(): Promise<{
  * Pre-trade risk validation. Call this BEFORE creating any trade.
  *
  * Checks (in order):
+ *  0. Phase 4: Volatility regime risk multiplier
+ *  0b. Phase 4: Gap risk assessment (blocks on HIGH severity)
  *  1. Trading allowed? (global block)
+ *  1b. Phase 4: Weekly loss limit check
+ *  1c. Phase 4: Monthly loss limit check
+ *  1d. Proactive 60% zone: reduce sizes 50%
  *  2. Position limit
  *  3. Lot size limits (per trade, per symbol)
  *  4. Minimum lot check
  *  5. Calculate risk amount (including slippage)
- *  6. Risk per trade limit
+ *  6. Risk per trade limit + apply volatility multiplier to lot size
  *  7. No stop loss warning
- *  8. Correlation risk (sector)
+ *  8. Correlation risk (sector) + Phase 4: Correlation matrix check
  *  9. Margin usage after trade
  * 10. Cooldown after loss
  * 11. Portfolio-level risk cap
@@ -805,13 +816,57 @@ export async function preTradeCheck(params: {
   strategy?: string | null
   aiConfidence?: number | null
   expectedSlippage?: number | null
+  // --- Phase 4 fields ---
+  equity?: number
+  volatility?: number
+  avgVolatility?: number
 }): Promise<PreTradeCheck> {
   const config = await getRiskConfig()
   const snapshot = await getRiskSnapshot()
   const warnings: string[] = []
   let positionSizeReduction = 0
 
-  // ---- 1. Trading allowed? ----
+  // Phase 4: Volatility regime risk multiplier
+  let volatilityMultiplier = 1.0
+  try {
+    const volResult = detectVolatilityRegime({
+      recentVolatility: params.volatility ?? 0.015,
+      avgVolatility: params.avgVolatility ?? 0.015,
+    })
+    volatilityMultiplier = volResult.riskMultiplier
+    if (volatilityMultiplier < 1.0) {
+      logger.warn('RISK_MANAGEMENT', `Volatility regime adjustment: ${volResult.regime} (${volatilityMultiplier}x risk)`, {
+        metadata: { symbol: params.symbol, regime: volResult.regime, multiplier: volatilityMultiplier },
+      })
+    }
+  } catch { /* non-critical, default 1.0 */ }
+
+  // Phase 4: Gap risk check
+  let gapRiskResult: GapRiskResult | null = null
+  try {
+    gapRiskResult = await assessGapRisk({
+      symbol: params.symbol,
+      direction: params.direction,
+      entryPrice: params.entryPrice,
+      equity: params.equity || 0,
+      volatility: params.volatility,
+    })
+    if (gapRiskResult.hasGapRisk && gapRiskResult.severity === 'HIGH') {
+      return {
+        approved: false,
+        reason: `Gap risk too high (${gapRiskResult.estimatedMaxGapPct}% estimated). ${gapRiskResult.recommendation}.`,
+        riskAmount: gapRiskResult.riskAmount,
+        riskPercent: 0,
+        suggestedLotSize: 0,
+        warnings,
+        positionSizeReduction: 1,
+        volatilityMultiplier,
+        gapRisk: gapRiskResult,
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // ---- 1. Trading allowed? (global block) ----
   if (!snapshot.isTradingAllowed) {
     return {
       approved: false,
@@ -820,6 +875,38 @@ export async function preTradeCheck(params: {
       riskPercent: 0,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
+    }
+  }
+
+  // Phase 4: Weekly loss limit check
+  if (snapshot.weeklyPnlPercent < 0 && Math.abs(snapshot.weeklyPnlPercent) >= config.maxWeeklyLoss) {
+    return {
+      approved: false,
+      reason: `Weekly loss limit reached: ${Math.abs(snapshot.weeklyPnlPercent).toFixed(2)}% / ${config.maxWeeklyLoss}%`,
+      riskAmount: 0,
+      riskPercent: 0,
+      suggestedLotSize: 0,
+      warnings,
+      positionSizeReduction: 1,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
+    }
+  }
+
+  // Phase 4: Monthly loss limit check
+  if (snapshot.monthlyPnlPercent < 0 && Math.abs(snapshot.monthlyPnlPercent) >= config.maxMonthlyLoss) {
+    return {
+      approved: false,
+      reason: `Monthly loss limit reached: ${Math.abs(snapshot.monthlyPnlPercent).toFixed(2)}% / ${config.maxMonthlyLoss}%`,
+      riskAmount: 0,
+      riskPercent: 0,
+      suggestedLotSize: 0,
+      warnings,
+      positionSizeReduction: 1,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -842,6 +929,8 @@ export async function preTradeCheck(params: {
       riskPercent: 0,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -854,6 +943,8 @@ export async function preTradeCheck(params: {
       riskPercent: 0,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -868,6 +959,8 @@ export async function preTradeCheck(params: {
       riskPercent: 0,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -880,6 +973,8 @@ export async function preTradeCheck(params: {
       riskPercent: 0,
       suggestedLotSize: 0.01,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -932,6 +1027,9 @@ export async function preTradeCheck(params: {
     warnings.push(`Risk $${riskAmount.toFixed(2)} exceeds max $${maxRiskDollar.toFixed(2)} (${config.maxRiskPerTrade}%)`)
   }
 
+  // Phase 4: Apply volatility regime multiplier to suggested lot size
+  suggestedLotSize = Math.max(MIN_LOT, suggestedLotSize * volatilityMultiplier)
+
   // ---- 7. No stop loss? ----
   if (!params.sl) {
     warnings.push("No stop loss set - this increases uncontrolled risk")
@@ -950,6 +1048,28 @@ export async function preTradeCheck(params: {
     }
   }
 
+  // Phase 4: Correlation matrix check
+  const correlationResult = calculateCorrelationMatrix(
+    snapshot.positions.map(p => ({ symbol: p.symbol, sector: SYMBOL_SECTORS[p.symbol] || 'Unknown', margin: p.margin, pnl: p.pnl }))
+  )
+  const highCorrSectors = correlationResult.sectors.filter(s => s.correlationGroup === 'HIGH_CORRELATION')
+  if (highCorrSectors.length > 0) {
+    const topSector = highCorrSectors[0]
+    if (topSector.exposure > config.maxCorrelatedExposure) {
+      return {
+        approved: false,
+        reason: `Sector ${topSector.sector} has HIGH correlation risk: ${topSector.exposure}% exposure exceeds ${config.maxCorrelatedExposure}% limit`,
+        riskAmount: 0,
+        riskPercent: 0,
+        suggestedLotSize: 0,
+        warnings,
+        positionSizeReduction: 1,
+        volatilityMultiplier,
+        gapRisk: gapRiskResult ?? undefined,
+      }
+    }
+  }
+
   // ---- 9. Margin usage after trade ----
   const newMargin = (params.entryPrice * suggestedLotSize * 100000) / 25
   const projectedMarginUsage = ((snapshot.marginUsed + newMargin) / snapshot.equity) * 100
@@ -961,6 +1081,8 @@ export async function preTradeCheck(params: {
       riskPercent,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -981,6 +1103,8 @@ export async function preTradeCheck(params: {
         riskPercent,
         suggestedLotSize: 0,
         warnings: ["Multiple recent losses detected. Waiting for cooldown period."],
+        volatilityMultiplier,
+        gapRisk: gapRiskResult ?? undefined,
       }
     }
   }
@@ -1004,6 +1128,8 @@ export async function preTradeCheck(params: {
       riskPercent,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -1027,6 +1153,8 @@ export async function preTradeCheck(params: {
       riskPercent,
       suggestedLotSize: suggestedLotFromLeverage,
       warnings: [`Leverage ${effectiveLeverage.toFixed(1)}x exceeds cap ${config.maxLeveragePerTrade}x. Reduce lot to ${suggestedLotFromLeverage}.`],
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -1050,6 +1178,8 @@ export async function preTradeCheck(params: {
       riskPercent,
       suggestedLotSize: 0,
       warnings,
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -1073,6 +1203,8 @@ export async function preTradeCheck(params: {
         riskPercent,
         suggestedLotSize: 0,
         warnings,
+        volatilityMultiplier,
+        gapRisk: gapRiskResult ?? undefined,
       }
     }
   }
@@ -1089,6 +1221,8 @@ export async function preTradeCheck(params: {
       riskPercent,
       suggestedLotSize: 0,
       warnings: [`Reserve capital requirement: ${config.reserveCapitalPct}% of equity ($${requiredReserve.toFixed(2)}).`],
+      volatilityMultiplier,
+      gapRisk: gapRiskResult ?? undefined,
     }
   }
 
@@ -1123,6 +1257,8 @@ export async function preTradeCheck(params: {
     suggestedLotSize: Math.round(suggestedLotSize * 100) / 100,
     warnings,
     positionSizeReduction: positionSizeReduction > 0 ? positionSizeReduction : undefined,
+    volatilityMultiplier,
+    gapRisk: gapRiskResult ?? undefined,
   }
 }
 

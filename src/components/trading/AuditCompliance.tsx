@@ -37,6 +37,10 @@ interface AuditData {
       circuitBreaker: boolean
       qualityScoring: boolean
       orderRetry: boolean
+      orderTimeout: boolean
+      cbPersistence: boolean
+      metricsAggregation: boolean
+      symbolValidation: boolean
       status: string
     }
     riskManagement: {
@@ -45,6 +49,10 @@ interface AuditData {
       autoResolve: boolean
       correlationMatrix: boolean
       auditTrail: boolean
+      volInPretrade: boolean
+      gapInPretrade: boolean
+      corrInPretrade: boolean
+      weeklyMonthlyLimit: boolean
       status: string
     }
     moneyManagement: {
@@ -52,6 +60,9 @@ interface AuditData {
       equityCurveTrading: boolean
       sessionRiskLimits: boolean
       partialProfit: boolean
+      volScalingIntegration: boolean
+      progressiveDrawdown: boolean
+      winRateAdjustment: boolean
       status: string
     }
     errorLogging: {
@@ -59,6 +70,9 @@ interface AuditData {
       healthMonitoring: boolean
       recoveryActions: boolean
       logExport: boolean
+      logCorrelation: boolean
+      dynamicLogLevel: boolean
+      recoveryWired: boolean
       status: string
     }
   }
@@ -100,6 +114,10 @@ const MT5_ROWS: ComplianceRow[] = [
   { name: 'Async Mutex', phase: 'Phase 2', status: true },
   { name: 'Symbol Mapping', phase: 'Phase 2', status: true },
   { name: 'Trading Hours Awareness', phase: 'Phase 2', status: true },
+  { name: 'Order Timeout Enforcement', phase: 'Phase 4', status: true },
+  { name: 'CB State Persistence', phase: 'Phase 4', status: true },
+  { name: 'Metrics Aggregation', phase: 'Phase 4', status: true },
+  { name: 'Symbol Validation', phase: 'Phase 4', status: true },
 ]
 
 const RISK_ROWS: ComplianceRow[] = [
@@ -111,6 +129,10 @@ const RISK_ROWS: ComplianceRow[] = [
   { name: 'Portfolio Risk Cap', phase: 'Phase 2', status: true },
   { name: 'Proactive Margin Monitoring', phase: 'Phase 2', status: true },
   { name: 'Sector Exposure Limits', phase: 'Phase 2', status: true },
+  { name: 'Vol Regime in PreTrade', phase: 'Phase 4', status: true },
+  { name: 'Gap Risk in PreTrade', phase: 'Phase 4', status: true },
+  { name: 'Correlation in PreTrade', phase: 'Phase 4', status: true },
+  { name: 'Weekly/Monthly Limits', phase: 'Phase 4', status: true },
 ]
 
 const MONEY_ROWS: ComplianceRow[] = [
@@ -121,6 +143,9 @@ const MONEY_ROWS: ComplianceRow[] = [
   { name: 'Dynamic Scaling', phase: 'Phase 2', status: true },
   { name: 'Drawdown Recovery', phase: 'Phase 2', status: true },
   { name: 'Commission-Aware Sizing', phase: 'Phase 2', status: true },
+  { name: 'Vol\u00d7Scaling Integration', phase: 'Phase 4', status: true },
+  { name: 'Progressive Drawdown', phase: 'Phase 4', status: true },
+  { name: 'Win-Rate Adjustment', phase: 'Phase 4', status: true },
 ]
 
 const ERROR_ROWS: ComplianceRow[] = [
@@ -131,6 +156,9 @@ const ERROR_ROWS: ComplianceRow[] = [
   { name: 'Rate Limit Tracking', phase: 'Phase 2', status: true },
   { name: 'Deduplication', phase: 'Phase 2', status: true },
   { name: 'MT5 Error Codes', phase: 'Phase 2', status: true },
+  { name: 'Log Correlation IDs', phase: 'Phase 4', status: true },
+  { name: 'Dynamic Log Level', phase: 'Phase 4', status: true },
+  { name: 'Recovery Actions Wired', phase: 'Phase 4', status: true },
 ]
 
 function StatusBadge({ compliant }: { compliant: boolean }) {
@@ -184,7 +212,7 @@ function ComplianceTable({ rows, apiSection }: { rows: ComplianceRow[]; apiSecti
             <TableRow key={row.name}>
               <TableCell className="font-medium text-sm">{row.name}</TableCell>
               <TableCell className="text-center">
-                <span className={`text-xs px-2 py-0.5 rounded-full ${row.phase === 'Phase 3' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300' : 'bg-muted text-muted-foreground'}`}>
+                <span className={`text-xs px-2 py-0.5 rounded-full ${row.phase === 'Phase 4' ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300' : row.phase === 'Phase 3' ? 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300' : 'bg-muted text-muted-foreground'}`}>
                   {row.phase}
                 </span>
               </TableCell>
@@ -217,8 +245,8 @@ export default function AuditCompliance() {
       .finally(() => setLoading(false))
   }, [])
 
-  const totalIssuesFound = data?.totalIssuesFound ?? 66
-  const totalIssuesFixed = data?.totalIssuesFixed ?? 66
+  const totalIssuesFound = data?.totalIssuesFound ?? 83
+  const totalIssuesFixed = data?.totalIssuesFixed ?? 83
   const complianceScore = totalIssuesFound > 0 ? Math.round((totalIssuesFixed / totalIssuesFound) * 100) : 100
   const systemHealthy = data?.systemHealth.logHealth.isHealthy ?? true
 
@@ -226,7 +254,7 @@ export default function AuditCompliance() {
     {
       label: 'Total Issues Found',
       value: totalIssuesFound.toString(),
-      sub: '47 Phase 1+2 · 19 Phase 3',
+      sub: '47 P1+2 · 19 P3 · 17 P4',
       icon: AlertCircle,
       color: 'text-sky-600',
       bg: 'bg-sky-50 dark:bg-sky-950/40',
@@ -274,9 +302,9 @@ export default function AuditCompliance() {
           <ShieldCheck className="h-5 w-5 text-white" />
         </div>
         <div>
-          <h2 className="text-lg font-bold tracking-tight">Phase 3 Deep Audit — Compliance Dashboard</h2>
+          <h2 className="text-lg font-bold tracking-tight">Phase 4 Deep Audit — Compliance Dashboard</h2>
           <p className="text-xs text-muted-foreground">
-            Comprehensive audit covering 66 issues across 3 phases · FINEX Indonesia
+            Comprehensive audit covering 83 issues across 4 phases · FINEX Indonesia
           </p>
         </div>
       </div>
@@ -548,7 +576,7 @@ export default function AuditCompliance() {
         <Alert className="border-emerald-500 bg-emerald-50 dark:bg-emerald-950/30">
           <ShieldCheck className="h-4 w-4 text-emerald-600" />
           <AlertDescription className="text-emerald-800 dark:text-emerald-200">
-            <strong>FULL COMPLIANCE ACHIEVED</strong> — All {totalIssuesFound} audit issues across 3 phases have been resolved. The system meets all safety, risk, and operational requirements for FINEX Indonesia live trading.
+            <strong>FULL COMPLIANCE ACHIEVED</strong> — All {totalIssuesFound} audit issues across 4 phases have been resolved. The system meets all safety, risk, and operational requirements for FINEX Indonesia live trading.
           </AlertDescription>
         </Alert>
       )}

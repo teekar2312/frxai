@@ -313,6 +313,14 @@ export const MT5_TO_IDX: Record<string, string> = Object.fromEntries(
 /** All sectors in the symbol map */
 export const SECTORS = [...new Set(Object.values(SYMBOL_MAP).map((s) => s.sector))]
 
+/**
+ * Validate that a symbol exists in the FINEX symbol mapping.
+ * Returns the mapping entry if found, or null if unknown.
+ */
+export function validateSymbol(symbol: string): SymbolMappingEntry | null {
+  return SYMBOL_MAP[symbol.toUpperCase()] ?? null
+}
+
 // ============================================
 // MT5 ERROR CODE MAPPING TABLE (10004-10036)
 // ============================================
@@ -1558,6 +1566,95 @@ export class CircuitBreaker {
 }
 
 // ============================================
+// CIRCUIT BREAKER STATE PERSISTENCE
+// ============================================
+
+/**
+ * Persist the circuit breaker state to Mt5ConnectionState in the database.
+ */
+export async function persistCircuitBreakerState(cb: CircuitBreaker): Promise<void> {
+  try {
+    await db.mt5ConnectionState.upsert({
+      where: { id: 'main' },
+      create: {
+        id: 'main',
+        circuitState: cb.state,
+        circuitFailureCount: cb.failureCount,
+        circuitLastFailure: cb.state === 'OPEN' ? new Date() : null,
+      },
+      update: {
+        circuitState: cb.state,
+        circuitFailureCount: cb.failureCount,
+        circuitLastFailure: cb.state === 'OPEN' ? new Date() : null,
+      },
+    })
+  } catch (err) {
+    logger.error('MT5_CONNECTION', 'Failed to persist circuit breaker state', {
+      details: err instanceof Error ? err.stack : undefined,
+    })
+  }
+}
+
+// ============================================
+// CONNECTION QUALITY SCORE
+// ============================================
+
+// ============================================
+// CONNECTION METRICS ROLLING AGGREGATION
+// ============================================
+
+/**
+ * Rolling window metrics aggregator for MT5 connection quality.
+ */
+export class ConnectionMetricsAggregator {
+  private latencies: number[] = []
+  private results: Array<{ success: boolean; time: Date }> = []
+  private readonly maxSamples: number
+
+  constructor(maxSamples: number = 100) {
+    this.maxSamples = maxSamples
+  }
+
+  recordLatency(ms: number): void {
+    this.latencies.push(ms)
+    if (this.latencies.length > this.maxSamples) this.latencies.shift()
+  }
+
+  recordResult(success: boolean): void {
+    this.results.push({ success, time: new Date() })
+    if (this.results.length > this.maxSamples) this.results.shift()
+  }
+
+  getAvgLatency(): number {
+    if (this.latencies.length === 0) return 0
+    return Math.round(this.latencies.reduce((a, b) => a + b, 0) / this.latencies.length)
+  }
+
+  getP99Latency(): number {
+    if (this.latencies.length === 0) return 0
+    const sorted = [...this.latencies].sort((a, b) => a - b)
+    const idx = Math.floor(sorted.length * 0.99)
+    return sorted[Math.min(idx, sorted.length - 1)]
+  }
+
+  getSuccessRate(): number {
+    if (this.results.length === 0) return 1
+    const recent = this.results.slice(-60) // last 60 calls
+    return recent.filter(r => r.success).length / recent.length
+  }
+
+  getSuccessRateLastHour(): number {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000)
+    const recent = this.results.filter(r => r.time >= oneHourAgo)
+    if (recent.length === 0) return 1
+    return recent.filter(r => r.success).length / recent.length
+  }
+}
+
+/** Singleton metrics aggregator */
+export const connectionMetrics = new ConnectionMetricsAggregator()
+
+// ============================================
 // CONNECTION QUALITY SCORE
 // ============================================
 
@@ -1631,6 +1728,32 @@ export function calculateConnectionQuality(params: ConnectionQualityParams): num
 
   // Clamp to 0-100
   return Math.round(Math.max(0, Math.min(100, total)))
+}
+
+// ============================================
+// TIMEOUT UTILITY
+// ============================================
+
+/**
+ * Wrap any async call with an absolute deadline.
+ * Throws TimeoutError if the call doesn't complete within `timeoutMs`.
+ */
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  context?: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Timeout after ${timeoutMs}ms${context ? ` (${context})` : ''}`))
+    }, timeoutMs)
+  })
+  try {
+    return await Promise.race([promise, timeoutPromise])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 // ============================================
@@ -1709,36 +1832,40 @@ export async function executeOrderWithRetry(params: {
     attempts = attempt + 1
 
     try {
-      const result = await cb.execute(async () => {
-        // ---- SIMULATED EXECUTION ----
-        // In production, replace this block with a real MT5 order_send call.
-        // Example:
-        //   const ticket = await mt5Connection.runExclusive(() => mt5.order_send({
-        //     symbol, type: direction === 'BUY' ? mt5.ORDER_TYPE_BUY : mt5.ORDER_TYPE_SELL,
-        //     volume: lotSize, price, sl, tp, comment,
-        //   }))
-        //   if (ticket.retcode !== mt5.TRADE_RETCODE_DONE) throw { retcode: ticket.retcode }
-        //   return ticket
+      const result = await withTimeout(
+        cb.execute(async () => {
+          // ---- SIMULATED EXECUTION ----
+          // In production, replace this block with a real MT5 order_send call.
+          // Example:
+          //   const ticket = await mt5Connection.runExclusive(() => mt5.order_send({
+          //     symbol, type: direction === 'BUY' ? mt5.ORDER_TYPE_BUY : mt5.ORDER_TYPE_SELL,
+          //     volume: lotSize, price, sl, tp, comment,
+          //   }))
+          //   if (ticket.retcode !== mt5.TRADE_RETCODE_DONE) throw { retcode: ticket.retcode }
+          //   return ticket
 
-        logger.info("TRADE_EXECUTION", `[SIMULATED] Order attempt ${attempts}/${totalRetries + 1}`, {
-          symbol,
-          metadata: { direction, lotSize, price, sl, tp, comment, attempt: attempts },
-        })
+          logger.info("TRADE_EXECUTION", `[SIMULATED] Order attempt ${attempts}/${totalRetries + 1}`, {
+            symbol,
+            metadata: { direction, lotSize, price, sl, tp, comment, attempt: attempts },
+          })
 
-        // Simulate network latency (50-150ms)
-        await new Promise((r) => setTimeout(r, 50 + Math.random() * 100))
+          // Simulate network latency (50-150ms)
+          await new Promise((r) => setTimeout(r, 50 + Math.random() * 100))
 
-        // Simulate a successful fill
-        const simulatedTicket = `SIM-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
-        const simulatedFillPrice = price + (Math.random() - 0.5) * 2 // slight slippage
+          // Simulate a successful fill
+          const simulatedTicket = `SIM-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
+          const simulatedFillPrice = price + (Math.random() - 0.5) * 2 // slight slippage
 
-        return {
-          success: true,
-          orderId: simulatedTicket,
-          fillPrice: Math.round(simulatedFillPrice * 100) / 100,
-          fillLot: lotSize,
-        }
-      })
+          return {
+            success: true,
+            orderId: simulatedTicket,
+            fillPrice: Math.round(simulatedFillPrice * 100) / 100,
+            fillLot: lotSize,
+          }
+        }),
+        10_000,
+        `Order ${symbol} ${direction}`
+      )
 
       const totalLatencyMs = Date.now() - startTime
       logger.info("TRADE_EXECUTION", `Order succeeded on attempt ${attempts}`, {

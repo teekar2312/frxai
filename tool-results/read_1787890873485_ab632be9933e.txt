@@ -1,0 +1,1016 @@
+     1→/**
+     2→ * FINEX Trading System - Enhanced Structured Logger
+     3→ * ====================================================
+     4→ * 6-level severity: DEBUG, INFO, WARN, ERROR, CRITICAL, FATAL
+     5→ * 9 categories: MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT,
+     6→ *   MONEY_MANAGEMENT, DATA_FEED, AI_ENGINE, SYSTEM, NOTIFICATION, API_RATE_LIMIT
+     7→ *
+     8→ * Features:
+     9→ *   1. Cascading Error Deduplication (fingerprint-based, configurable window)
+    10→ *   2. Log Rotation / Cleanup (configurable retention, lazy init + 6h cycle)
+    11→ *   3. API Rate Limit Tracking (FINNHUB, MARKETAUX, MT5)
+    12→ *   4. MT5 Error Code Auto-Remediation (10004-10036)
+    13→ *   5. Silent Failure Detection (validateData assertion)
+    14→ *   6. Enhanced Log Statistics / Analytics
+    15→ */
+    16→
+    17→import { db } from "./db"
+    18→
+    19→// Types
+    20→
+    21→export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "CRITICAL" | "FATAL"
+    22→export type LogCategory =
+    23→  | "MT5_CONNECTION"
+    24→  | "TRADE_EXECUTION"
+    25→  | "RISK_MANAGEMENT"
+    26→  | "MONEY_MANAGEMENT"
+    27→  | "DATA_FEED"
+    28→  | "AI_ENGINE"
+    29→  | "SYSTEM"
+    30→  | "NOTIFICATION"
+    31→  | "API_RATE_LIMIT"
+    32→
+    33→export interface Mt5ErrorResult {
+    34→  shouldRetry: boolean
+    35→  delayMs?: number
+    36→  action?: string
+    37→  description: string
+    38→  severity: LogLevel
+    39→}
+    40→
+    41→export interface LogAnalytics {
+    42→  errorRateTrend: { lastHour: number; previousHour: number; direction: "improving" | "stable" | "degrading" }
+    43→  topCategories: Array<{ category: string; count: number }>
+    44→  bursts: Array<{ startTime: Date; count: number; topMessage: string }>
+    45→  topMessages: Array<{ message: string; count: number }>
+    46→}
+    47→
+    48→interface LogContext {
+    49→  tradeId?: string
+    50→  symbol?: string
+    51→  source?: string
+    52→  details?: string
+    53→  stackTrace?: string
+    54→  metadata?: Record<string, unknown>
+    55→}
+    56→
+    57→// Constants
+    58→
+    59→const SEVERITY_PRIORITY: Record<LogLevel, number> = {
+    60→  DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3, CRITICAL: 4, FATAL: 5,
+    61→}
+    62→
+    63→const SEVERITY_COLORS: Record<LogLevel, string> = {
+    64→  DEBUG: "\x1b[36m",
+    65→  INFO: "\x1b[32m",
+    66→  WARN: "\x1b[33m",
+    67→  ERROR: "\x1b[31m",
+    68→  CRITICAL: "\x1b[35m",
+    69→  FATAL: "\x1b[41m\x1b[37m",
+    70→}
+    71→
+    72→const RESET = "\x1b[0m"
+    73→
+    74→// Simple String Hash (non-crypto, for dedup fingerprint)
+    75→
+    76→function simpleHash(str: string): string {
+    77→  let hash = 5381
+    78→  for (let i = 0; i < str.length; i++) {
+    79→    hash = ((hash << 5) + hash + str.charCodeAt(i)) & 0x7fffffff
+    80→  }
+    81→  return hash.toString(36)
+    82→}
+    83→
+    84→// 1. Dedup Cache
+    85→
+    86→interface DedupEntry {
+    87→  count: number
+    88→  lastSeen: Date
+    89→  firstSeen: Date
+    90→}
+    91→
+    92→class DedupCache {
+    93→  private cache = new Map<string, DedupEntry>()
+    94→  private windowMs: number
+    95→  private flushTimer: ReturnType<typeof setInterval> | null = null
+    96→
+    97→  constructor(windowMs: number) {
+    98→    this.windowMs = windowMs
+    99→    this.flushTimer = setInterval(() => {
+   100→      const expired = this.sweepExpired()
+   101→      for (const e of expired) {
+   102→        console.log(`[Logger-Dedup] Flushed fingerprint=${e.fingerprint} count=${e.count}`)
+   103→      }
+   104→    }, 5000)
+   105→  }
+   106→
+   107→  checkAndIncrement(fingerprint: string): { isDuplicate: boolean; entry: DedupEntry | null } {
+   108→    const now = new Date()
+   109→    const existing = this.cache.get(fingerprint)
+   110→
+   111→    if (existing && now.getTime() - existing.firstSeen.getTime() < this.windowMs) {
+   112→      existing.count++
+   113→      existing.lastSeen = now
+   114→      return { isDuplicate: true, entry: existing }
+   115→    }
+   116→
+   117→    if (existing) this.cache.delete(fingerprint)
+   118→
+   119→    const entry: DedupEntry = { count: 1, lastSeen: now, firstSeen: now }
+   120→    this.cache.set(fingerprint, entry)
+   121→    return { isDuplicate: false, entry: null }
+   122→  }
+   123→
+   124→  sweepExpired(): Array<{ fingerprint: string; count: number; firstSeen: Date }> {
+   125→    const now = new Date()
+   126→    const expired: Array<{ fingerprint: string; count: number; firstSeen: Date }> = []
+   127→    for (const [fp, entry] of this.cache) {
+   128→      if (now.getTime() - entry.firstSeen.getTime() >= this.windowMs) {
+   129→        if (entry.count > 1) expired.push({ fingerprint: fp, count: entry.count, firstSeen: entry.firstSeen })
+   130→        this.cache.delete(fp)
+   131→      }
+   132→    }
+   133→    return expired
+   134→  }
+   135→
+   136→  shutdown() { if (this.flushTimer) clearInterval(this.flushTimer) }
+   137→}
+   138→
+   139→// 2. Retention / Cleanup
+   140→
+   141→let retentionDays = 30
+   142→let mt5LogRetentionDays = 7
+   143→let cleanupTimer: ReturnType<typeof setInterval> | null = null
+   144→let cleanupInitialized = false
+   145→
+   146→export function setRetentionDays(days: number) { retentionDays = days }
+   147→
+   148→export async function cleanupOldLogs(): Promise<{ tradingLogsDeleted: number; mt5LogsDeleted: number }> {
+   149→  const tradingCutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
+   150→  const mt5Cutoff = new Date(Date.now() - mt5LogRetentionDays * 24 * 60 * 60 * 1000)
+   151→  let tradingLogsDeleted = 0
+   152→  let mt5LogsDeleted = 0
+   153→
+   154→  try {
+   155→    const result = await db.tradingLog.deleteMany({ where: { createdAt: { lt: tradingCutoff } } })
+   156→    tradingLogsDeleted = result.count
+   157→  } catch (err) {
+   158→    console.error("[Logger-Cleanup] Failed to delete old TradingLogs:", err)
+   159→  }
+   160→
+   161→  try {
+   162→    const result = await db.mt5ConnectionLog.deleteMany({ where: { createdAt: { lt: mt5Cutoff } } })
+   163→    mt5LogsDeleted = result.count
+   164→  } catch (err) {
+   165→    console.error("[Logger-Cleanup] Failed to delete old Mt5ConnectionLogs:", err)
+   166→  }
+   167→
+   168→  if (tradingLogsDeleted > 0 || mt5LogsDeleted > 0) {
+   169→    console.log(`[Logger-Cleanup] Deleted ${tradingLogsDeleted} TradingLogs (>${retentionDays}d) + ${mt5LogsDeleted} Mt5ConnectionLogs (>${mt5LogRetentionDays}d)`)
+   170→  }
+   171→  return { tradingLogsDeleted, mt5LogsDeleted }
+   172→}
+   173→
+   174→function ensureCleanupScheduled() {
+   175→  if (cleanupInitialized) return
+   176→  cleanupInitialized = true
+   177→  cleanupTimer = setInterval(() => { void cleanupOldLogs() }, 6 * 60 * 60 * 1000)
+   178→}
+   179→
+   180→// 3. API Rate Limit Tracking
+   181→
+   182→type ApiService = "FINNHUB" | "MARKETAUX" | "MT5"
+   183→
+   184→const RATE_LIMITS: Record<ApiService, { limitPerMinute: number; limitPerHour: number }> = {
+   185→  FINNHUB: { limitPerMinute: 60, limitPerHour: 3600 },
+   186→  MARKETAUX: { limitPerMinute: 100, limitPerHour: 6000 },
+   187→  MT5: { limitPerMinute: 120, limitPerHour: 7200 },
+   188→}
+   189→
+   190→interface RateCounter {
+   191→  callsThisMinute: number
+   192→  callsThisHour: number
+   193→  minuteStart: number
+   194→  hourStart: number
+   195→}
+   196→
+   197→class RateLimitTracker {
+   198→  private counters = new Map<ApiService, RateCounter>()
+   199→  private persistTimer: ReturnType<typeof setInterval> | null = null
+   200→  private initialized = false
+   201→
+   202→  init() {
+   203→    if (this.initialized) return
+   204→    this.initialized = true
+   205→    const now = Date.now()
+   206→    for (const svc of ["FINNHUB", "MARKETAUX", "MT5"] as ApiService[]) {
+   207→      this.counters.set(svc, { callsThisMinute: 0, callsThisHour: 0, minuteStart: now, hourStart: now })
+   208→    }
+   209→    this.persistTimer = setInterval(() => { void this.persistToDb() }, 30_000)
+   210→  }
+   211→
+   212→  private getCounter(service: ApiService): RateCounter {
+   213→    this.init()
+   214→    return this.counters.get(service)!
+   215→  }
+   216→
+   217→  private resetIfNeeded(counter: RateCounter, now: number) {
+   218→    if (now - counter.minuteStart >= 60_000) { counter.callsThisMinute = 0; counter.minuteStart = now }
+   219→    if (now - counter.hourStart >= 3_600_000) { counter.callsThisHour = 0; counter.hourStart = now }
+   220→  }
+   221→
+   222→  async track(service: ApiService): Promise<boolean> {
+   223→    this.init()
+   224→    const counter = this.getCounter(service)
+   225→    const config = RATE_LIMITS[service]
+   226→    const now = Date.now()
+   227→    this.resetIfNeeded(counter, now)
+   228→
+   229→    const minuteUsage = counter.callsThisMinute / config.limitPerMinute
+   230→    const hourUsage = counter.callsThisHour / config.limitPerHour
+   231→    const usage = Math.max(minuteUsage, hourUsage)
+   232→
+   233→    if (minuteUsage >= 1.0 || hourUsage >= 1.0) {
+   234→      logger.critical("API_RATE_LIMIT", `${service} rate limit EXCEEDED: ${counter.callsThisMinute}/${config.limitPerMinute}/min, ${counter.callsThisHour}/${config.limitPerHour}/hour`, {
+   235→        metadata: { service, callsThisMinute: counter.callsThisMinute, limitPerMinute: config.limitPerMinute },
+   236→      })
+   237→      return false
+   238→    }
+   239→
+   240→    if (usage >= 0.95) {
+   241→      logger.error("API_RATE_LIMIT", `${service} rate limit CRITICAL (${(usage * 100).toFixed(1)}%)`, {
+   242→        metadata: { service, usagePct: Math.round(usage * 100) },
+   243→      })
+   244→      await new Promise((r) => setTimeout(r, 1000))
+   245→    } else if (usage >= 0.8) {
+   246→      logger.warn("API_RATE_LIMIT", `${service} rate limit approaching (${(usage * 100).toFixed(1)}%)`, {
+   247→        metadata: { service, usagePct: Math.round(usage * 100) },
+   248→      })
+   249→    }
+   250→
+   251→    counter.callsThisMinute++
+   252→    counter.callsThisHour++
+   253→    return true
+   254→  }
+   255→
+   256→  async persistToDb() {
+   257→    const now = Date.now()
+   258→    for (const [service, counter] of this.counters) {
+   259→      this.resetIfNeeded(counter, now)
+   260→      try {
+   261→        await db.apiRateLimit.upsert({
+   262→          where: { id: `rate-${service}` },
+   263→          create: { id: `rate-${service}`, service, callsThisMinute: counter.callsThisMinute, callsThisHour: counter.callsThisHour, limitPerMinute: RATE_LIMITS[service].limitPerMinute, limitPerHour: RATE_LIMITS[service].limitPerHour, lastCallAt: new Date(now) },
+   264→          update: { callsThisMinute: counter.callsThisMinute, callsThisHour: counter.callsThisHour, lastCallAt: new Date(now) },
+   265→        })
+   266→      } catch { /* persist failure is non-critical */ }
+   267→    }
+   268→  }
+   269→
+   270→  shutdown() { if (this.persistTimer) clearInterval(this.persistTimer) }
+   271→}
+   272→
+   273→// 4. MT5 Error Code Auto-Remediation
+   274→
+   275→interface Mt5ErrorDef {
+   276→  code: number
+   277→  description: string
+   278→  severity: LogLevel
+   279→  category: LogCategory
+   280→  retryable: boolean
+   281→  delayMs: number
+   282→  action: string
+   283→}
+   284→
+   285→const MT5_ERROR_DEFS: Mt5ErrorDef[] = [
+   286→  { code: 10004, description: "Requote", severity: "WARN", category: "TRADE_EXECUTION", retryable: true, delayMs: 500, action: "Re-fetch latest prices and retry" },
+   287→  { code: 10006, description: "Request rejected", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Do not retry - request rejected by broker" },
+   288→  { code: 10007, description: "Request canceled by trader", severity: "INFO", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Cancelled intentionally" },
+   289→  { code: 10008, description: "Order placed", severity: "INFO", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Order accepted - monitor for execution" },
+   290→  { code: 10009, description: "Request executed", severity: "INFO", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Trade executed successfully" },
+   291→  { code: 10011, description: "Invalid request", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Check request parameters" },
+   292→  { code: 10013, description: "Invalid request / trade disabled", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Verify trade is allowed; check stop order values" },
+   293→  { code: 10014, description: "Invalid volume", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Fix lot size - check min/max/step for symbol" },
+   294→  { code: 10015, description: "Invalid price", severity: "WARN", category: "TRADE_EXECUTION", retryable: true, delayMs: 1000, action: "Re-fetch latest price and retry" },
+   295→  { code: 10016, description: "Invalid stops", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Check SL/TP distance and direction" },
+   296→  { code: 10017, description: "Trade disabled", severity: "FATAL", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "CRITICAL: Trading disabled - check broker settings" },
+   297→  { code: 10018, description: "Market closed", severity: "WARN", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Wait for market to open" },
+   298→  { code: 10019, description: "Not enough money", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Reduce lot size or deposit funds" },
+   299→  { code: 10020, description: "Prices changed", severity: "WARN", category: "TRADE_EXECUTION", retryable: true, delayMs: 200, action: "Re-fetch prices and retry" },
+   300→  { code: 10021, description: "No quotes to process request", severity: "WARN", category: "DATA_FEED", retryable: true, delayMs: 2000, action: "Wait for market data and retry" },
+   301→  { code: 10022, description: "Invalid order expiration", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Fix expiration date or remove" },
+   302→  { code: 10023, description: "Order state changed", severity: "WARN", category: "TRADE_EXECUTION", retryable: true, delayMs: 1000, action: "Re-fetch and retry" },
+   303→  { code: 10024, description: "Too many requests", severity: "WARN", category: "MT5_CONNECTION", retryable: true, delayMs: 5000, action: "Rate limited - back off 5s" },
+   304→  { code: 10025, description: "No changes in request", severity: "INFO", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "No modification needed" },
+   305→  { code: 10026, description: "Autotrading disabled by server", severity: "FATAL", category: "MT5_CONNECTION", retryable: false, delayMs: 0, action: "CRITICAL: Server disabled autotrading - contact broker" },
+   306→  { code: 10027, description: "Autotrading only for live accounts", severity: "ERROR", category: "MT5_CONNECTION", retryable: false, delayMs: 0, action: "Switch to live account" },
+   307→  { code: 10028, description: "Request locked for processing", severity: "WARN", category: "TRADE_EXECUTION", retryable: true, delayMs: 1000, action: "Order being processed - wait and retry" },
+   308→  { code: 10029, description: "Order or position frozen", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Cannot modify frozen order" },
+   309→  { code: 10030, description: "Invalid order filling type", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Use correct filling type (FOK, IOC, Return)" },
+   310→  { code: 10031, description: "No connection", severity: "ERROR", category: "MT5_CONNECTION", retryable: true, delayMs: 3000, action: "Reconnect to MT5 and retry" },
+   311→  { code: 10032, description: "Operation only for live accounts", severity: "ERROR", category: "MT5_CONNECTION", retryable: false, delayMs: 0, action: "Switch to live account" },
+   312→  { code: 10033, description: "Limit orders only", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Only limit orders allowed" },
+   313→  { code: 10034, description: "Limit volume", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Volume exceeds limit" },
+   314→  { code: 10035, description: "Invalid order", severity: "ERROR", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Invalid order type" },
+   315→  { code: 10036, description: "Position closed", severity: "INFO", category: "TRADE_EXECUTION", retryable: false, delayMs: 0, action: "Position already closed" },
+   316→]
+   317→
+   318→const MT5_ERROR_MAP = new Map(MT5_ERROR_DEFS.map((d) => [d.code, d]))
+   319→
+   320→export function handleMt5Error(
+   321→  code: number,
+   322→  context?: { symbol?: string; tradeId?: string; orderType?: string }
+   323→): Mt5ErrorResult {
+   324→  const def = MT5_ERROR_MAP.get(code)
+   325→  const description = def?.description ?? `Unknown MT5 error code ${code}`
+   326→  const severity = def?.severity ?? "ERROR"
+   327→  const category = def?.category ?? "TRADE_EXECUTION"
+   328→  const shouldRetry = def?.retryable ?? false
+   329→  const delayMs = def?.delayMs ?? 0
+   330→  const action = def?.action ?? "No auto-remediation available"
+   331→
+   332→  logger[severity === "INFO" ? "info" : severity === "WARN" ? "warn" : severity === "ERROR" ? "error" : severity === "CRITICAL" ? "critical" : "fatal"](
+   333→    category,
+   334→    `MT5 Error ${code}: ${description}${context?.symbol ? ` [${context.symbol}]` : ""}${context?.tradeId ? ` trade=${context.tradeId}` : ""}`,
+   335→    {
+   336→      symbol: context?.symbol,
+   337→      tradeId: context?.tradeId,
+   338→      metadata: { code, description, shouldRetry, delayMs, action, orderType: context?.orderType },
+   339→    }
+   340→  )
+   341→
+   342→  return { shouldRetry, delayMs, action, description, severity }
+   343→}
+   344→
+   345→// 5. Silent Failure Detection
+   346→
+   347→export function validateData<T>(
+   348→  data: T | null | undefined,
+   349→  context: string,
+   350→  category: LogCategory
+   351→): asserts data is T {
+   352→  if (data === null || data === undefined) {
+   353→    const msg = `Silent failure detected: ${context} returned null/undefined`
+   354→    logger.error(category, msg, { details: "Expected non-null data but received null or undefined" })
+   355→    throw new Error(msg)
+   356→  }
+   357→  if (Array.isArray(data) && data.length === 0) {
+   358→    const msg = `Silent failure detected: ${context} returned empty array`
+   359→    logger.warn(category, msg, { details: "Expected non-empty array but received []" })
+   360→    throw new Error(msg)
+   361→  }
+   362→}
+   363→
+   364→// 6. Log Buffer with Dedup
+   365→
+   366→class LogBuffer {
+   367→  private buffer: Array<{
+   368→    level: LogLevel
+   369→    category: LogCategory
+   370→    message: string
+   371→    source: string | null
+   372→    details: string | null
+   373→    stackTrace: string | null
+   374→    tradeId: string | null
+   375→    symbol: string | null
+   376→    metadata: string
+   377→    fingerprint: string | null
+   378→  }> = []
+   379→  private flushTimer: ReturnType<typeof setInterval> | null = null
+   380→  private isFlushing = false
+   381→  private readonly MAX_BUFFER = 50
+   382→  private readonly FLUSH_INTERVAL_MS = 2000
+   383→
+   384→  constructor() {
+   385→    this.flushTimer = setInterval(() => this.flush(), this.FLUSH_INTERVAL_MS)
+   386→  }
+   387→
+   388→  async push(entry: Omit<typeof this.buffer[number], "fingerprint">) {
+   389→    const ts = new Date().toISOString()
+   390→    const color = SEVERITY_COLORS[entry.level]
+   391→    console.log(`${color}[${entry.level}]${RESET} ${ts} [${entry.category}] ${entry.message}`)
+   392→    if (entry.level === "ERROR" || entry.level === "CRITICAL" || entry.level === "FATAL") {
+   393→      if (entry.details) console.error(`  Details: ${entry.details}`)
+   394→      if (entry.stackTrace) console.error(`  Stack: ${entry.stackTrace}`)
+   395→    }
+   396→
+   397→    // Dedup check
+   398→    const fp = `${entry.category}:${entry.message.substring(0, 80)}`
+   399→    const fingerprint = simpleHash(fp)
+   400→    const { isDuplicate } = dedupCache.checkAndIncrement(fingerprint)
+   401→    if (isDuplicate) return // Skip DB write for duplicates within window
+   402→
+   403→    this.buffer.push({ ...entry, fingerprint })
+   404→
+   405→    if (this.buffer.length >= this.MAX_BUFFER) this.flush()
+   406→
+   407→    // Lazy cleanup scheduling
+   408→    ensureCleanupScheduled()
+   409→  }
+   410→
+   411→  async flush() {
+   412→    if (this.isFlushing || this.buffer.length === 0) return
+   413→    this.isFlushing = true
+   414→    const batch = [...this.buffer]
+   415→    this.buffer = []
+   416→
+   417→    try {
+   418→      await db.tradingLog.createMany({
+   419→        data: batch.map((entry) => ({
+   420→          level: entry.level,
+   421→          category: entry.category,
+   422→          message: entry.message,
+   423→          source: entry.source,
+   424→          details: entry.details,
+   425→          stackTrace: entry.stackTrace,
+   426→          tradeId: entry.tradeId,
+   427→          symbol: entry.symbol,
+   428→          metadata: entry.metadata,
+   429→          fingerprint: entry.fingerprint,
+   430→        })),
+   431→      })
+   432→      logHealthMonitor.recordFlushSuccess()
+   433→    } catch (err) {
+   434→      const errMsg = err instanceof Error ? err.message : String(err)
+   435→      console.error("[Logger] FAILED TO FLUSH LOG BUFFER:", err)
+   436→      logHealthMonitor.recordFlushFailure(errMsg)
+   437→      this.buffer.unshift(...batch.slice(-20))
+   438→    } finally {
+   439→      this.isFlushing = false
+   440→    }
+   441→  }
+   442→
+   443→  async shutdown() {
+   444→    if (this.flushTimer) clearInterval(this.flushTimer)
+   445→    await this.flush()
+   446→  }
+   447→
+   448→  size(): number {
+   449→    return this.buffer.length
+   450→  }
+   451→}
+   452→
+   453→// Singleton instances
+   454→let _logBuffer: LogBuffer | null = null
+   455→const dedupCache = new DedupCache(30_000) // 30 second dedup window
+   456→const rateLimitTracker = new RateLimitTracker()
+   457→
+   458→function getBuffer(): LogBuffer {
+   459→  if (!_logBuffer) _logBuffer = new LogBuffer()
+   460→  return _logBuffer
+   461→}
+   462→
+   463→// Minimum log level filter
+   464→let minLevel: LogLevel = (process.env.LOG_LEVEL as LogLevel) || "DEBUG"
+   465→
+   466→export function setMinLevel(level: LogLevel) { minLevel = level }
+   467→export function getMinLevel(): LogLevel { return minLevel }
+   468→
+   469→// Core log function
+   470→async function log(level: LogLevel, category: LogCategory, message: string, ctx: LogContext = {}) {
+   471→  if (SEVERITY_PRIORITY[level] < SEVERITY_PRIORITY[minLevel]) return
+   472→
+   473→  const stackTrace =
+   474→    level === "ERROR" || level === "CRITICAL" || level === "FATAL"
+   475→      ? new Error().stack?.split("\n").slice(1, 4).join("\n") || null
+   476→      : null
+   477→
+   478→  await getBuffer().push({
+   479→    level, category, message,
+   480→    source: ctx.source || null,
+   481→    details: ctx.details || null,
+   482→    stackTrace,
+   483→    tradeId: ctx.tradeId || null,
+   484→    symbol: ctx.symbol || null,
+   485→    metadata: ctx.metadata ? JSON.stringify(ctx.metadata) : "{}",
+   486→  })
+   487→
+   488→  // Auto-escalate ERROR, CRITICAL, FATAL
+   489→  if (SEVERITY_PRIORITY[level] >= SEVERITY_PRIORITY["ERROR"]) {
+   490→    try {
+   491→      await escalationManager.escalate(level, category, message, ctx)
+   492→    } catch { /* escalation failure is non-critical, don't recurse */ }
+   493→  }
+   494→}
+   495→
+   496→// Convenience methods
+   497→export const logger = {
+   498→  debug: (category: LogCategory, message: string, ctx?: LogContext) => log("DEBUG", category, message, ctx),
+   499→  info: (category: LogCategory, message: string, ctx?: LogContext) => log("INFO", category, message, ctx),
+   500→  warn: (category: LogCategory, message: string, ctx?: LogContext) => log("WARN", category, message, ctx),
+   501→  error: (category: LogCategory, message: string, ctx?: LogContext) => log("ERROR", category, message, ctx),
+   502→  critical: (category: LogCategory, message: string, ctx?: LogContext) => log("CRITICAL", category, message, ctx),
+   503→  fatal: (category: LogCategory, message: string, ctx?: LogContext) => log("FATAL", category, message, ctx),
+   504→
+   505→  extractError: (err: unknown): { message: string; stack?: string } => {
+   506→    if (err instanceof Error) return { message: err.message, stack: err.stack }
+   507→    return { message: String(err) }
+   508→  },
+   509→
+   510→  wrapAsync: <T extends (...args: unknown[]) => Promise<unknown>>(fn: T, category: LogCategory, context: string): T => {
+   511→    return ((...args: unknown[]) => {
+   512→      return fn(...args).catch((err: unknown) => {
+   513→        const { message, stack } = logger.extractError(err)
+   514→        logger.error(category, `${context} failed: ${message}`, { details: stack, metadata: { args: JSON.stringify(args).slice(0, 500) } })
+   515→        throw err
+   516→      })
+   517→    }) as T
+   518→  },
+   519→
+   520→  shutdown: () => getBuffer().shutdown(),
+   521→}
+   522→
+   523→// Public API wrappers
+   524→
+   525→export async function trackApiCall(service: ApiService): Promise<boolean> {
+   526→  return rateLimitTracker.track(service)
+   527→}
+   528→
+   529→// 6. Log Analytics
+   530→
+   531→export async function getLogAnalytics(): Promise<LogAnalytics> {
+   532→  const now = new Date()
+   533→  const lastHour = new Date(now.getTime() - 60 * 60 * 1000)
+   534→  const prevHourStart = new Date(now.getTime() - 2 * 60 * 60 * 1000)
+   535→
+   536→  const [lastHourErrors, prevHourErrors, topCategories, topMessages] = await Promise.all([
+   537→    db.tradingLog.count({ where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: lastHour } } }),
+   538→    db.tradingLog.count({ where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: prevHourStart, lt: lastHour } } }),
+   539→    db.tradingLog.groupBy({ by: ["category"], _count: true, orderBy: { _count: { category: "desc" } }, take: 5 }),
+   540→    db.tradingLog.groupBy({ by: ["message"], where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] } }, _count: true, orderBy: { _count: { message: "desc" } }, take: 5 }),
+   541→  ])
+   542→
+   543→  // Error burst detection: >10 errors in 5 min
+   544→  const burstStart = new Date(now.getTime() - 5 * 60 * 1000)
+   545→  const burstLogs = await db.tradingLog.findMany({
+   546→    where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: burstStart } },
+   547→    orderBy: { createdAt: "asc" },
+   548→  })
+   549→
+   550→  const bursts: LogAnalytics["bursts"] = []
+   551→  if (burstLogs.length > 10) {
+   552→    const msgCounts = new Map<string, number>()
+   553→    for (const l of burstLogs) msgCounts.set(l.message, (msgCounts.get(l.message) || 0) + 1)
+   554→    let topMsg = ""
+   555→    let topCount = 0
+   556→    for (const [msg, count] of msgCounts) { if (count > topCount) { topMsg = msg; topCount = count } }
+   557→    bursts.push({ startTime: burstLogs[0].createdAt, count: burstLogs.length, topMessage: topMsg })
+   558→  }
+   559→
+   560→  const direction: LogAnalytics["errorRateTrend"]["direction"] =
+   561→    lastHourErrors < prevHourErrors * 0.8 ? "improving" :
+   562→    lastHourErrors > prevHourErrors * 1.2 ? "degrading" : "stable"
+   563→
+   564→  return {
+   565→    errorRateTrend: { lastHour: lastHourErrors, previousHour: prevHourErrors, direction },
+   566→    topCategories: topCategories.map((g) => ({ category: g.category, count: g._count })),
+   567→    bursts,
+   568→    topMessages: topMessages.map((g) => ({ message: g.message, count: g._count })),
+   569→  }
+   570→}
+   571→
+   572→// ============================================
+   573→// PHASE 3: STRUCTURED ERROR RECOVERY ACTIONS
+   574→// ============================================
+   575→
+   576→export interface RecoveryAction {
+   577→  action: string
+   578→  description: string
+   579→  priority: 'IMMEDIATE' | 'HIGH' | 'MEDIUM' | 'LOW'
+   580→  automated: boolean
+   581→}
+   582→
+   583→/**
+   584→ * Returns suggested recovery actions based on error category and severity level.
+   585→ */
+   586→export function getRecoveryActions(category: LogCategory, level: LogLevel): RecoveryAction[] {
+   587→  // Category + level specific mappings
+   588→  const key = `${category}:${level}` as const
+   589→
+   590→  const MAP: Record<string, RecoveryAction[]> = {
+   591→    'MT5_CONNECTION:CRITICAL': [
+   592→      { action: 'RECONNECT', description: 'Attempt MT5 reconnection', priority: 'IMMEDIATE', automated: true },
+   593→      { action: 'CHECK_NETWORK', description: 'Verify network connectivity', priority: 'IMMEDIATE', automated: false },
+   594→      { action: 'LOG_STATE', description: 'Persist current connection state for diagnostics', priority: 'HIGH', automated: true },
+   595→    ],
+   596→    'MT5_CONNECTION:FATAL': [
+   597→      { action: 'GRACEFUL_SHUTDOWN', description: 'Initiate graceful system shutdown', priority: 'IMMEDIATE', automated: true },
+   598→      { action: 'NOTIFY', description: 'Send critical connection failure notification', priority: 'IMMEDIATE', automated: true },
+   599→    ],
+   600→    'MT5_CONNECTION:ERROR': [
+   601→      { action: 'RECONNECT', description: 'Attempt MT5 reconnection', priority: 'HIGH', automated: true },
+   602→      { action: 'CHECK_NETWORK', description: 'Verify network connectivity', priority: 'HIGH', automated: false },
+   603→    ],
+   604→    'TRADE_EXECUTION:CRITICAL': [
+   605→      { action: 'VERIFY_POSITIONS', description: 'Verify all open positions match expected state', priority: 'IMMEDIATE', automated: true },
+   606→      { action: 'HALT_TRADING', description: 'Halt new trade submissions temporarily', priority: 'IMMEDIATE', automated: true },
+   607→      { action: 'RECONCILE', description: 'Reconcile local state with broker positions', priority: 'HIGH', automated: false },
+   608→    ],
+   609→    'TRADE_EXECUTION:FATAL': [
+   610→      { action: 'HALT_TRADING', description: 'Halt all trading immediately', priority: 'IMMEDIATE', automated: true },
+   611→      { action: 'VERIFY_POSITIONS', description: 'Verify all open positions', priority: 'IMMEDIATE', automated: true },
+   612→      { action: 'NOTIFY', description: 'Send emergency trade execution failure notification', priority: 'IMMEDIATE', automated: true },
+   613→    ],
+   614→    'RISK_MANAGEMENT:CRITICAL': [
+   615→      { action: 'CLOSE_ALL', description: 'Close all positions immediately', priority: 'IMMEDIATE', automated: true },
+   616→      { action: 'NOTIFY', description: 'Send emergency notification', priority: 'IMMEDIATE', automated: true },
+   617→    ],
+   618→    'RISK_MANAGEMENT:FATAL': [
+   619→      { action: 'CLOSE_ALL', description: 'Close all positions immediately', priority: 'IMMEDIATE', automated: true },
+   620→      { action: 'GRACEFUL_SHUTDOWN', description: 'Initiate graceful system shutdown', priority: 'IMMEDIATE', automated: true },
+   621→      { action: 'NOTIFY', description: 'Send emergency risk management failure notification', priority: 'IMMEDIATE', automated: true },
+   622→    ],
+   623→    'MONEY_MANAGEMENT:ERROR': [
+   624→      { action: 'RESET_SIZING', description: 'Reset to minimum position sizing', priority: 'HIGH', automated: true },
+   625→      { action: 'VERIFY_BALANCE', description: 'Verify account balance accuracy', priority: 'HIGH', automated: true },
+   626→    ],
+   627→    'MONEY_MANAGEMENT:CRITICAL': [
+   628→      { action: 'RESET_SIZING', description: 'Reset to minimum position sizing', priority: 'IMMEDIATE', automated: true },
+   629→      { action: 'HALT_TRADING', description: 'Halt new trade submissions', priority: 'IMMEDIATE', automated: true },
+   630→      { action: 'NOTIFY', description: 'Send money management critical alert', priority: 'HIGH', automated: true },
+   631→    ],
+   632→    'DATA_FEED:ERROR': [
+   633→      { action: 'SWITCH_SOURCE', description: 'Switch to backup data source', priority: 'MEDIUM', automated: false },
+   634→      { action: 'RECONNECT_FEED', description: 'Reconnect to primary data feed', priority: 'HIGH', automated: true },
+   635→    ],
+   636→    'DATA_FEED:CRITICAL': [
+   637→      { action: 'SWITCH_SOURCE', description: 'Switch to backup data source', priority: 'IMMEDIATE', automated: false },
+   638→      { action: 'HALT_TRADING', description: 'Halt trading until data feed is restored', priority: 'IMMEDIATE', automated: true },
+   639→    ],
+   640→    'AI_ENGINE:ERROR': [
+   641→      { action: 'FALLBACK_STRATEGY', description: 'Switch to fallback trading strategy', priority: 'MEDIUM', automated: true },
+   642→      { action: 'RESTART_ENGINE', description: 'Restart AI engine process', priority: 'HIGH', automated: false },
+   643→    ],
+   644→    'AI_ENGINE:CRITICAL': [
+   645→      { action: 'HALT_AI', description: 'Disable AI-driven trading signals', priority: 'IMMEDIATE', automated: true },
+   646→      { action: 'NOTIFY', description: 'Notify of AI engine failure', priority: 'HIGH', automated: true },
+   647→    ],
+   648→    'SYSTEM:CRITICAL': [
+   649→      { action: 'CHECK_HEALTH', description: 'Run full system health diagnostic', priority: 'IMMEDIATE', automated: true },
+   650→      { action: 'NOTIFY', description: 'Send system critical alert', priority: 'IMMEDIATE', automated: true },
+   651→    ],
+   652→    'SYSTEM:FATAL': [
+   653→      { action: 'GRACEFUL_SHUTDOWN', description: 'Initiate graceful system shutdown', priority: 'IMMEDIATE', automated: true },
+   654→      { action: 'NOTIFY', description: 'Send emergency system failure notification', priority: 'IMMEDIATE', automated: true },
+   655→    ],
+   656→    'NOTIFICATION:ERROR': [
+   657→      { action: 'QUEUE_RETRY', description: 'Queue notifications for retry', priority: 'LOW', automated: true },
+   658→    ],
+   659→    'API_RATE_LIMIT:CRITICAL': [
+   660→      { action: 'BACKOFF', description: 'Enter full API backoff mode', priority: 'IMMEDIATE', automated: true },
+   661→      { action: 'SWITCH_SOURCE', description: 'Switch to lower-frequency data source', priority: 'HIGH', automated: false },
+   662→    ],
+   663→  }
+   664→
+   665→  // Category-only fallback for ERROR level
+   666→  const categoryFallback: Partial<Record<LogCategory, RecoveryAction[]>> = {
+   667→    MT5_CONNECTION: [
+   668→      { action: 'RECONNECT', description: 'Attempt MT5 reconnection', priority: 'HIGH', automated: true },
+   669→    ],
+   670→    TRADE_EXECUTION: [
+   671→      { action: 'VERIFY_POSITIONS', description: 'Verify all open positions', priority: 'HIGH', automated: true },
+   672→    ],
+   673→    RISK_MANAGEMENT: [
+   674→      { action: 'RECALCULATE', description: 'Recalculate risk parameters', priority: 'HIGH', automated: true },
+   675→    ],
+   676→    MONEY_MANAGEMENT: [
+   677→      { action: 'RESET_SIZING', description: 'Reset to minimum position sizing', priority: 'HIGH', automated: true },
+   678→    ],
+   679→    DATA_FEED: [
+   680→      { action: 'SWITCH_SOURCE', description: 'Switch to backup data source', priority: 'MEDIUM', automated: false },
+   681→    ],
+   682→    AI_ENGINE: [
+   683→      { action: 'FALLBACK_STRATEGY', description: 'Switch to fallback trading strategy', priority: 'MEDIUM', automated: true },
+   684→    ],
+   685→    SYSTEM: [
+   686→      { action: 'CHECK_HEALTH', description: 'Check system health', priority: 'HIGH', automated: true },
+   687→    ],
+   688→    NOTIFICATION: [
+   689→      { action: 'QUEUE_RETRY', description: 'Queue notifications for retry', priority: 'LOW', automated: true },
+   690→    ],
+   691→    API_RATE_LIMIT: [
+   692→      { action: 'BACKOFF', description: 'Enter API backoff mode', priority: 'HIGH', automated: true },
+   693→    ],
+   694→  }
+   695→
+   696→  if (MAP[key]) return MAP[key]
+   697→  if (level === 'ERROR' && categoryFallback[category]) return categoryFallback[category]!
+   698→
+   699→  // Universal default
+   700→  return [
+   701→    { action: 'INVESTIGATE', description: 'Manual investigation required', priority: 'MEDIUM', automated: false },
+   702→  ]
+   703→}
+   704→
+   705→// ============================================
+   706→// PHASE 3: LOG HEALTH MONITORING
+   707→// ============================================
+   708→
+   709→export interface LogHealthResult {
+   710→  isHealthy: boolean
+   711→  flushSuccessRate: number
+   712→  totalFlushes: number
+   713→  failedFlushes: number
+   714→  lastFlushTime: Date | null
+   715→  lastFailureTime: Date | null
+   716→  lastFailureReason: string | null
+   717→  bufferBacklog: number
+   718→}
+   719→
+   720→class LogHealthMonitor {
+   721→  private recentFlushes: Array<{ success: boolean; time: Date }> = []
+   722→  private readonly WINDOW_SIZE = 20
+   723→  private _lastFlushTime: Date | null = null
+   724→  private _lastFailureTime: Date | null = null
+   725→  private _lastFailureReason: string | null = null
+   726→  private _totalFlushes = 0
+   727→  private _failedFlushes = 0
+   728→
+   729→  recordFlushSuccess(): void {
+   730→    const now = new Date()
+   731→    this.recentFlushes.push({ success: true, time: now })
+   732→    if (this.recentFlushes.length > this.WINDOW_SIZE) {
+   733→      this.recentFlushes.shift()
+   734→    }
+   735→    this._lastFlushTime = now
+   736→    this._totalFlushes++
+   737→  }
+   738→
+   739→  recordFlushFailure(error: string): void {
+   740→    const now = new Date()
+   741→    this.recentFlushes.push({ success: false, time: now })
+   742→    if (this.recentFlushes.length > this.WINDOW_SIZE) {
+   743→      this.recentFlushes.shift()
+   744→    }
+   745→    this._lastFlushTime = now
+   746→    this._lastFailureTime = now
+   747→    this._lastFailureReason = error
+   748→    this._totalFlushes++
+   749→    this._failedFlushes++
+   750→  }
+   751→
+   752→  getHealth(): LogHealthResult {
+   753→    const successCount = this.recentFlushes.filter(f => f.success).length
+   754→    const flushSuccessRate = this.recentFlushes.length > 0
+   755→      ? (successCount / this.recentFlushes.length) * 100
+   756→      : 100
+   757→
+   758→    const isHealthy = this.recentFlushes.length === 0 || flushSuccessRate >= 90
+   759→
+   760→    return {
+   761→      isHealthy,
+   762→      flushSuccessRate: Math.round(flushSuccessRate * 100) / 100,
+   763→      totalFlushes: this._totalFlushes,
+   764→      failedFlushes: this._failedFlushes,
+   765→      lastFlushTime: this._lastFlushTime,
+   766→      lastFailureTime: this._lastFailureTime,
+   767→      lastFailureReason: this._lastFailureReason,
+   768→      bufferBacklog: getBuffer().size(),
+   769→    }
+   770→  }
+   771→}
+   772→
+   773→export const logHealthMonitor = new LogHealthMonitor()
+   774→
+   775→// ============================================
+   776→// PHASE 3: ALERT ESCALATION PIPELINE
+   777→// ============================================
+   778→
+   779→interface EscalationEventRecord {
+   780→  id: string
+   781→  triggerLevel: LogLevel
+   782→  triggerCategory: LogCategory
+   783→  triggerMessage: string
+   784→  escalationLevel: number
+   785→  actions: string[]
+   786→  resolved: boolean
+   787→  createdAt: Date
+   788→}
+   789→
+   790→class EscalationManager {
+   791→  private recentEvents: EscalationEventRecord[] = []
+   792→  private readonly MAX_EVENTS = 100
+   793→
+   794→  async escalate(
+   795→    level: LogLevel,
+   796→    category: LogCategory,
+   797→    message: string,
+   798→    ctx?: LogContext
+   799→  ): Promise<void> {
+   800→    let escalationLevel: number
+   801→    let actions: string[] = []
+   802→
+   803→    switch (level) {
+   804→      case 'ERROR':
+   805→        escalationLevel = 1
+   806→        break
+   807→      case 'CRITICAL':
+   808→        escalationLevel = 2
+   809→        // Create EscalationEvent in DB for CRITICAL
+   810→        try {
+   811→          const record = await db.escalationEvent.create({
+   812→            data: {
+   813→              triggerLevel: level,
+   814→              triggerCategory: category,
+   815→              triggerMessage: message.substring(0, 500),
+   816→              escalationLevel: 2,
+   817→              actions: JSON.stringify(['LOG_AND_TRACK']),
+   818→              resolved: false,
+   819→            },
+   820→          })
+   821→          this.trackEvent({
+   822→            id: record.id,
+   823→            triggerLevel: level,
+   824→            triggerCategory: category,
+   825→            triggerMessage: message,
+   826→            escalationLevel: 2,
+   827→            actions: ['LOG_AND_TRACK'],
+   828→            resolved: false,
+   829→            createdAt: record.createdAt,
+   830→          })
+   831→        } catch (err) {
+   832→          console.error('[EscalationManager] Failed to persist CRITICAL escalation event:', err)
+   833→        }
+   834→        actions.push('LOG_AND_TRACK')
+   835→        return
+   836→
+   837→      case 'FATAL':
+   838→        escalationLevel = 3
+   839→        // Create EscalationEvent in DB for FATAL
+   840→        const fatalActions: string[] = []
+   841→
+   842→        // Attempt auto-recovery based on category
+   843→        const recoveryAction = this.getAutoRecoveryAction(category)
+   844→        fatalActions.push(recoveryAction)
+   845→        actions.push(recoveryAction)
+   846→
+   847→        try {
+   848→          const record = await db.escalationEvent.create({
+   849→            data: {
+   850→              triggerLevel: level,
+   851→              triggerCategory: category,
+   852→              triggerMessage: message.substring(0, 500),
+   853→              escalationLevel: 3,
+   854→              actions: JSON.stringify(fatalActions),
+   855→              resolved: false,
+   856→            },
+   857→          })
+   858→          this.trackEvent({
+   859→            id: record.id,
+   860→            triggerLevel: level,
+   861→            triggerCategory: category,
+   862→            triggerMessage: message,
+   863→            escalationLevel: 3,
+   864→            actions: fatalActions,
+   865→            resolved: false,
+   866→            createdAt: record.createdAt,
+   867→          })
+   868→        } catch (err) {
+   869→          console.error('[EscalationManager] Failed to persist FATAL escalation event:', err)
+   870→        }
+   871→        return
+   872→
+   873→      default:
+   874→        // DEBUG, INFO, WARN — no escalation
+   875→        return
+   876→    }
+   877→  }
+   878→
+   879→  private getAutoRecoveryAction(category: LogCategory): string {
+   880→    switch (category) {
+   881→      case 'MT5_CONNECTION':
+   882→        return 'suggest_reconnect'
+   883→      case 'TRADE_EXECUTION':
+   884→        return 'verify_all_open_positions'
+   885→      case 'SYSTEM':
+   886→        return 'check_system_health'
+   887→      default:
+   888→        return 'manual_investigation_required'
+   889→    }
+   890→  }
+   891→
+   892→  private trackEvent(event: EscalationEventRecord): void {
+   893→    this.recentEvents.push(event)
+   894→    if (this.recentEvents.length > this.MAX_EVENTS) {
+   895→      this.recentEvents.shift()
+   896→    }
+   897→  }
+   898→
+   899→  async getPendingEscalations(): Promise<EscalationEventRecord[]> {
+   900→    try {
+   901→      const dbEvents = await db.escalationEvent.findMany({
+   902→        where: { resolved: false },
+   903→        orderBy: { createdAt: 'desc' },
+   904→      })
+   905→
+   906→      // Merge in-memory events that may not yet be in DB
+   907→      const merged = new Map<string, EscalationEventRecord>()
+   908→      for (const mem of this.recentEvents) {
+   909→        if (!mem.resolved) merged.set(mem.id, mem)
+   910→      }
+   911→      for (const dbEvt of dbEvents) {
+   912→        merged.set(dbEvt.id, {
+   913→          id: dbEvt.id,
+   914→          triggerLevel: dbEvt.triggerLevel as LogLevel,
+   915→          triggerCategory: dbEvt.triggerCategory as LogCategory,
+   916→          triggerMessage: dbEvt.triggerMessage,
+   917→          escalationLevel: dbEvt.escalationLevel,
+   918→          actions: JSON.parse(dbEvt.actions),
+   919→          resolved: dbEvt.resolved,
+   920→          createdAt: dbEvt.createdAt,
+   921→        })
+   922→      }
+   923→      return Array.from(merged.values()).sort(
+   924→        (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+   925→      )
+   926→    } catch (err) {
+   927→      console.error('[EscalationManager] Failed to query pending escalations:', err)
+   928→      // Fall back to in-memory events
+   929→      return this.recentEvents.filter(e => !e.resolved)
+   930→    }
+   931→  }
+   932→
+   933→  async resolveEscalation(id: string): Promise<void> {
+   934→    // Update in-memory
+   935→    const memEvent = this.recentEvents.find(e => e.id === id)
+   936→    if (memEvent) memEvent.resolved = true
+   937→
+   938→    // Update DB
+   939→    try {
+   940→      await db.escalationEvent.update({
+   941→        where: { id },
+   942→        data: { resolved: true, resolvedAt: new Date() },
+   943→      })
+   944→    } catch (err) {
+   945→      console.error(`[EscalationManager] Failed to resolve escalation ${id}:`, err)
+   946→      throw err
+   947→    }
+   948→  }
+   949→}
+   950→
+   951→export const escalationManager = new EscalationManager()
+   952→
+   953→// ============================================
+   954→// PHASE 3: LOG EXPORT API
+   955→// ============================================
+   956→
+   957→/**
+   958→ * Export logs with optional filters in JSON or CSV format.
+   959→ */
+   960→export async function exportLogs(params: {
+   961→  level?: LogLevel
+   962→  category?: LogCategory
+   963→  startDate?: Date
+   964→  endDate?: Date
+   965→  format?: 'json' | 'csv'
+   966→}): Promise<string> {
+   967→  const { level, category, startDate, endDate, format = 'json' } = params
+   968→
+   969→  const where: Record<string, unknown> = {}
+   970→  if (level) where.level = level
+   971→  if (category) where.category = category
+   972→  if (startDate || endDate) {
+   973→    const createdAtFilter: Record<string, unknown> = {}
+   974→    if (startDate) createdAtFilter.gte = startDate
+   975→    if (endDate) createdAtFilter.lte = endDate
+   976→    where.createdAt = createdAtFilter
+   977→  }
+   978→
+   979→  const logs = await db.tradingLog.findMany({
+   980→    where,
+   981→    orderBy: { createdAt: 'desc' },
+   982→    take: 10000,
+   983→  })
+   984→
+   985→  if (format === 'csv') {
+   986→    const headers = 'id,timestamp,level,category,message,source,symbol,tradeId'
+   987→    const rows = logs.map(l => {
+   988→      const id = l.id
+   989→      const timestamp = l.createdAt.toISOString()
+   990→      const lvl = l.level
+   991→      const cat = l.category
+   992→      // Escape double quotes in message
+   993→      const msg = `"${(l.message ?? '').replace(/"/g, '""')}"`
+   994→      const src = l.source ? `"${l.source.replace(/"/g, '""')}"` : ''
+   995→      const sym = l.symbol ?? ''
+   996→      const tid = l.tradeId ?? ''
+   997→      return `${id},${timestamp},${lvl},${cat},${msg},${src},${sym},${tid}`
+   998→    })
+   999→    return [headers, ...rows].join('\n')
+  1000→  }
+  1001→
+  1002→  // Default: JSON format
+  1003→  return JSON.stringify(logs.map(l => ({
+  1004→    id: l.id,
+  1005→    timestamp: l.createdAt.toISOString(),
+  1006→    level: l.level,
+  1007→    category: l.category,
+  1008→    message: l.message,
+  1009→    source: l.source,
+  1010→    symbol: l.symbol,
+  1011→    tradeId: l.tradeId,
+  1012→  })), null, 2)
+  1013→}
+  1014→
+  1015→export default logger
+  1016→

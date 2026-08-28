@@ -1,0 +1,1229 @@
+     1→     1→/**
+     2→     2→ * Money Management Module - FINEX Indonesia (Enhanced)
+     3→     3→ * ======================================================
+     4→     4→ * Position sizing algorithms, Kelly Criterion, compounding,
+     5→     5→ * risk-of-ruin estimation, daily performance tracking,
+     6→     6→ * commission-aware sizing, reserve capital enforcement,
+     7→     7→ * drawdown recovery modeling, performance-based dynamic scaling,
+     8→     8→ * and currency risk awareness.
+     9→     9→ *
+    10→    10→ * Supported Sizing Methods:
+    11→    11→ *  - Fixed Fractional (default)
+    12→    12→ *  - Kelly Criterion (conservative: half-Kelly)
+    13→    13→ *  - Fixed Dollar Amount
+    14→    14→ *  - Anti-Martingale (increase after wins)
+    15→    15→ */
+    16→    16→
+    17→    17→import { db } from "./db"
+    18→    18→import logger from "./trading-logger"
+    19→    19→import { getRiskConfig } from "./risk-engine"
+    20→    20→import { isMarketOpen } from "./mt5-connection"
+    21→    21→
+    22→    22→export type SizingMethod = "FIXED_FRACTIONAL" | "KELLY" | "FIXED_DOLLAR" | "ANTI_MARTINGALE"
+    23→    23→
+    24→    24→export interface PositionSizeResult {
+    25→    25→  suggestedLotSize: number
+    26→    26→  riskAmount: number
+    27→    27→  riskPercent: number
+    28→    28→  method: SizingMethod
+    29→    29→  pipRisk: number
+    30→    30→  contractValue: number
+    31→    31→  marginRequired: number
+    32→    32→  reasoning: string
+    33→    33→  commissionCost: number
+    34→    34→  netRiskAfterCommission: number
+    35→    35→  scalingFactor: number
+    36→    36→  reserveCheckApplied: boolean
+    37→    37→  deployedMarginCheckApplied: boolean
+    38→    38→}
+    39→    39→
+    40→    40→export interface DailyPerformanceData {
+    41→    41→  date: string
+    42→    42→  startBalance: number
+    43→    43→  endBalance: number
+    44→    44→  realizedPnl: number
+    45→    45→  unrealizedPnl: number
+    46→    46→  totalPnl: number
+    47→    47→  pnlPercent: number
+    48→    48→  tradesOpened: number
+    49→    49→  tradesClosed: number
+    50→    50→  winTrades: number
+    51→    51→  lossTrades: number
+    52→    52→  maxDrawdown: number
+    53→    53→  peakEquity: number
+    54→    54→  troughEquity: number
+    55→    55→  commissionPaid: number
+    56→    56→  slippageCost: number
+    57→    57→  deployedCapital: number
+    58→    58→  reserveCapital: number
+    59→    59→  sizingMethodUsed: string
+    60→    60→  scalingFactor: number
+    61→    61→}
+    62→    62→
+    63→    63→export interface RiskOfRuinInput {
+    64→    64→  winRate: number        // 0-100
+    65→    65→  avgWin: number        // avg winning trade $ amount
+    66→    66→  avgLoss: number       // avg losing trade $ amount
+    67→    67→  riskPerTrade: number  // % risked per trade
+    68→    68→}
+    69→    69→
+    70→    70→export interface DrawdownRecoveryResult {
+    71→    71→  drawdownPct: number
+    72→    72→  recoveryNeeded: number
+    73→    73→  strategy: string
+    74→    74→  riskReductionPct: number
+    75→    75→}
+    76→    76→
+    77→    77→// ---- Constants ----
+    78→    78→
+    79→    79→const LEVERAGE = 25
+    80→    80→const MIN_LOT = 0.01
+    81→    81→const LOT_STEP = 0.01
+    82→    82→const PIP_VALUE_PER_LOT = 100000 // For stocks, 1 point * lot * 100000
+    83→    83→const DEFAULT_COMMISSION_PER_LOT = 1 // FINEX charges $1/lot
+    84→    84→
+    85→    85→// ---- Position Sizing ----
+    86→    86→
+    87→    87→/**
+    88→    88→ * Calculate the optimal lot size for a trade.
+    89→    89→ * Enhanced with commission-aware sizing, reserve capital enforcement,
+    90→    90→ * deployed margin cap, and performance-based dynamic scaling.
+    91→    91→ */
+    92→    92→export async function calculatePositionSize(params: {
+    93→    93→  symbol: string
+    94→    94→  direction: "BUY" | "SELL"
+    95→    95→  entryPrice: number
+    96→    96→  sl?: number | null
+    97→    97→  equity: number
+    98→    98→  method?: SizingMethod
+    99→    99→  fixedDollarRisk?: number
+   100→   100→  kellyFraction?: number // default 0.5 (half-Kelly)
+   101→   101→  commissionPerLot?: number // default $1 (FINEX)
+   102→   102→  reserveCapitalPct?: number // default from RiskConfig
+   103→   103→}): Promise<PositionSizeResult> {
+   104→   104→  const config = await getRiskConfig()
+   105→   105→  const method = params.method || "FIXED_FRACTIONAL"
+   106→   106→  const sl = params.sl
+   107→   107→  const commissionPerLot = params.commissionPerLot ?? DEFAULT_COMMISSION_PER_LOT
+   108→   108→  const reserveCapitalPct = params.reserveCapitalPct ?? config.reserveCapitalPct
+   109→   109→
+   110→   110→  // --- Performance-Based Dynamic Scaling ---
+   111→   111→  const scalingFactor = await calculateScalingFactor()
+   112→   112→
+   113→   113→  // Calculate pip risk (price distance to stop loss)
+   114→   114→  let pipRisk = 0
+   115→   115→  if (sl) {
+   116→   116→    pipRisk = params.direction === "BUY"
+   117→   117→      ? params.entryPrice - sl
+   118→   118→      : sl - params.entryPrice
+   119→   119→    pipRisk = Math.abs(pipRisk)
+   120→   120→  }
+   121→   121→
+   122→   122→  // If no SL, use a default 2% price risk as fallback
+   123→   123→  const effectivePipRisk = pipRisk > 0 ? pipRisk : params.entryPrice * 0.02
+   124→   124→
+   125→   125→  // --- Base Risk Amount by Method ---
+   126→   126→  let baseRiskAmount: number
+   127→   127→  let methodReasoning: string
+   128→   128→
+   129→   129→  switch (method) {
+   130→   130→    case "FIXED_FRACTIONAL": {
+   131→   131→      baseRiskAmount = (config.maxRiskPerTrade / 100) * params.equity
+   132→   132→      methodReasoning = `Fixed fractional: ${config.maxRiskPerTrade}% of equity ($${params.equity.toFixed(2)}) = $${baseRiskAmount.toFixed(2)}`
+   133→   133→      break
+   134→   134→    }
+   135→   135→    case "KELLY": {
+   136→   136→      const kellyFraction = params.kellyFraction || 0.5
+   137→   137→      const kellyResult = await calculateKelly(params.equity, kellyFraction)
+   138→   138→      baseRiskAmount = kellyResult.suggestedRisk
+   139→   139→      methodReasoning = `Half-Kelly criterion: Kelly suggests ${kellyResult.kellyPercent.toFixed(1)}%, using ${kellyFraction * 100}% = $${baseRiskAmount.toFixed(2)}`
+   140→   140→      break
+   141→   141→    }
+   142→   142→    case "FIXED_DOLLAR": {
+   143→   143→      baseRiskAmount = params.fixedDollarRisk || 100
+   144→   144→      methodReasoning = `Fixed dollar risk: $${baseRiskAmount.toFixed(2)} per trade`
+   145→   145→      break
+   146→   146→    }
+   147→   147→    case "ANTI_MARTINGALE": {
+   148→   148→      const recentTrades = await getRecentTradeResults(5)
+   149→   149→      let multiplier = 1
+   150→   150→      for (const t of recentTrades) {
+   151→   151→        if (t > 0) multiplier = Math.min(multiplier + 0.5, 3)
+   152→   152→        else break
+   153→   153→      }
+   154→   154→      baseRiskAmount = (config.maxRiskPerTrade / 100) * params.equity * multiplier
+   155→   155→      methodReasoning = `Anti-Martingale: base ${config.maxRiskPerTrade}% * ${multiplier.toFixed(1)}x (consecutive wins) = $${baseRiskAmount.toFixed(2)}`
+   156→   156→      break
+   157→   157→    }
+   158→   158→    default:
+   159→   159→      baseRiskAmount = (config.maxRiskPerTrade / 100) * params.equity
+   160→   160→      methodReasoning = `Default fixed fractional: $${baseRiskAmount.toFixed(2)}`
+   161→   161→  }
+   162→   162→
+   163→   163→  // --- Apply Scaling Factor ---
+   164→   164→  const scaledRiskAmount = baseRiskAmount * scalingFactor
+   165→   165→  let reasoning = methodReasoning
+   166→   166→  if (scalingFactor !== 1.0) {
+   167→   167→    reasoning += ` | Scaled ${scalingFactor}x -> $${scaledRiskAmount.toFixed(2)}`
+   168→   168→  }
+   169→   169→
+   170→   170→  // --- Commission-Aware Lot Sizing ---
+   171→   171→  // Risk budget must cover both SL risk AND commission cost.
+   172→   172→  // totalRisk = SL_risk + commission
+   173→   173→  // We need to find a lot size L where:
+   174→   174→  //   L * effectivePipRisk * PIP_VALUE_PER_LOT + L * commissionPerLot <= scaledRiskAmount
+   175→   175→  //   L * (effectivePipRisk * PIP_VALUE_PER_LOT + commissionPerLot) <= scaledRiskAmount
+   176→   176→  //   L <= scaledRiskAmount / (effectivePipRisk * PIP_VALUE_PER_LOT + commissionPerLot)
+   177→   177→  const costPerLot = effectivePipRisk * PIP_VALUE_PER_LOT + commissionPerLot
+   178→   178→  const rawLotSize = costPerLot > 0 ? scaledRiskAmount / costPerLot : 0
+   179→   179→  let suggestedLotSize = Math.floor(rawLotSize / LOT_STEP) * LOT_STEP
+   180→   180→  suggestedLotSize = Math.max(MIN_LOT, suggestedLotSize)
+   181→   181→
+   182→   182→  // Calculate commission cost for the suggested lot
+   183→   183→  const commissionCost = Math.round(suggestedLotSize * commissionPerLot * 100) / 100
+   184→   184→  const slRiskAmount = Math.round(suggestedLotSize * effectivePipRisk * PIP_VALUE_PER_LOT * 100) / 100
+   185→   185→  const netRiskAfterCommission = Math.round((slRiskAmount + commissionCost) * 100) / 100
+   186→   186→
+   187→   187→  reasoning += ` | Commission: $${commissionCost.toFixed(2)} (${suggestedLotSize} lot x $${commissionPerLot}/lot)`
+   188→   188→  reasoning += ` | Net risk (SL + commission): $${netRiskAfterCommission.toFixed(2)}`
+   189→   189→
+   190→   190→  // --- Reserve Capital Enforcement ---
+   191→   191→  const maxDeployable = params.equity * (1 - reserveCapitalPct / 100)
+   192→   192→  const contractValue = suggestedLotSize * params.entryPrice * 100000
+   193→   193→  const marginRequired = contractValue / LEVERAGE
+   194→   194→  let reserveCheckApplied = false
+   195→   195→
+   196→   196→  if (marginRequired > maxDeployable) {
+   197→   197→    // Reduce lot size so margin fits within deployable capital
+   198→   198→    const maxLotForReserve = (maxDeployable * LEVERAGE) / (params.entryPrice * 100000)
+   199→   199→    const reducedLot = Math.floor(maxLotForReserve / LOT_STEP) * LOT_STEP
+   200→   200→    if (reducedLot < suggestedLotSize) {
+   201→   201→      suggestedLotSize = Math.max(MIN_LOT, reducedLot)
+   202→   202→      reserveCheckApplied = true
+   203→   203→      // Recalculate values after reserve reduction
+   204→   204→    }
+   205→   205→    reasoning += ` | Reserve ${reserveCapitalPct}% enforced: max deployable $${maxDeployable.toFixed(2)}, reduced lot to ${suggestedLotSize}`
+   206→   206→  }
+   207→   207→
+   208→   208→  // --- Max Capital Deployment (Open Positions Check) ---
+   209→   209→  const openPositions = await db.trade.findMany({ where: { status: "OPEN" } })
+   210→   210→  const existingDeployedMargin = openPositions.reduce((sum, t) => sum + (t.margin || 0), 0)
+   211→   211→  const newMarginRequired = (suggestedLotSize * params.entryPrice * 100000) / LEVERAGE
+   212→   212→  let deployedMarginCheckApplied = false
+   213→   213→
+   214→   214→  if (existingDeployedMargin + newMarginRequired > maxDeployable) {
+   215→   215→    const availableForNew = maxDeployable - existingDeployedMargin
+   216→   216→    if (availableForNew > 0) {
+   217→   217→      const maxLotForDeployed = (availableForNew * LEVERAGE) / (params.entryPrice * 100000)
+   218→   218→      const reducedLot = Math.floor(maxLotForDeployed / LOT_STEP) * LOT_STEP
+   219→   219→      if (reducedLot < suggestedLotSize && reducedLot >= MIN_LOT) {
+   220→   220→        suggestedLotSize = reducedLot
+   221→   221→        deployedMarginCheckApplied = true
+   222→   222→        reasoning += ` | Deployed margin check: $${existingDeployedMargin.toFixed(2)} already deployed, reduced lot to ${suggestedLotSize}`
+   223→   223→      } else if (reducedLot < MIN_LOT) {
+   224→   224→        // Not enough deployable capital for even minimum lot
+   225→   225→        suggestedLotSize = 0
+   226→   226→        reasoning += ` | REJECTED: Not enough deployable capital ($${availableForNew.toFixed(2)} available, $${newMarginRequired.toFixed(2)} needed)`
+   227→   227→      }
+   228→   228→    } else {
+   229→   229→      suggestedLotSize = 0
+   230→   230→      reasoning += ` | REJECTED: All deployable capital ($${maxDeployable.toFixed(2)}) already deployed ($${existingDeployedMargin.toFixed(2)})`
+   231→   231→    }
+   232→   232→  }
+   233→   233→
+   234→   234→  // Cap at max lot per trade
+   235→   235→  if (suggestedLotSize > 0) {
+   236→   236→    suggestedLotSize = Math.min(suggestedLotSize, config.maxLotPerTrade)
+   237→   237→  }
+   238→   238→
+   239→   239→  // --- Final Derived Values ---
+   240→   240→  const finalContractValue = suggestedLotSize * params.entryPrice * 100000
+   241→   241→  const finalMarginRequired = finalContractValue / LEVERAGE
+   242→   242→  const finalCommissionCost = Math.round(suggestedLotSize * commissionPerLot * 100) / 100
+   243→   243→  const finalSlRiskAmount = Math.round(suggestedLotSize * effectivePipRisk * PIP_VALUE_PER_LOT * 100) / 100
+   244→   244→  const finalNetRisk = Math.round((finalSlRiskAmount + finalCommissionCost) * 100) / 100
+   245→   245→  const riskPercent = params.equity > 0 ? (finalNetRisk / params.equity) * 100 : 0
+   246→   246→
+   247→   247→  return {
+   248→   248→    suggestedLotSize: Math.round(suggestedLotSize * 100) / 100,
+   249→   249→    riskAmount: Math.round((baseRiskAmount * scalingFactor) * 100) / 100,
+   250→   250→    riskPercent: Math.round(riskPercent * 100) / 100,
+   251→   251→    method,
+   252→   252→    pipRisk: Math.round(effectivePipRisk * 100) / 100,
+   253→   253→    contractValue: Math.round(finalContractValue * 100) / 100,
+   254→   254→    marginRequired: Math.round(finalMarginRequired * 100) / 100,
+   255→   255→    reasoning,
+   256→   256→    commissionCost: finalCommissionCost,
+   257→   257→    netRiskAfterCommission: finalNetRisk,
+   258→   258→    scalingFactor,
+   259→   259→    reserveCheckApplied,
+   260→   260→    deployedMarginCheckApplied,
+   261→   261→  }
+   262→   262→}
+   263→   263→
+   264→   264→/**
+   265→   265→ * Kelly Criterion position sizing.
+   266→   266→ */
+   267→   267→async function calculateKelly(equity: number, fraction: number): Promise<{
+   268→   268→  kellyPercent: number
+   269→   269→  suggestedRisk: number
+   270→   270→}> {
+   271→   271→  const closedTrades = await db.trade.findMany({
+   272→   272→    where: { status: "CLOSED" },
+   273→   273→    orderBy: { closeTime: "desc" },
+   274→   274→    take: 100,
+   275→   275→  })
+   276→   276→
+   277→   277→  if (closedTrades.length < 10) {
+   278→   278→    return { kellyPercent: 1.0, suggestedRisk: (fraction / 100) * equity }
+   279→   279→  }
+   280→   280→
+   281→   281→  const wins = closedTrades.filter((t) => t.pnl > 0)
+   282→   282→  const losses = closedTrades.filter((t) => t.pnl < 0)
+   283→   283→  const winRate = wins.length / closedTrades.length
+   284→   284→  const avgWin = wins.length > 0 ? wins.reduce((s, t) => s + t.pnl, 0) / wins.length : 0
+   285→   285→  const avgLoss = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + t.pnl, 0) / losses.length) : 1
+   286→   286→
+   287→   287→  const R = avgLoss > 0 ? avgWin / avgLoss : 0
+   288→   288→  const kellyPercent = R > 0 ? (winRate - (1 - winRate) / R) * 100 : 0
+   289→   289→  const clampedKelly = Math.max(-5, Math.min(25, kellyPercent))
+   290→   290→
+   291→   291→  return {
+   292→   292→    kellyPercent: clampedKelly,
+   293→   293→    suggestedRisk: (Math.max(0, clampedKelly) * fraction / 100) * equity,
+   294→   294→  }
+   295→   295→}
+   296→   296→
+   297→   297→/**
+   298→   298→ * Get recent trade results as array of PnL values (newest first).
+   299→   299→ */
+   300→   300→async function getRecentTradeResults(count: number): Promise<number[]> {
+   301→   301→  const trades = await db.trade.findMany({
+   302→   302→    where: { status: "CLOSED" },
+   303→   303→    orderBy: { closeTime: "desc" },
+   304→   304→    take: count,
+   305→   305→  })
+   306→   306→  return trades.map((t) => t.pnl)
+   307→   307→}
+   308→   308→
+   309→   309→// ---- Risk of Ruin ----
+   310→   310→
+   311→   311→/**
+   312→   312→ * Estimate the probability of ruin (losing X% of account).
+   313→   313→ * Uses the formula: P(ruin) = ((1 - edge) / (1 + edge))^units
+   314→   314→ * where edge = W - (1-W)*avgLoss/avgWin and units = account / (risk per trade)
+   315→   315→ */
+   316→   316→export function calculateRiskOfRuin(input: RiskOfRuinInput): {
+   317→   317→  probability: number
+   318→   318→  interpretation: string
+   319→   319→  recommendation: string
+   320→   320→} {
+   321→   321→  if (input.winRate <= 0 || input.avgLoss <= 0) {
+   322→   322→    return {
+   323→   323→      probability: 100,
+   324→   324→      interpretation: "Cannot calculate - insufficient winning trades or zero avg loss",
+   325→   325→      recommendation: "Improve strategy win rate or reduce loss size",
+   326→   326→    }
+   327→   327→  }
+   328→   328→
+   329→   329→  const W = input.winRate / 100
+   330→   330→  const L = 1 - W
+   331→   331→  const R = input.avgWin / input.avgLoss
+   332→   332→
+   333→   333→  if (R <= 0) {
+   334→   334→    return {
+   335→   335→      probability: 100,
+   336→   336→      interpretation: "Average win is zero or negative",
+   337→   337→      recommendation: "Strategy needs improvement - avg win must exceed avg loss",
+   338→   338→    }
+   339→   339→  }
+   340→   340→
+   341→   341→  const edge = W - L / R
+   342→   342→  const riskFraction = input.riskPerTrade / 100
+   343→   343→
+   344→   344→  if (edge <= 0) {
+   345→   345→    return {
+   346→   346→      probability: 100,
+   347→   347→      interpretation: `Negative edge (${(edge * 100).toFixed(2)}%) - strategy is unprofitable statistically`,
+   348→   348→      recommendation: "Do not trade this strategy. Win rate and/or reward-risk ratio must improve.",
+   349→   349→    }
+   350→   350→  }
+   351→   351→
+   352→   352→  const q = (1 - edge) / (1 + edge)
+   353→   353→  const units = 1 / riskFraction
+   354→   354→  const ror = Math.pow(Math.max(0, q), units) * 100
+   355→   355→
+   356→   356→  let interpretation: string
+   357→   357→  let recommendation: string
+   358→   358→
+   359→   359→  if (ror < 1) {
+   360→   360→    interpretation = "Very Low Risk"
+   361→   361→    recommendation = "Strategy has a strong statistical edge. Safe to trade with current parameters."
+   362→   362→  } else if (ror < 5) {
+   363→   363→    interpretation = "Low Risk"
+   364→   364→    recommendation = "Acceptable risk level. Continue monitoring performance metrics."
+   365→   365→  } else if (ror < 15) {
+   366→   366→    interpretation = "Moderate Risk"
+   367→   367→    recommendation = "Consider reducing position sizes or improving win rate to lower risk of ruin."
+   368→   368→  } else if (ror < 30) {
+   369→   369→    interpretation = "High Risk"
+   370→   370→    recommendation = "Significant risk of account drawdown. Reduce risk per trade significantly."
+   371→   371→  } else {
+   372→   372→    interpretation = "Extreme Risk"
+   373→   373→    recommendation = "Do NOT trade this strategy with current parameters. High probability of account destruction."
+   374→   374→  }
+   375→   375→
+   376→   376→  return {
+   377→   377→    probability: Math.min(100, Math.round(ror * 100) / 100),
+   378→   378→    interpretation,
+   379→   379→    recommendation,
+   380→   380→  }
+   381→   381→}
+   382→   382→
+   383→   383→// ---- Drawdown Recovery Model ----
+   384→   384→
+   385→   385→/**
+   386→   386→ * Calculate the recovery needed for any drawdown level.
+   387→   387→ * Formula: recoveryNeeded = (drawdown / (100 - drawdown)) * 100
+   388→   388→ *
+   389→   389→ * Examples:
+   390→   390→ *   10% DD -> 11.1% recovery needed
+   391→   391→ *   20% DD -> 25% recovery needed
+   392→   392→ *   50% DD -> 100% recovery needed
+   393→   393→ */
+   394→   394→export function calculateDrawdownRecovery(drawdownPct: number): DrawdownRecoveryResult {
+   395→   395→  const dd = Math.max(0, Math.min(99, drawdownPct)) // Clamp 0-99%
+   396→   396→
+   397→   397→  const recoveryNeeded = dd >= 100 ? Infinity : (dd / (100 - dd)) * 100
+   398→   398→
+   399→   399→  // Recovery strategy and risk reduction based on drawdown severity
+   400→   400→  let strategy: string
+   401→   401→  let riskReductionPct: number
+   402→   402→
+   403→   403→  if (dd < 5) {
+   404→   404→    strategy = "NORMAL: No action needed. Drawdown within acceptable range. Continue normal trading operations."
+   405→   405→    riskReductionPct = 0
+   406→   406→  } else if (dd < 10) {
+   407→   407→    strategy = "CAUTION: Minor drawdown. Review recent trades for patterns. Tighten stop losses by 10%. Avoid high-risk setups."
+   408→   408→    riskReductionPct = 10
+   409→   409→  } else if (dd < 15) {
+   410→   410→    strategy = "ELEVATED: Moderate drawdown. Reduce position sizes by 25%. Focus on highest-confidence setups only. Consider pausing new positions temporarily."
+   411→   411→    riskReductionPct = 25
+   412→   412→  } else if (dd < 20) {
+   413→   413→    strategy = "HIGH: Significant drawdown. Reduce risk to 50% of normal. Trade only A+ setups. Implement stricter entry criteria. Review and potentially pause underperforming strategies."
+   414→   414→    riskReductionPct = 50
+   415→   415→  } else if (dd < 30) {
+   416→   416→    strategy = "CRITICAL: Severe drawdown. Reduce risk to 75% of normal. Consider full trading pause for 24-48 hours. Perform strategy review. Check if market regime has changed."
+   417→   417→    riskReductionPct = 75
+   418→   418→  } else if (dd < 50) {
+   419→   419→    strategy = "EMERGENCY: Extreme drawdown. Stop all new trading immediately. Close weakest positions. Full strategy audit required. Resume only with micro-lots after analysis."
+   420→   420→    riskReductionPct = 90
+   421→   421→  } else {
+   422→   422→    strategy = "CATASTROPHIC: Account severely impaired. ${recoveryNeeded.toFixed(1)}% gain required to recover. Full trading halt. Account preservation is the only priority. Consider account reset or external capital injection after thorough review."
+   423→   423→    riskReductionPct = 100
+   424→   424→  }
+   425→   425→
+   426→   426→  // Fix the template literal for 50%+ case
+   427→   427→  if (dd >= 50) {
+   428→   428→    strategy = `CATASTROPHIC: Account severely impaired. ${recoveryNeeded.toFixed(1)}% gain required to recover. Full trading halt. Account preservation is the only priority. Consider account reset or external capital injection after thorough review.`
+   429→   429→  }
+   430→   430→
+   431→   431→  return {
+   432→   432→    drawdownPct: Math.round(dd * 100) / 100,
+   433→   433→    recoveryNeeded: Math.round(recoveryNeeded * 100) / 100,
+   434→   434→    strategy,
+   435→   435→    riskReductionPct,
+   436→   436→  }
+   437→   437→}
+   438→   438→
+   439→   439→// ---- Performance-Based Dynamic Scaling ----
+   440→   440→
+   441→   441→/**
+   442→   442→ * Calculate a dynamic scaling factor based on recent trading performance.
+   443→   443→ * Analyzes the last 30 closed trades (or all if fewer) for:
+   444→   444→ *   - Rolling win rate
+   445→   445→ *   - Profit factor (gross profit / gross loss)
+   446→   446→ *   - Sharpe-like ratio (mean PnL / std dev of PnL)
+   447→   447→ *
+   448→   448→ * Scaling rules:
+   449→   449→ *   WR > 60% AND PF > 1.5  -> scale up to 1.25x (max)
+   450→   450→ *   WR > 55% AND PF > 1.2  -> scale up to 1.1x
+   451→   451→ *   WR < 40% OR PF < 0.8  -> scale down to 0.5x
+   452→   452→ *   WR < 45% OR PF < 1.0  -> scale down to 0.75x
+   453→   453→ *   Otherwise              -> 1.0x (neutral)
+   454→   454→ */
+   455→   455→export async function calculateScalingFactor(): Promise<number> {
+   456→   456→  try {
+   457→   457→    const closedTrades = await db.trade.findMany({
+   458→   458→      where: { status: "CLOSED" },
+   459→   459→      orderBy: { closeTime: "desc" },
+   460→   460→      take: 30,
+   461→   461→    })
+   462→   462→
+   463→   463→    // Not enough trades to evaluate - use neutral scaling
+   464→   464→    if (closedTrades.length < 5) {
+   465→   465→      return 1.0
+   466→   466→    }
+   467→   467→
+   468→   468→    // Calculate rolling win rate
+   469→   469→    const wins = closedTrades.filter((t) => t.pnl > 0)
+   470→   470→    const winRate = (wins.length / closedTrades.length) * 100
+   471→   471→
+   472→   472→    // Calculate profit factor
+   473→   473→    const grossProfit = wins.reduce((sum, t) => sum + t.pnl, 0)
+   474→   474→    const losses = closedTrades.filter((t) => t.pnl < 0)
+   475→   475→    const grossLoss = Math.abs(losses.reduce((sum, t) => sum + t.pnl, 0))
+   476→   476→    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : 0
+   477→   477→
+   478→   478→    // Calculate Sharpe-like ratio (mean / stddev of PnL)
+   479→   479→    const pnls = closedTrades.map((t) => t.pnl)
+   480→   480→    const mean = pnls.reduce((s, v) => s + v, 0) / pnls.length
+   481→   481→    const variance = pnls.reduce((s, v) => s + (v - mean) ** 2, 0) / pnls.length
+   482→   482→    const stddev = Math.sqrt(variance)
+   483→   483→    // We don't use this for scaling decisions directly but log it
+   484→   484→    const sharpeLike = stddev > 0 ? mean / stddev : 0
+   485→   485→
+   486→   486→    // Determine scaling factor based on rules
+   487→   487→    let factor: number
+   488→   488→    if (winRate > 60 && profitFactor > 1.5) {
+   489→   489→      factor = 1.25
+   490→   490→    } else if (winRate > 55 && profitFactor > 1.2) {
+   491→   491→      factor = 1.1
+   492→   492→    } else if (winRate < 40 || profitFactor < 0.8) {
+   493→   493→      factor = 0.5
+   494→   494→    } else if (winRate < 45 || profitFactor < 1.0) {
+   495→   495→      factor = 0.75
+   496→   496→    } else {
+   497→   497→      factor = 1.0
+   498→   498→    }
+   499→   499→
+   500→   500→    logger.debug("MONEY_MANAGEMENT", `Scaling factor calculated: ${factor}x (WR: ${winRate.toFixed(1)}%, PF: ${profitFactor.toFixed(2)}, Sharpe-like: ${sharpeLike.toFixed(2)})`, {
+   501→   501→      metadata: {
+   502→   502→        scalingFactor: factor,
+   503→   503→        winRate: Math.round(winRate * 100) / 100,
+   504→   504→        profitFactor: Math.round(profitFactor * 100) / 100,
+   505→   505→        sharpeLike: Math.round(sharpeLike * 100) / 100,
+   506→   506→        sampleSize: closedTrades.length,
+   507→   507→      },
+   508→   508→    })
+   509→   509→
+   510→   510→    return factor
+   511→   511→  } catch (err) {
+   512→   512→    logger.error("MONEY_MANAGEMENT", "Error calculating scaling factor, defaulting to 1.0", {
+   513→   513→      details: err instanceof Error ? err.stack : undefined,
+   514→   514→    })
+   515→   515→    return 1.0
+   516→   516→  }
+   517→   517→}
+   518→   518→
+   519→   519→// ---- Currency Risk Awareness ----
+   520→   520→
+   521→   521→/**
+   522→   522→ * Returns informational awareness about IDR/USD currency risk.
+   523→   523→ * FINEX may use USD accounts for IDX stocks, creating FX exposure.
+   524→   524→ * This is informational only (no auto-action taken).
+   525→   525→ */
+   526→   526→export function getExchangeRateRisk(): {
+   527→   527→  hasExposure: boolean
+   528→   528→  baseCurrency: string
+   529→   529→  quoteCurrency: string
+   530→   530→  warning: string
+   531→   531→  recommendation: string
+   532→   532→  openPositionsSummary: string
+   533→   533→} {
+   534→   534→  // Since we trade IDX stocks priced in IDR on a potentially USD-denominated account,
+   535→   535→  // there is inherent FX risk. This function provides awareness.
+   536→   536→  return {
+   537→   537→    hasExposure: true,
+   538→   538→    baseCurrency: "USD",
+   539→   539→    quoteCurrency: "IDR",
+   540→   540→    warning: "IDX stocks are priced in IDR. If account is USD-denominated, IDR/USD fluctuations affect real returns. A 1% move in IDR/USD translates to ~1% P&L impact on open positions.",
+   541→   541→    recommendation: "Monitor BI (Bank Indonesia) rate decisions. Consider hedging FX exposure if position sizes are large relative to account. Keep reserve capital to absorb FX drawdowns.",
+   542→   542→    openPositionsSummary: "All IDX stock positions carry implicit IDR/USD exchange rate risk. Profit in IDR terms may differ from USD terms if exchange rates move between position open and close.",
+   543→   543→  }
+   544→   544→}
+   545→   545→
+   546→   546→// ---- Daily Performance Tracking ----
+   547→   547→
+   548→   548→/**
+   549→   549→ * Get or create today's daily performance record.
+   550→   550→ */
+   551→   551→export async function getDailyPerformance(): Promise<DailyPerformanceData> {
+   552→   552→  const todayStr = new Date().toISOString().split("T")[0]
+   553→   553→
+   554→   554→  const existing = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
+   555→   555→  if (existing) {
+   556→   556→    return mapDailyPerformanceToData(existing)
+   557→   557→  }
+   558→   558→
+   559→   559→  // Create today's record
+   560→   560→  const BASE_BALANCE = 10000
+   561→   561→  const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
+   562→   562→  const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
+   563→   563→  const startBalance = Math.round((BASE_BALANCE + totalClosedPnl) * 100) / 100
+   564→   564→
+   565→   565→  const perf = await db.dailyPerformance.create({
+   566→   566→    data: {
+   567→   567→      date: todayStr,
+   568→   568→      startBalance,
+   569→   569→      endBalance: startBalance,
+   570→   570→      peakEquity: startBalance,
+   571→   571→      troughEquity: startBalance,
+   572→   572→    },
+   573→   573→  })
+   574→   574→
+   575→   575→  return mapDailyPerformanceToData(perf)
+   576→   576→}
+   577→   577→
+   578→   578→/**
+   579→   579→ * Update daily performance after a trade event.
+   580→   580→ * Enhanced to track commission, slippage, deployed capital, reserve capital,
+   581→   581→ * scaling factor, and sizing method used.
+   582→   582→ */
+   583→   583→export async function updateDailyPerformance(params: {
+   584→   584→  type: "OPEN" | "CLOSE"
+   585→   585→  pnl?: number
+   586→   586→  isWin?: boolean
+   587→   587→  commission?: number
+   588→   588→  slippage?: number
+   589→   589→  sizingMethod?: string
+   590→   590→}): Promise<void> {
+   591→   591→  const todayStr = new Date().toISOString().split("T")[0]
+   592→   592→
+   593→   593→  const existing = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
+   594→   594→  if (!existing) return
+   595→   595→
+   596→   596→  const openTrades = await db.trade.findMany({ where: { status: "OPEN" } })
+   597→   597→  const unrealizedPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
+   598→   598→
+   599→   599→  // Calculate deployed capital = sum of margin for all open positions
+   600→   600→  const deployedCapital = openTrades.reduce((s, t) => s + (t.margin || 0), 0)
+   601→   601→
+   602→   602→  // Reserve capital = equity - deployed capital - unrealized PnL
+   603→   603→  const currentEquity = existing.startBalance + existing.realizedPnl + unrealizedPnl
+   604→   604→  const reserveCapital = Math.max(0, currentEquity - deployedCapital - unrealizedPnl)
+   605→   605→
+   606→   606→  // Track commission and slippage from closed trades today
+   607→   607→  const todayStart = new Date(todayStr)
+   608→   608→  const todayClosedTrades = await db.trade.findMany({
+   609→   609→    where: {
+   610→   610→      status: "CLOSED",
+   611→   611→      closeTime: { gte: todayStart },
+   612→   612→    },
+   613→   613→  })
+   614→   614→  const totalCommissionPaid = todayClosedTrades.reduce((s, t) => s + (t.commission || 0), 0)
+   615→   615→  const totalSlippageCost = todayClosedTrades.reduce((s, t) => s + (t.slippage || 0), 0)
+   616→   616→
+   617→   617→  // Get current scaling factor
+   618→   618→  const scalingFactor = await calculateScalingFactor()
+   619→   619→
+   620→   620→  const updateData: Record<string, unknown> = {
+   621→   621→    unrealizedPnl: Math.round(unrealizedPnl * 100) / 100,
+   622→   622→    deployedCapital: Math.round(deployedCapital * 100) / 100,
+   623→   623→    reserveCapital: Math.round(reserveCapital * 100) / 100,
+   624→   624→    commissionPaid: Math.round(totalCommissionPaid * 100) / 100,
+   625→   625→    slippageCost: Math.round(totalSlippageCost * 100) / 100,
+   626→   626→    scalingFactor,
+   627→   627→  }
+   628→   628→
+   629→   629→  // Track the most common sizing method used today
+   630→   630→  if (params.sizingMethod) {
+   631→   631→    // Store the latest sizing method used; this is a simplification.
+   632→   632→    // A more complex approach would count method occurrences.
+   633→   633→    updateData.sizingMethodUsed = params.sizingMethod
+   634→   634→  }
+   635→   635→
+   636→   636→  if (params.type === "CLOSE") {
+   637→   637→    const newRealized = Math.round((existing.realizedPnl + (params.pnl || 0)) * 100) / 100
+   638→   638→    updateData.realizedPnl = newRealized
+   639→   639→    updateData.totalPnl = Math.round((newRealized + unrealizedPnl) * 100) / 100
+   640→   640→    updateData.pnlPercent = existing.startBalance > 0 ? Math.round((newRealized / existing.startBalance) * 10000) / 100 : 0
+   641→   641→    updateData.tradesClosed = existing.tradesClosed + 1
+   642→   642→    if (params.isWin) {
+   643→   643→      updateData.winTrades = existing.winTrades + 1
+   644→   644→    } else {
+   645→   645→      updateData.lossTrades = existing.lossTrades + 1
+   646→   646→    }
+   647→   647→  } else {
+   648→   648→    updateData.tradesOpened = existing.tradesOpened + 1
+   649→   649→    updateData.totalPnl = Math.round((existing.realizedPnl + unrealizedPnl) * 100) / 100
+   650→   650→    updateData.pnlPercent = existing.startBalance > 0 ? Math.round((existing.realizedPnl / existing.startBalance) * 10000) / 100 : 0
+   651→   651→  }
+   652→   652→
+   653→   653→  // Update peak/trough for drawdown
+   654→   654→  const finalEquity = existing.startBalance + (updateData.totalPnl as number)
+   655→   655→  updateData.endBalance = Math.round(finalEquity * 100) / 100
+   656→   656→
+   657→   657→  const newPeak = Math.max(existing.peakEquity, finalEquity)
+   658→   658→  const newTrough = Math.min(existing.troughEquity, finalEquity)
+   659→   659→  updateData.peakEquity = Math.round(newPeak * 100) / 100
+   660→   660→  updateData.troughEquity = Math.round(newTrough * 100) / 100
+   661→   661→
+   662→   662→  if (newPeak > 0) {
+   663→   663→    const dd = ((newPeak - newTrough) / newPeak) * 100
+   664→   664→    updateData.maxDrawdown = Math.max(existing.maxDrawdown, Math.round(dd * 100) / 100)
+   665→   665→  }
+   666→   666→
+   667→   667→  await db.dailyPerformance.update({
+   668→   668→    where: { date: todayStr },
+   669→   669→    data: updateData,
+   670→   670→  })
+   671→   671→
+   672→   672→  logger.debug("MONEY_MANAGEMENT", `Daily performance updated: ${params.type} | PnL: ${params.pnl ?? 0} | Commission: $${totalCommissionPaid.toFixed(2)} | Deployed: $${deployedCapital.toFixed(2)} | Reserve: $${reserveCapital.toFixed(2)}`, {
+   673→   673→    metadata: { type: params.type, pnl: params.pnl, date: todayStr, scalingFactor },
+   674→   674→  })
+   675→   675→}
+   676→   676→
+   677→   677→// ---- Helper: Map DB record to DailyPerformanceData ----
+   678→   678→
+   679→   679→function mapDailyPerformanceToData(row: {
+   680→   680→  date: string
+   681→   681→  startBalance: number
+   682→   682→  endBalance: number
+   683→   683→  realizedPnl: number
+   684→   684→  unrealizedPnl: number
+   685→   685→  totalPnl: number
+   686→   686→  pnlPercent: number
+   687→   687→  tradesOpened: number
+   688→   688→  tradesClosed: number
+   689→   689→  winTrades: number
+   690→   690→  lossTrades: number
+   691→   691→  maxDrawdown: number
+   692→   692→  peakEquity: number
+   693→   693→  troughEquity: number
+   694→   694→  commissionPaid: number
+   695→   695→  slippageCost: number
+   696→   696→  deployedCapital: number
+   697→   697→  reserveCapital: number
+   698→   698→  sizingMethodUsed: string
+   699→   699→  scalingFactor: number
+   700→   700→}): DailyPerformanceData {
+   701→   701→  return {
+   702→   702→    date: row.date,
+   703→   703→    startBalance: row.startBalance,
+   704→   704→    endBalance: row.endBalance,
+   705→   705→    realizedPnl: row.realizedPnl,
+   706→   706→    unrealizedPnl: row.unrealizedPnl,
+   707→   707→    totalPnl: row.totalPnl,
+   708→   708→    pnlPercent: row.pnlPercent,
+   709→   709→    tradesOpened: row.tradesOpened,
+   710→   710→    tradesClosed: row.tradesClosed,
+   711→   711→    winTrades: row.winTrades,
+   712→   712→    lossTrades: row.lossTrades,
+   713→   713→    maxDrawdown: row.maxDrawdown,
+   714→   714→    peakEquity: row.peakEquity,
+   715→   715→    troughEquity: row.troughEquity,
+   716→   716→    commissionPaid: row.commissionPaid,
+   717→   717→    slippageCost: row.slippageCost,
+   718→   718→    deployedCapital: row.deployedCapital,
+   719→   719→    reserveCapital: row.reserveCapital,
+   720→   720→    sizingMethodUsed: row.sizingMethodUsed,
+   721→   721→    scalingFactor: row.scalingFactor,
+   722→   722→  }
+   723→   723→}
+   724→   724→
+   725→   725→// ============================================================================
+   726→   726→// PHASE 3: ENHANCED MONEY MANAGEMENT
+   727→   727→// ============================================================================
+   728→   728→
+   729→   729→// ---- 1. Maximum Consecutive Loss Protection ----
+   730→   730→
+   731→   731→export interface ConsecutiveLossResult {
+   732→   732→  isHalted: boolean
+   733→   733→  consecutiveLosses: number
+   734→   734→  maxAllowed: number
+   735→   735→  haltReason: string | null
+   736→   736→  cooldownRemainingMinutes: number
+   737→   737→  lastLossTime: Date | null
+   738→   738→}
+   739→   739→
+   740→   740→/**
+   741→   741→ * Check whether trading should be halted due to consecutive losses.
+   742→   742→ *
+   743→   743→ * Queries recent CLOSED trades ordered by closeTime desc, counts consecutive
+   744→   744→ * losses (pnl < 0) from the most recent trade. If the count reaches or exceeds
+   745→   745→ * maxConsecutiveLosses (default 5), trading is halted.
+   746→   746→ *
+   747→   747→ * A cooldown period (default 60 minutes) must elapse before trading resumes.
+   748→   748→ * Once the cooldown elapses, the counter is effectively reset and trading is allowed.
+   749→   749→ */
+   750→   750→export async function checkConsecutiveLossHalt(): Promise<ConsecutiveLossResult> {
+   751→   751→  // Defaults (these fields exist in the DB RiskConfig model but are not yet
+   752→   752→  // exposed through the TypeScript RiskConfigData interface).
+   753→   753→  const maxAllowed = 5
+   754→   754→  const cooldownMinutes = 60
+   755→   755→
+   756→   756→  const closedTrades = await db.trade.findMany({
+   757→   757→    where: { status: "CLOSED", closeTime: { not: null } },
+   758→   758→    orderBy: { closeTime: "desc" },
+   759→   759→    select: { pnl: true, closeTime: true },
+   760→   760→    take: maxAllowed + 1,
+   761→   761→  })
+   762→   762→
+   763→   763→  // Count consecutive losses from the most recent trade
+   764→   764→  let consecutiveLosses = 0
+   765→   765→  let lastLossTime: Date | null = null
+   766→   766→
+   767→   767→  for (const trade of closedTrades) {
+   768→   768→    if (trade.pnl < 0) {
+   769→   769→      consecutiveLosses++
+   770→   770→      if (lastLossTime === null && trade.closeTime) {
+   771→   771→        lastLossTime = trade.closeTime
+   772→   772→      }
+   773→   773→    } else {
+   774→   774→      break // Stop counting at first non-loss
+   775→   775→    }
+   776→   776→  }
+   777→   777→
+   778→   778→  const result: ConsecutiveLossResult = {
+   779→   779→    isHalted: false,
+   780→   780→    consecutiveLosses,
+   781→   781→    maxAllowed,
+   782→   782→    haltReason: null,
+   783→   783→    cooldownRemainingMinutes: 0,
+   784→   784→    lastLossTime,
+   785→   785→  }
+   786→   786→
+   787→   787→  if (consecutiveLosses >= maxAllowed && lastLossTime) {
+   788→   788→    const elapsedMs = Date.now() - lastLossTime.getTime()
+   789→   789→    const cooldownMs = cooldownMinutes * 60 * 1000
+   790→   790→    const remainingMs = cooldownMs - elapsedMs
+   791→   791→
+   792→   792→    if (remainingMs > 0) {
+   793→   793→      const remainingMinutes = Math.ceil(remainingMs / (60 * 1000))
+   794→   794→      result.isHalted = true
+   795→   795→      result.cooldownRemainingMinutes = remainingMinutes
+   796→   796→      result.haltReason = `Consecutive loss halt: ${consecutiveLosses} consecutive losses (max ${maxAllowed}). Cooldown: ${remainingMinutes} minutes remaining.`
+   797→   797→
+   798→   798→      logger.warn(
+   799→   799→        "MONEY_MANAGEMENT",
+   800→   800→        result.haltReason,
+   801→   801→        {
+   802→   802→          metadata: {
+   803→   803→            consecutiveLosses,
+   804→   804→            maxAllowed,
+   805→   805→            cooldownMinutes,
+   806→   806→            cooldownRemainingMinutes: remainingMinutes,
+   807→   807→            lastLossTime: lastLossTime.toISOString(),
+   808→   808→          },
+   809→   809→        },
+   810→   810→      )
+   811→   811→    }
+   812→   812→    // If cooldown has elapsed, isHalted stays false — counter is effectively reset
+   813→   813→  }
+   814→   814→
+   815→   815→  return result
+   816→   816→}
+   817→   817→
+   818→   818→// ---- 2. Equity Curve Trading ----
+   819→   819→
+   820→   820→export type EquityCurveStatus = "NORMAL" | "BELOW_MA" | "RECOVERING"
+   821→   821→
+   822→   822→export interface EquityCurveResult {
+   823→   823→  status: EquityCurveStatus
+   824→   824→  currentEquity: number
+   825→   825→  equityCurveMa: number
+   826→   826→  maPeriod: number
+   827→   827→}
+   828→   828→
+   829→   829→/**
+   830→   830→ * Check equity curve status against its simple moving average.
+   831→   831→ *
+   832→   832→ * Queries DailyPerformance for the last N days (maPeriod, default 20),
+   833→   833→ * calculates the SMA of endBalance, and compares the current equity.
+   834→   834→ *
+   835→   835→ * - BELOW_MA: current equity is below the SMA → trading should be disabled/reduced
+   836→   836→ * - RECOVERING: current equity was below MA recently but now above
+   837→   837→ * - NORMAL: current equity is above the SMA
+   838→   838→ */
+   839→   839→export async function checkEquityCurveStatus(): Promise<EquityCurveResult> {
+   840→   840→  const maPeriod = 20
+   841→   841→
+   842→   842→  const recentPerf = await db.dailyPerformance.findMany({
+   843→   843→    orderBy: { date: "desc" },
+   844→   844→    take: maPeriod + 1, // +1 to detect RECOVERING (was below, now above)
+   845→   845→  })
+   846→   846→
+   847→   847→  // Need at least a few days of data to compute a meaningful MA
+   848→   848→  if (recentPerf.length < 3) {
+   849→   849→    const currentEquity = recentPerf.length > 0 ? recentPerf[0].endBalance : 0
+   850→   850→    return {
+   851→   851→      status: "NORMAL",
+   852→   852→      currentEquity,
+   853→   853→      equityCurveMa: currentEquity,
+   854→   854→      maPeriod,
+   855→   855→    }
+   856→   856→  }
+   857→   857→
+   858→   858→  // Calculate SMA of endBalance over the available period (up to maPeriod)
+   859→   859→  const effectivePeriod = Math.min(maPeriod, recentPerf.length)
+   860→   860→  const balancesForMa = recentPerf.slice(0, effectivePeriod).map((p) => p.endBalance)
+   861→   861→  const equityCurveMa = balancesForMa.reduce((s, v) => s + v, 0) / balancesForMa.length
+   862→   862→
+   863→   863→  const currentEquity = recentPerf[0].endBalance
+   864→   864→
+   865→   865→  // Determine if the previous day was below MA (for RECOVERING detection)
+   866→   866→  const prevEquity = recentPerf.length > 1 ? recentPerf[1].endBalance : currentEquity
+   867→   867→  const prevBelowMa = prevEquity < equityCurveMa
+   868→   868→  const currentBelowMa = currentEquity < equityCurveMa
+   869→   869→
+   870→   870→  let status: EquityCurveStatus
+   871→   871→  if (currentBelowMa) {
+   872→   872→    status = "BELOW_MA"
+   873→   873→    logger.warn(
+   874→   874→      "MONEY_MANAGEMENT",
+   875→   875→      `[Equity Curve] BELOW moving average. Current: ${currentEquity.toFixed(2)}, MA(${effectivePeriod}): ${equityCurveMa.toFixed(2)}. Consider reducing or halting trading.`,
+   876→   876→      {
+   877→   877→        metadata: {
+   878→   878→          currentEquity: Math.round(currentEquity * 100) / 100,
+   879→   879→          equityCurveMa: Math.round(equityCurveMa * 100) / 100,
+   880→   880→          maPeriod: effectivePeriod,
+   881→   881→          deviationPct: equityCurveMa > 0
+   882→   882→            ? Math.round(((currentEquity - equityCurveMa) / equityCurveMa) * 10000) / 100
+   883→   883→            : 0,
+   884→   884→        },
+   885→   885→      },
+   886→   886→    )
+   887→   887→  } else if (prevBelowMa && !currentBelowMa) {
+   888→   888→    status = "RECOVERING"
+   889→   889→    logger.info(
+   890→   890→      "MONEY_MANAGEMENT",
+   891→   891→      `[Equity Curve] RECOVERING — above MA after being below. Current: ${currentEquity.toFixed(2)}, MA(${effectivePeriod}): ${equityCurveMa.toFixed(2)}.`,
+   892→   892→      {
+   893→   893→        metadata: {
+   894→   894→          currentEquity: Math.round(currentEquity * 100) / 100,
+   895→   895→          equityCurveMa: Math.round(equityCurveMa * 100) / 100,
+   896→   896→          maPeriod: effectivePeriod,
+   897→   897→        },
+   898→   898→      },
+   899→   899→    )
+   900→   900→  } else {
+   901→   901→    status = "NORMAL"
+   902→   902→  }
+   903→   903→
+   904→   904→  return {
+   905→   905→    status,
+   906→   906→    currentEquity: Math.round(currentEquity * 100) / 100,
+   907→   907→    equityCurveMa: Math.round(equityCurveMa * 100) / 100,
+   908→   908→    maPeriod: effectivePeriod,
+   909→   909→  }
+   910→   910→}
+   911→   911→
+   912→   912→// ---- 3. Session-Based Risk Limits ----
+   913→   913→
+   914→   914→export interface SessionRiskResult {
+   915→   915→  isLimitReached: boolean
+   916→   916→  sessionPnl: number
+   917→   917→  sessionLimit: number
+   918→   918→  sessionTrades: number
+   919→   919→  remainingRiskBudget: number
+   920→   920→}
+   921→   921→
+   922→   922→/**
+   923→   923→ * Check whether the intraday session risk limit has been reached.
+   924→   924→ *
+   925→   925→ * The trading session window is 09:00–15:00 WIB (UTC+7).
+   926→   926→ * Uses sessionRiskLimitPct from RiskConfig (default 1.0% of equity).
+   927→   927→ * Calculates the session's realized P&L by summing PnL of all trades
+   928→   928→ * closed within the current session window today.
+   929→   929→ */
+   930→   930→export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
+   931→   931→  const sessionRiskLimitPct = 1.0 // default 1.0% of equity
+   932→   932→
+   933→   933→  const now = new Date()
+   934→   934→  const wibOffsetMs = 7 * 60 * 60 * 1000
+   935→   935→  const nowWib = new Date(now.getTime() + wibOffsetMs)
+   936→   936→  const wibHours = nowWib.getUTCHours()
+   937→   937→  const wibMinutes = nowWib.getUTCMinutes()
+   938→   938→  const currentWibMinutes = wibHours * 60 + wibMinutes
+   939→   939→
+   940→   940→  // Session window: 09:00 (540) - 15:00 (900) WIB
+   941→   941→  const SESSION_START = 540
+   942→   942→  const SESSION_END = 900
+   943→   943→
+   944→   944→  // If outside session, return clean state
+   945→   945→  if (currentWibMinutes < SESSION_START || currentWibMinutes > SESSION_END) {
+   946→   946→    return {
+   947→   947→      isLimitReached: false,
+   948→   948→      sessionPnl: 0,
+   949→   949→      sessionLimit: 0,
+   950→   950→      sessionTrades: 0,
+   951→   951→      remainingRiskBudget: 0,
+   952→   952→    }
+   953→   953→  }
+   954→   954→
+   955→   955→  // Get today's start balance from DailyPerformance
+   956→   956→  const todayStr = now.toISOString().split("T")[0]
+   957→   957→  const todayPerf = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
+   958→   958→  const equity = todayPerf ? todayPerf.startBalance : 10000
+   959→   959→  const sessionLimit = (sessionRiskLimitPct / 100) * equity
+   960→   960→
+   961→   961→  // Calculate session start/end in UTC for DB query
+   962→   962→  // WIB 09:00 today = UTC 02:00 today
+   963→   963→  // WIB 15:00 today = UTC 08:00 today
+   964→   964→  const sessionStartUtc = new Date(now)
+   965→   965→  sessionStartUtc.setUTCHours(2, 0, 0, 0) // 09:00 WIB
+   966→   966→  const sessionEndUtc = new Date(now)
+   967→   967→  sessionEndUtc.setUTCHours(8, 0, 0, 0) // 15:00 WIB
+   968→   968→
+   969→   969→  // Query trades closed within today's session
+   970→   970→  const sessionClosedTrades = await db.trade.findMany({
+   971→   971→    where: {
+   972→   972→      status: "CLOSED",
+   973→   973→      closeTime: {
+   974→   974→        gte: sessionStartUtc,
+   975→   975→        lte: sessionEndUtc,
+   976→   976→      },
+   977→   977→    },
+   978→   978→    select: { pnl: true },
+   979→   979→  })
+   980→   980→
+   981→   981→  // Session P&L only counts losses (negative PnL) against the limit
+   982→   982→  const sessionPnl = sessionClosedTrades.reduce((sum, t) => sum + t.pnl, 0)
+   983→   983→  const sessionLosses = sessionClosedTrades.filter((t) => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0)
+   984→   984→  const sessionTrades = sessionClosedTrades.length
+   985→   985→
+   986→   986→  // Remaining risk budget is based on how much loss capacity is left
+   987→   987→  const remainingRiskBudget = Math.max(0, Math.round((sessionLimit + sessionLosses) * 100) / 100)
+   988→   988→  const isLimitReached = sessionLosses <= -sessionLimit
+   989→   989→
+   990→   990→  if (isLimitReached) {
+   991→   991→    logger.warn(
+   992→   992→      "MONEY_MANAGEMENT",
+   993→   993→      `Session risk limit reached. Session loss: ${sessionLosses.toFixed(2)}, Limit: ${sessionLimit.toFixed(2)}, Trades: ${sessionTrades}`,
+   994→   994→      {
+   995→   995→        metadata: {
+   996→   996→          sessionPnl: Math.round(sessionPnl * 100) / 100,
+   997→   997→          sessionLoss: Math.round(sessionLosses * 100) / 100,
+   998→   998→          sessionLimit: Math.round(sessionLimit * 100) / 100,
+   999→   999→          sessionTrades,
+  1000→  1000→          remainingRiskBudget: 0,
+  1001→  1001→        },
+  1002→  1002→      },
+  1003→  1003→    )
+  1004→  1004→  }
+  1005→  1005→
+  1006→  1006→  return {
+  1007→  1007→    isLimitReached,
+  1008→  1008→    sessionPnl: Math.round(sessionPnl * 100) / 100,
+  1009→  1009→    sessionLimit: Math.round(sessionLimit * 100) / 100,
+  1010→  1010→    sessionTrades,
+  1011→  1011→    remainingRiskBudget,
+  1012→  1012→  }
+  1013→  1013→}
+  1014→  1014→
+  1015→  1015→// ---- 4. Partial Profit Taking Model ----
+  1016→  1016→
+  1017→  1017→export interface PartialProfitLevel {
+  1018→  1018→  level: number        // 1, 2, 3
+  1019→  1019→  price: number        // Target price for this level
+  1020→  1020→  closePercent: number // % of position to close at this level (0-100)
+  1021→  1021→  reason: string       // Human-readable explanation
+  1022→  1022→}
+  1023→  1023→
+  1024→  1024→export interface PartialProfitResult {
+  1025→  1025→  levels: PartialProfitLevel[]
+  1026→  1026→}
+  1027→  1027→
+  1028→  1028→/**
+  1029→  1029→ * Calculate systematic partial profit-taking levels for a trade.
+  1030→  1030→ *
+  1031→  1031→ * Default: 3 levels at R:R ratios of 1:1, 1:2, 1:3 with 30%, 30%, 40% closes.
+  1032→  1032→ * The levels are distributed evenly along the path from entry to TP.
+  1033→  1033→ *
+  1034→  1034→ * For BUY:  price = entry + (tp - entry) * level / 3
+  1035→  1035→ * For SELL: price = entry - (entry - tp) * level / 3
+  1036→  1036→ *
+  1037→  1037→ * @param entryPrice  - Trade entry price
+  1038→  1038→ * @param direction   - BUY or SELL
+  1039→  1039→ * @param tp          - Take-profit price
+  1040→  1040→ * @param riskRewardRatio - Optional override; if provided, adjusts level spacing
+  1041→  1041→ */
+  1042→  1042→export function calculatePartialProfitLevels(params: {
+  1043→  1043→  entryPrice: number
+  1044→  1044→  direction: "BUY" | "SELL"
+  1045→  1045→  tp: number
+  1046→  1046→  riskRewardRatio?: number
+  1047→  1047→}): PartialProfitResult {
+  1048→  1048→  const { entryPrice, direction, tp, riskRewardRatio } = params
+  1049→  1049→
+  1050→  1050→  const isBuy = direction === "BUY"
+  1051→  1051→  const totalRange = isBuy ? tp - entryPrice : entryPrice - tp
+  1052→  1052→
+  1053→  1053→  // Validate inputs
+  1054→  1054→  if (totalRange <= 0) {
+  1055→  1055→    return { levels: [] }
+  1056→  1056→  }
+  1057→  1057→
+  1058→  1058→  // Default: 3 levels at 1:1, 1:2, 1:3 R:R with 30%/30%/40% allocation
+  1059→  1059→  const levels: PartialProfitLevel[] = [
+  1060→  1060→    {
+  1061→  1061→      level: 1,
+  1062→  1062→      price: isBuy
+  1063→  1063→        ? Math.round((entryPrice + totalRange * (1 / 3)) * 100) / 100
+  1064→  1064→        : Math.round((entryPrice - totalRange * (1 / 3)) * 100) / 100,
+  1065→  1065→      closePercent: 30,
+  1066→  1066→      reason: "R:R 1:1 — Lock in first profit, reduce risk exposure",
+  1067→  1067→    },
+  1068→  1068→    {
+  1069→  1069→      level: 2,
+  1070→  1070→      price: isBuy
+  1071→  1071→        ? Math.round((entryPrice + totalRange * (2 / 3)) * 100) / 100
+  1072→  1072→        : Math.round((entryPrice - totalRange * (2 / 3)) * 100) / 100,
+  1073→  1073→      closePercent: 30,
+  1074→  1074→      reason: "R:R 1:2 — Second profit target, trail remaining stop",
+  1075→  1075→    },
+  1076→  1076→    {
+  1077→  1077→      level: 3,
+  1078→  1078→      price: isBuy
+  1079→  1079→        ? Math.round(tp * 100) / 100
+  1080→  1080→        : Math.round(tp * 100) / 100,
+  1081→  1081→      closePercent: 40,
+  1082→  1082→      reason: "R:R 1:3 — Final profit target, close remainder",
+  1083→  1083→    },
+  1084→  1084→  ]
+  1085→  1085→
+  1086→  1086→  // If a custom risk-reward ratio is provided, adjust the level distances
+  1087→  1087→  // while keeping the same close percentages
+  1088→  1088→  if (riskRewardRatio && riskRewardRatio > 0) {
+  1089→  1089→    const scaledRange = totalRange * (riskRewardRatio / 3)
+  1090→  1090→    levels[0].price = isBuy
+  1091→  1091→      ? Math.round((entryPrice + scaledRange) * 100) / 100
+  1092→  1092→      : Math.round((entryPrice - scaledRange) * 100) / 100
+  1093→  1093→    levels[0].reason = `R:R ${riskRewardRatio.toFixed(1)}:1 — First scaled profit target (30%)`
+  1094→  1094→
+  1095→  1095→    levels[1].price = isBuy
+  1096→  1096→      ? Math.round((entryPrice + scaledRange * 2) * 100) / 100
+  1097→  1097→      : Math.round((entryPrice - scaledRange * 2) * 100) / 100
+  1098→  1098→    levels[1].reason = `R:R ${(riskRewardRatio * 2).toFixed(1)}:1 — Second scaled profit target (30%)`
+  1099→  1099→
+  1100→  1100→    levels[2].price = isBuy
+  1101→  1101→      ? Math.round((entryPrice + scaledRange * 3) * 100) / 100
+  1102→  1102→      : Math.round((entryPrice - scaledRange * 3) * 100) / 100
+  1103→  1103→    levels[2].reason = `R:R ${(riskRewardRatio * 3).toFixed(1)}:1 — Final scaled profit target (40%)`
+  1104→  1104→  }
+  1105→  1105→
+  1106→  1106→  logger.debug(
+  1107→  1107→    "MONEY_MANAGEMENT",
+  1108→  1108→    `Calculated ${levels.length} partial profit levels for ${direction} @ ${entryPrice} → TP ${tp}`,
+  1109→  1109→    {
+  1110→  1110→      metadata: { direction, entryPrice, tp, levels: levels.length, riskRewardRatio },
+  1111→  1111→    },
+  1112→  1112→  )
+  1113→  1113→
+  1114→  1114→  return { levels }
+  1115→  1115→}
+  1116→  1116→
+  1117→  1117→// ---- 5. Enhanced Pre-Trade Halt Status ----
+  1118→  1118→
+  1119→  1119→export interface PreTradeHaltStatus {
+  1120→  1120→  canTrade: boolean
+  1121→  1121→  haltReasons: string[]
+  1122→  1122→  consecutiveLossHalted: boolean
+  1123→  1123→  equityCurveHalted: boolean
+  1124→  1124→  sessionLimitReached: boolean
+  1125→  1125→  marketClosed: boolean
+  1126→  1126→}
+  1127→  1127→
+  1128→  1128→/**
+  1129→  1129→ * Combine all pre-trade halt checks into a single call.
+  1130→  1130→ *
+  1131→  1131→ * Checks:
+  1132→  1132→ *  1. Consecutive loss halt
+  1133→  1133→ *  2. Equity curve status (BELOW_MA → halted)
+  1134→  1134→ *  3. Session risk limit
+  1135→  1135→ *  4. Market hours (uses isMarketOpen from mt5-connection)
+  1136→  1136→ *
+  1137→  1137→ * If ANY halt condition is true, canTrade is set to false.
+  1138→  1138→ */
+  1139→  1139→export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
+  1140→  1140→  const haltReasons: string[] = []
+  1141→  1141→  let consecutiveLossHalted = false
+  1142→  1142→  let equityCurveHalted = false
+  1143→  1143→  let sessionLimitReached = false
+  1144→  1144→  let marketClosed = false
+  1145→  1145→
+  1146→  1146→  // 1. Consecutive loss check
+  1147→  1147→  try {
+  1148→  1148→    const clResult = await checkConsecutiveLossHalt()
+  1149→  1149→    if (clResult.isHalted) {
+  1150→  1150→      consecutiveLossHalted = true
+  1151→  1151→      haltReasons.push(clResult.haltReason || "Consecutive loss halt active")
+  1152→  1152→    }
+  1153→  1153→  } catch (err) {
+  1154→  1154→    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking consecutive loss halt", {
+  1155→  1155→      details: err instanceof Error ? err.stack : undefined,
+  1156→  1156→    })
+  1157→  1157→  }
+  1158→  1158→
+  1159→  1159→  // 2. Equity curve check
+  1160→  1160→  try {
+  1161→  1161→    const ecResult = await checkEquityCurveStatus()
+  1162→  1162→    if (ecResult.status === "BELOW_MA") {
+  1163→  1163→      equityCurveHalted = true
+  1164→  1164→      haltReasons.push(
+  1165→  1165→        `Equity curve below MA: current ${ecResult.currentEquity} < MA(${ecResult.maPeriod}) ${ecResult.equityCurveMa}`,
+  1166→  1166→      )
+  1167→  1167→    }
+  1168→  1168→  } catch (err) {
+  1169→  1169→    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking equity curve status", {
+  1170→  1170→      details: err instanceof Error ? err.stack : undefined,
+  1171→  1171→    })
+  1172→  1172→  }
+  1173→  1173→
+  1174→  1174→  // 3. Session risk limit check
+  1175→  1175→  try {
+  1176→  1176→    const srResult = await checkSessionRiskLimit()
+  1177→  1177→    if (srResult.isLimitReached) {
+  1178→  1178→      sessionLimitReached = true
+  1179→  1179→      haltReasons.push(
+  1180→  1180→        `Session risk limit reached: session P&L ${srResult.sessionPnl}, limit ${srResult.sessionLimit}`,
+  1181→  1181→      )
+  1182→  1182→    }
+  1183→  1183→  } catch (err) {
+  1184→  1184→    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking session risk limit", {
+  1185→  1185→      details: err instanceof Error ? err.stack : undefined,
+  1186→  1186→    })
+  1187→  1187→  }
+  1188→  1188→
+  1189→  1189→  // 4. Market hours check
+  1190→  1190→  try {
+  1191→  1191→    marketClosed = !isMarketOpen()
+  1192→  1192→    if (marketClosed) {
+  1193→  1193→      haltReasons.push("Market is currently closed (outside 09:00-15:00 WIB trading hours)")
+  1194→  1194→    }
+  1195→  1195→  } catch (err) {
+  1196→  1196→    logger.error("MONEY_MANAGEMENT", "[Pre-Trade Halt] Error checking market hours", {
+  1197→  1197→      details: err instanceof Error ? err.stack : undefined,
+  1198→  1198→    })
+  1199→  1199→  }
+  1200→  1200→
+  1201→  1201→  const canTrade = haltReasons.length === 0
+  1202→  1202→
+  1203→  1203→  if (!canTrade) {
+  1204→  1204→    logger.warn(
+  1205→  1205→      "MONEY_MANAGEMENT",
+  1206→  1206→      `[Pre-Trade Halt] Trading HALTED: ${haltReasons.length} condition(s) active`,
+  1207→  1207→      {
+  1208→  1208→        metadata: {
+  1209→  1209→          canTrade: false,
+  1210→  1210→          haltReasons,
+  1211→  1211→          consecutiveLossHalted,
+  1212→  1212→          equityCurveHalted,
+  1213→  1213→          sessionLimitReached,
+  1214→  1214→          marketClosed,
+  1215→  1215→        },
+  1216→  1216→      },
+  1217→  1217→    )
+  1218→  1218→  }
+  1219→  1219→
+  1220→  1220→  return {
+  1221→  1221→    canTrade,
+  1222→  1222→    haltReasons,
+  1223→  1223→    consecutiveLossHalted,
+  1224→  1224→    equityCurveHalted,
+  1225→  1225→    sessionLimitReached,
+  1226→  1226→    marketClosed,
+  1227→  1227→  }
+  1228→  1228→}
+  1229→  1229→

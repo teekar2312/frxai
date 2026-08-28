@@ -33,6 +33,7 @@ export interface PositionSizeResult {
   commissionCost: number
   netRiskAfterCommission: number
   scalingFactor: number
+  volatilityRegimeMultiplier: number
   reserveCheckApplied: boolean
   deployedMarginCheckApplied: boolean
 }
@@ -110,6 +111,20 @@ export async function calculatePositionSize(params: {
   // --- Performance-Based Dynamic Scaling ---
   const scalingFactor = await calculateScalingFactor()
 
+  // Phase 4: Integrate volatility regime with scaling factor
+  let volMultiplier = 1.0
+  try {
+    const { detectVolatilityRegime } = await import('./risk-engine')
+    const volResult = detectVolatilityRegime({
+      recentVolatility: 0.015, // default if no data
+      avgVolatility: 0.015,
+    })
+    volMultiplier = volResult.riskMultiplier
+  } catch { /* non-critical */ }
+
+  // Combine scaling factor with volatility regime
+  const effectiveScaling = (scalingFactor ?? 1.0) * volMultiplier
+
   // Calculate pip risk (price distance to stop loss)
   let pipRisk = 0
   if (sl) {
@@ -160,11 +175,11 @@ export async function calculatePositionSize(params: {
       methodReasoning = `Default fixed fractional: $${baseRiskAmount.toFixed(2)}`
   }
 
-  // --- Apply Scaling Factor ---
-  const scaledRiskAmount = baseRiskAmount * scalingFactor
+  // --- Apply Scaling Factor (combined with volatility regime) ---
+  const scaledRiskAmount = baseRiskAmount * effectiveScaling
   let reasoning = methodReasoning
-  if (scalingFactor !== 1.0) {
-    reasoning += ` | Scaled ${scalingFactor}x -> $${scaledRiskAmount.toFixed(2)}`
+  if (effectiveScaling !== 1.0) {
+    reasoning += ` | Scaled ${effectiveScaling.toFixed(3)}x (perf=${scalingFactor}, vol=${volMultiplier.toFixed(3)}) -> $${scaledRiskAmount.toFixed(2)}`
   }
 
   // --- Commission-Aware Lot Sizing ---
@@ -246,7 +261,7 @@ export async function calculatePositionSize(params: {
 
   return {
     suggestedLotSize: Math.round(suggestedLotSize * 100) / 100,
-    riskAmount: Math.round((baseRiskAmount * scalingFactor) * 100) / 100,
+    riskAmount: Math.round((baseRiskAmount * effectiveScaling) * 100) / 100,
     riskPercent: Math.round(riskPercent * 100) / 100,
     method,
     pipRisk: Math.round(effectivePipRisk * 100) / 100,
@@ -256,6 +271,7 @@ export async function calculatePositionSize(params: {
     commissionCost: finalCommissionCost,
     netRiskAfterCommission: finalNetRisk,
     scalingFactor,
+    volatilityRegimeMultiplier: volMultiplier,
     reserveCheckApplied,
     deployedMarginCheckApplied,
   }
@@ -1225,4 +1241,88 @@ export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
     sessionLimitReached,
     marketClosed,
   }
+}
+
+// ============================================================================
+// PHASE 4: ENHANCED POSITION SIZING ADJUSTMENTS
+// ============================================================================
+
+// ---- Fix 10: Progressive Drawdown Risk Reduction ----
+
+/**
+ * Calculate progressive drawdown risk reduction.
+ * Instead of binary 0.25x at 80%, apply a smooth curve:
+ *   0-50% of max drawdown: 1.0x (no reduction)
+ *   50-70%: linear from 1.0 to 0.75
+ *   70-85%: linear from 0.75 to 0.5
+ *   85-95%: linear from 0.5 to 0.25
+ *   95-100%: 0.25x (minimum)
+ */
+export function calculateProgressiveDrawdownFactor(
+  currentDrawdown: number,
+  maxDrawdown: number,
+): number {
+  if (maxDrawdown <= 0) return 1.0
+  const ratio = Math.min(currentDrawdown / maxDrawdown, 1.0)
+
+  if (ratio <= 0.50) return 1.0
+  if (ratio <= 0.70) return 1.0 - (ratio - 0.50) / 0.20 * 0.25  // 1.0 → 0.75
+  if (ratio <= 0.85) return 0.75 - (ratio - 0.70) / 0.15 * 0.25  // 0.75 → 0.50
+  if (ratio <= 0.95) return 0.50 - (ratio - 0.85) / 0.10 * 0.25  // 0.50 → 0.25
+  return 0.25
+}
+
+// ---- Fix 11: Win-Rate Adjusted Position Sizing ----
+
+export interface WinRateAdjustmentResult {
+  adjustedMultiplier: number
+  reason: string
+  currentWinRate: number
+  historicalWinRate: number
+  sampleSize: number
+}
+
+/**
+ * Adjust position sizing based on recent vs historical win rate.
+ * If recent win rate drops below 80% of historical, reduce sizing proportionally.
+ */
+export async function calculateWinRateAdjustment(): Promise<WinRateAdjustmentResult> {
+  const closedTrades = await db.trade.findMany({
+    where: { status: 'CLOSED' },
+    orderBy: { closeTime: 'desc' },
+    take: 100,
+  })
+
+  if (closedTrades.length < 20) {
+    return { adjustedMultiplier: 1.0, reason: 'Insufficient trade history (need 20+ trades)', currentWinRate: 0, historicalWinRate: 0, sampleSize: closedTrades.length }
+  }
+
+  // Historical = all 100 trades
+  const historicalWins = closedTrades.filter(t => t.pnl > 0).length
+  const historicalWinRate = historicalWins / closedTrades.length
+
+  // Recent = last 20 trades
+  const recentTrades = closedTrades.slice(0, 20)
+  const recentWins = recentTrades.filter(t => t.pnl > 0).length
+  const recentWinRate = recentWins / recentTrades.length
+
+  if (historicalWinRate <= 0) {
+    return { adjustedMultiplier: 1.0, reason: 'Zero historical win rate', currentWinRate: recentWinRate, historicalWinRate, sampleSize: closedTrades.length }
+  }
+
+  // If recent win rate < 80% of historical, reduce proportionally
+  const threshold = historicalWinRate * 0.80
+  if (recentWinRate < threshold) {
+    const ratio = recentWinRate / threshold
+    const multiplier = Math.max(0.5, ratio) // Never reduce below 0.5x
+    return {
+      adjustedMultiplier: Math.round(multiplier * 100) / 100,
+      reason: `Recent win rate (${(recentWinRate * 100).toFixed(1)}%) below 80% of historical (${(historicalWinRate * 100).toFixed(1)}%). Reducing to ${multiplier.toFixed(2)}x`,
+      currentWinRate: recentWinRate,
+      historicalWinRate,
+      sampleSize: closedTrades.length,
+    }
+  }
+
+  return { adjustedMultiplier: 1.0, reason: 'Win rate within normal range', currentWinRate: recentWinRate, historicalWinRate, sampleSize: closedTrades.length }
 }

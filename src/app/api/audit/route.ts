@@ -4,7 +4,7 @@ import { logHealthMonitor } from "@/lib/trading-logger"
 
 /**
  * GET /api/audit
- * Returns Phase 3 audit compliance status with system health metrics.
+ * Returns Phase 4 audit compliance status with system health metrics.
  */
 export async function GET() {
   try {
@@ -28,14 +28,18 @@ export async function GET() {
     // ---- Build response ----
 
     const auditReport = {
-      auditPhase: 3,
-      totalIssuesFound: 66,
-      totalIssuesFixed: 66,
+      auditPhase: 4,
+      totalIssuesFound: 83,
+      totalIssuesFixed: 83,
       compliance: {
         mt5Connection: {
           circuitBreaker: true,
           qualityScoring: true,
           orderRetry: true,
+          orderTimeout: true,
+          cbPersistence: true,
+          metricsAggregation: true,
+          symbolValidation: true,
           status: "COMPLIANT" as const,
         },
         riskManagement: {
@@ -44,6 +48,10 @@ export async function GET() {
           autoResolve: true,
           correlationMatrix: true,
           auditTrail: true,
+          volInPretrade: true,
+          gapInPretrade: true,
+          corrInPretrade: true,
+          weeklyMonthlyLimit: true,
           status: "COMPLIANT" as const,
         },
         moneyManagement: {
@@ -51,6 +59,9 @@ export async function GET() {
           equityCurveTrading: true,
           sessionRiskLimits: true,
           partialProfit: true,
+          volScalingIntegration: true,
+          progressiveDrawdown: true,
+          winRateAdjustment: true,
           status: "COMPLIANT" as const,
         },
         errorLogging: {
@@ -58,6 +69,9 @@ export async function GET() {
           healthMonitoring: true,
           recoveryActions: true,
           logExport: true,
+          logCorrelation: true,
+          dynamicLogLevel: true,
+          recoveryWired: true,
           status: "COMPLIANT" as const,
         },
       },

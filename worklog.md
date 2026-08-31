@@ -1062,3 +1062,25 @@ Stage Summary:
 - Key new files: session-manager.ts, indicator-pool.ts, trade-execution-engine.ts
 - Key new models: SessionEvent, SessionPerformance, CandleData, PendingOrder
 - Strategy signals now use real RSI, MACD, EMA, Bollinger, ADX, Stochastic, Pivot Points, VWAP, ATR, SMA
+
+---
+Task ID: 6
+Agent: Main Agent
+Task: Phase 6 Deep Audit — News API, AI Decision Engine, Sentiment Filter
+
+Work Log:
+- Created 3 new core modules (~5400 lines total)
+- Created 4 new API routes (/api/news/fetch, /api/news/sentiment, /api/ai/decide, /api/ai/accuracy)
+- Updated NewsFeed with fetch button, sentiment scores, breaking news alerts, freshness tracking
+- Updated AiAnalysisPanel with real AI Decision Engine integration (symbol selector, factor bars, decision history, stats)
+- Created SentimentFilter panel (market overview, symbol grid, filter rules)
+- Updated AuditCompliance with 3 Phase 6 sections (News API: 10 rows, Sentiment Filter: 9 rows, AI Decision Engine: 9 rows)
+- Updated page.tsx: AI tab renamed to AI & Sentiment, added SentimentFilter component
+- Wired sentiment filter into risk-engine preTradeCheck (blocks trades, adjusts sizing)
+- Updated audit API with Phase 6 compliance data (142 issues, 3 new models)
+- Added seed data: 5 NewsFetchLogs, 6 SentimentSnapshots, 8 AiDecisionLogs
+- Fixed pre-existing EquityChart hydration error (useSyncExternalStore → useMemo)
+- ESLint: 0 errors, 0 warnings across all new files
+- Pushed to repository (forced after remote divergence)
+
+---

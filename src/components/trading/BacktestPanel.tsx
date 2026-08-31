@@ -30,7 +30,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
-import { Plus, LineChart } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Plus, LineChart, Trash2, Loader2 } from 'lucide-react'
 import {
   AreaChart,
   Area,
@@ -52,12 +53,23 @@ interface BacktestResult {
   symbol: string
   strategy: string
   timeframe: string
+  startDate: string
+  endDate: string
+  initialCapital: number
+  finalCapital: number
+  totalTrades: number
+  winTrades: number
+  lossTrades: number
   winRate: number
-  totalPnL: number
+  totalPnl: number
   maxDrawdown: number
-  sharpeRatio: number
-  profitFactor: number
-  equityCurve: EquityPoint[]
+  sharpeRatio: number | null
+  profitFactor: number | null
+  avgWin: number | null
+  avgLoss: number | null
+  config?: string
+  equityCurve?: EquityPoint[]
+  totalReturn?: number
 }
 
 const SYMBOLS = [
@@ -76,83 +88,13 @@ const STRATEGIES = [
 
 const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1H', '4H', '1D', '1W']
 
-function generateEquityCurve(positive: boolean): EquityPoint[] {
-  const points: EquityPoint[] = []
-  let equity = 10000
-  for (let i = 0; i < 60; i++) {
-    const date = new Date(2024, 9, 1)
-    date.setDate(date.getDate() + i)
-    const change = (Math.random() - (positive ? 0.42 : 0.58)) * 200
-    equity = Math.max(equity + change, 2000)
-    points.push({
-      date: date.toISOString().split('T')[0],
-      equity: Math.round(equity * 100) / 100,
-    })
-  }
-  return points
-}
-
-const defaultBacktests: BacktestResult[] = [
-  {
-    id: 'BT001',
-    name: 'BBCA MA Ribbon 2024',
-    symbol: 'BBCA',
-    strategy: 'Moving Average Ribbon',
-    timeframe: '1D',
-    winRate: 62.5,
-    totalPnL: 3250.0,
-    maxDrawdown: 8.4,
-    sharpeRatio: 1.85,
-    profitFactor: 2.1,
-    equityCurve: generateEquityCurve(true),
-  },
-  {
-    id: 'BT002',
-    name: 'BBRI Momentum 2024',
-    symbol: 'BBRI',
-    strategy: 'Momentum Scalping',
-    timeframe: '4H',
-    winRate: 55.2,
-    totalPnL: 1820.0,
-    maxDrawdown: 12.1,
-    sharpeRatio: 1.32,
-    profitFactor: 1.65,
-    equityCurve: generateEquityCurve(true),
-  },
-  {
-    id: 'BT003',
-    name: 'GOTO EMA Cross Q4',
-    symbol: 'GOTO',
-    strategy: 'EMA Crossover',
-    timeframe: '1H',
-    winRate: 48.8,
-    totalPnL: -420.0,
-    maxDrawdown: 18.5,
-    sharpeRatio: 0.65,
-    profitFactor: 0.88,
-    equityCurve: generateEquityCurve(false),
-  },
-  {
-    id: 'BT004',
-    name: 'TLKM RMI Trend 2024',
-    symbol: 'TLKM',
-    strategy: 'RMI Trend Sync',
-    timeframe: '4H',
-    winRate: 58.3,
-    totalPnL: 2150.0,
-    maxDrawdown: 9.7,
-    sharpeRatio: 1.55,
-    profitFactor: 1.92,
-    equityCurve: generateEquityCurve(true),
-  },
-]
-
 export default function BacktestPanel() {
-  const [backtests, setBacktests] = useState<BacktestResult[]>(defaultBacktests)
+  const [backtests, setBacktests] = useState<BacktestResult[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedBacktest, setSelectedBacktest] = useState<BacktestResult | null>(null)
   const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   // Form state
   const [formName, setFormName] = useState('')
@@ -168,10 +110,12 @@ export default function BacktestPanel() {
       const res = await fetch('/api/backtest')
       if (res.ok) {
         const json = await res.json()
-        setBacktests(Array.isArray(json) ? json : json.results ?? defaultBacktests)
+        if (json.success && Array.isArray(json.data)) {
+          setBacktests(json.data)
+        }
       }
     } catch {
-      // use default
+      // silent – empty state shown by UI
     } finally {
       setLoading(false)
     }
@@ -183,30 +127,53 @@ export default function BacktestPanel() {
 
   const handleRunBacktest = async () => {
     if (!formName || !formSymbol || !formStrategy || !formTimeframe) return
-
+    setError(null)
     setRunning(true)
-    // Simulate running
-    await new Promise((r) => setTimeout(r, 1500))
 
-    const isPositive = Math.random() > 0.35
-    const newResult: BacktestResult = {
-      id: `BT${Date.now()}`,
-      name: formName,
-      symbol: formSymbol,
-      strategy: formStrategy,
-      timeframe: formTimeframe,
-      winRate: Math.round(40 + Math.random() * 30) * 10 / 10,
-      totalPnL: Math.round((Math.random() - (isPositive ? 0.3 : 0.6)) * 5000 * 100) / 100,
-      maxDrawdown: Math.round((5 + Math.random() * 20) * 10) / 10,
-      sharpeRatio: Math.round((0.3 + Math.random() * 2) * 100) / 100,
-      profitFactor: Math.round((0.5 + Math.random() * 2) * 100) / 100,
-      equityCurve: generateEquityCurve(isPositive),
+    try {
+      const res = await fetch('/api/backtest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: formName,
+          symbol: formSymbol,
+          strategy: formStrategy,
+          timeframe: formTimeframe,
+          startDate: formStartDate || undefined,
+          endDate: formEndDate || undefined,
+          initialCapital: parseFloat(formCapital) || 10000,
+        }),
+      })
+
+      const json = await res.json()
+      if (!res.ok || !json.success) {
+        setError(json.error || 'Backtest failed')
+        setRunning(false)
+        return
+      }
+
+      // Prepend the new result (API already saved it to DB)
+      setBacktests((prev) => [json.data, ...prev])
+      setDialogOpen(false)
+      resetForm()
+    } catch {
+      setError('Network error running backtest')
+    } finally {
+      setRunning(false)
     }
+  }
 
-    setBacktests((prev) => [newResult, ...prev])
-    setRunning(false)
-    setDialogOpen(false)
-    resetForm()
+  const handleDelete = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    try {
+      const res = await fetch(`/api/backtest?id=${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        setBacktests((prev) => prev.filter((bt) => bt.id !== id))
+        if (selectedBacktest?.id === id) setSelectedBacktest(null)
+      }
+    } catch {
+      // silent
+    }
   }
 
   const resetForm = () => {
@@ -217,6 +184,7 @@ export default function BacktestPanel() {
     setFormStartDate('')
     setFormEndDate('')
     setFormCapital('10000')
+    setError(null)
   }
 
   return (
@@ -227,7 +195,7 @@ export default function BacktestPanel() {
           Backtest Panel
         </h2>
 
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setError(null) }}>
           <DialogTrigger asChild>
             <Button size="sm" className="gap-1.5">
               <Plus className="h-4 w-4" />
@@ -327,6 +295,10 @@ export default function BacktestPanel() {
                   placeholder="10000"
                 />
               </div>
+
+              {error && (
+                <p className="text-sm text-red-500">{error}</p>
+              )}
             </div>
 
             <DialogFooter>
@@ -337,7 +309,14 @@ export default function BacktestPanel() {
                 onClick={handleRunBacktest}
                 disabled={!formName || !formSymbol || !formStrategy || !formTimeframe || running}
               >
-                {running ? 'Running...' : 'Run Backtest'}
+                {running ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  'Run Backtest'
+                )}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -345,7 +324,7 @@ export default function BacktestPanel() {
       </div>
 
       {/* Equity Curve Chart (when a backtest is selected) */}
-      {selectedBacktest && (
+      {selectedBacktest && selectedBacktest.equityCurve && selectedBacktest.equityCurve.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
@@ -368,8 +347,8 @@ export default function BacktestPanel() {
                 <AreaChart data={selectedBacktest.equityCurve}>
                   <defs>
                     <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={selectedBacktest.totalPnL >= 0 ? '#10b981' : '#ef4444'} stopOpacity={0.3} />
-                      <stop offset="95%" stopColor={selectedBacktest.totalPnL >= 0 ? '#10b981' : '#ef4444'} stopOpacity={0} />
+                      <stop offset="5%" stopColor={selectedBacktest.totalPnl >= 0 ? '#10b981' : '#ef4444'} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={selectedBacktest.totalPnl >= 0 ? '#10b981' : '#ef4444'} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -401,7 +380,7 @@ export default function BacktestPanel() {
                   <Area
                     type="monotone"
                     dataKey="equity"
-                    stroke={selectedBacktest.totalPnL >= 0 ? '#10b981' : '#ef4444'}
+                    stroke={selectedBacktest.totalPnl >= 0 ? '#10b981' : '#ef4444'}
                     fill="url(#equityGradient)"
                     strokeWidth={2}
                   />
@@ -428,19 +407,27 @@ export default function BacktestPanel() {
                   <TableHead className="text-right hidden sm:table-cell">Max DD</TableHead>
                   <TableHead className="text-right hidden md:table-cell">Sharpe</TableHead>
                   <TableHead className="text-right hidden lg:table-cell">PF</TableHead>
+                  <TableHead className="w-10" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading
-                  ? Array.from({ length: 3 }).map((_, i) => (
+                  ? Array.from({ length: 4 }).map((_, i) => (
                       <TableRow key={i}>
-                        <TableCell colSpan={9} className="h-10 text-center text-muted-foreground">
-                          Loading...
-                        </TableCell>
+                        <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-12" /></TableCell>
+                        <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-28" /></TableCell>
+                        <TableCell className="hidden lg:table-cell"><Skeleton className="h-4 w-10" /></TableCell>
+                        <TableCell className="text-right"><Skeleton className="h-4 w-14 ml-auto" /></TableCell>
+                        <TableCell className="text-right"><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+                        <TableCell className="text-right hidden sm:table-cell"><Skeleton className="h-4 w-14 ml-auto" /></TableCell>
+                        <TableCell className="text-right hidden md:table-cell"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                        <TableCell className="text-right hidden lg:table-cell"><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                        <TableCell><Skeleton className="h-4 w-6" /></TableCell>
                       </TableRow>
                     ))
                   : backtests.map((bt) => {
-                      const isProfit = bt.totalPnL >= 0
+                      const isProfit = bt.totalPnl >= 0
                       const isSelected = selectedBacktest?.id === bt.id
                       return (
                         <TableRow
@@ -465,7 +452,7 @@ export default function BacktestPanel() {
                           </TableCell>
                           <TableCell className="text-right font-mono font-medium">
                             <span className={isProfit ? 'text-emerald-600' : 'text-red-600'}>
-                              {isProfit ? '+' : ''}{bt.totalPnL.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
+                              {isProfit ? '+' : ''}{bt.totalPnl.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
                             </span>
                           </TableCell>
                           <TableCell className="text-right font-mono hidden sm:table-cell">
@@ -474,14 +461,24 @@ export default function BacktestPanel() {
                             </span>
                           </TableCell>
                           <TableCell className="text-right font-mono hidden md:table-cell">
-                            <span className={bt.sharpeRatio >= 1.5 ? 'text-emerald-600' : bt.sharpeRatio >= 1.0 ? 'text-amber-600' : 'text-red-600'}>
-                              {bt.sharpeRatio}
+                            <span className={(bt.sharpeRatio ?? 0) >= 1.5 ? 'text-emerald-600' : (bt.sharpeRatio ?? 0) >= 1.0 ? 'text-amber-600' : 'text-red-600'}>
+                              {bt.sharpeRatio ?? '-'}
                             </span>
                           </TableCell>
                           <TableCell className="text-right font-mono hidden lg:table-cell">
-                            <span className={bt.profitFactor >= 1.5 ? 'text-emerald-600' : bt.profitFactor >= 1.0 ? 'text-amber-600' : 'text-red-600'}>
-                              {bt.profitFactor}
+                            <span className={(bt.profitFactor ?? 0) >= 1.5 ? 'text-emerald-600' : (bt.profitFactor ?? 0) >= 1.0 ? 'text-amber-600' : 'text-red-600'}>
+                              {bt.profitFactor ?? '-'}
                             </span>
+                          </TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-red-600"
+                              onClick={(e) => handleDelete(bt.id, e)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       )

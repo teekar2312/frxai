@@ -44,6 +44,7 @@ interface Trade {
   pnl: number
   strategy: string
   trailingStop: boolean
+  trailingDist: number | null
 }
 
 const defaultTrades: Trade[] = [
@@ -59,6 +60,7 @@ const defaultTrades: Trade[] = [
     pnl: 62.5,
     strategy: 'Momentum Breakout',
     trailingStop: true,
+    trailingDist: 50,
   },
   {
     id: 'T002',
@@ -72,6 +74,7 @@ const defaultTrades: Trade[] = [
     pnl: 75.0,
     strategy: 'Mean Reversion',
     trailingStop: false,
+    trailingDist: null,
   },
   {
     id: 'T003',
@@ -85,6 +88,7 @@ const defaultTrades: Trade[] = [
     pnl: 6.0,
     strategy: 'Scalping',
     trailingStop: false,
+    trailingDist: null,
   },
 ]
 
@@ -117,6 +121,7 @@ export default function TradingPositions() {
   const [newTP, setNewTP] = useState('')
   const [newStrategy, setNewStrategy] = useState('')
   const [newTrailingStop, setNewTrailingStop] = useState(false)
+  const [newTrailingDist, setNewTrailingDist] = useState('')
 
   const fetchTrades = useCallback(async () => {
     try {
@@ -143,11 +148,31 @@ export default function TradingPositions() {
   }
 
   const handleToggleTrailingStop = async (id: string) => {
+    const trade = trades.find((t) => t.id === id)
+    if (!trade) return
+
+    // Optimistic UI update
+    const newTrailingState = !trade.trailingStop
     setTrades((prev) =>
       prev.map((t) =>
-        t.id === id ? { ...t, trailingStop: !t.trailingStop } : t
+        t.id === id ? { ...t, trailingStop: newTrailingState } : t
       )
     )
+
+    try {
+      await fetch(`/api/trades/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trailingStop: newTrailingState }),
+      })
+    } catch {
+      // Revert on failure
+      setTrades((prev) =>
+        prev.map((t) =>
+          t.id === id ? { ...t, trailingStop: !newTrailingState } : t
+        )
+      )
+    }
   }
 
   const handleSubmitNewTrade = async () => {
@@ -163,6 +188,7 @@ export default function TradingPositions() {
       pnl: 0,
       strategy: newStrategy,
       trailingStop: newTrailingStop,
+      trailingDist: newTrailingDist ? parseFloat(newTrailingDist) : null,
     }
     setTrades((prev) => [...prev, trade])
     setDialogOpen(false)
@@ -177,6 +203,7 @@ export default function TradingPositions() {
     setNewTP('')
     setNewStrategy('')
     setNewTrailingStop(false)
+    setNewTrailingDist('')
   }
 
   return (
@@ -298,6 +325,23 @@ export default function TradingPositions() {
                     onCheckedChange={setNewTrailingStop}
                   />
                 </div>
+
+                {newTrailingStop && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Trailing Distance (IDR)</label>
+                    <Input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={newTrailingDist}
+                      onChange={(e) => setNewTrailingDist(e.target.value)}
+                      placeholder="e.g. 50"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      SL ratchets once price moves this far in your favor.
+                    </p>
+                  </div>
+                )}
               </div>
 
               <DialogFooter>
@@ -306,7 +350,7 @@ export default function TradingPositions() {
                 </Button>
                 <Button
                   onClick={handleSubmitNewTrade}
-                  disabled={!newSymbol}
+                  disabled={!newSymbol || (newTrailingStop && !newTrailingDist)}
                 >
                   Open Position
                 </Button>

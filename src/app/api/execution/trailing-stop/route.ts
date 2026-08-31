@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { adjustTrailingStop } from "@/lib/trade-execution-engine"
-import { updateDailyPerformance } from "@/lib/money-management"
 import logger from "@/lib/trading-logger"
 
 /**
@@ -29,7 +28,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = adjustTrailingStop(trade, currentPrice)
+    const result = adjustTrailingStop(
+      {
+        id: trade.id,
+        direction: trade.direction,
+        entryPrice: trade.entryPrice,
+        currentPrice: trade.currentPrice,
+        trailingStop: trade.trailingStop,
+        trailingDist: trade.trailingDist,
+        sl: trade.sl,
+        highestPrice: trade.highestPrice,
+        lowestPrice: trade.lowestPrice,
+      },
+      currentPrice,
+    )
 
     if (result.adjusted && result.newSl) {
       await db.trade.update({
@@ -37,8 +49,12 @@ export async function POST(request: NextRequest) {
         data: {
           sl: result.newSl,
           lastSlAdjust: new Date(),
-          highestPrice: Math.max(trade.highestPrice ?? trade.currentPrice, currentPrice),
-          lowestPrice: Math.min(trade.lowestPrice ?? trade.currentPrice, currentPrice),
+          highestPrice: trade.direction === 'BUY'
+            ? Math.max(trade.highestPrice ?? trade.currentPrice, currentPrice)
+            : trade.highestPrice,
+          lowestPrice: trade.direction === 'SELL'
+            ? Math.min(trade.lowestPrice ?? trade.currentPrice, currentPrice)
+            : trade.lowestPrice,
         },
       })
 

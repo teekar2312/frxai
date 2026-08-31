@@ -60,6 +60,14 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Validate trailing stop configuration
+    if (trailingStop && (!trailingDist || trailingDist <= 0)) {
+      return NextResponse.json(
+        { success: false, error: "trailingDist must be a positive number when trailingStop is enabled" },
+        { status: 400 }
+      )
+    }
+
     // Calculate equity
     const BASE_BALANCE = 10000
     const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })

@@ -335,7 +335,11 @@ export async function processSlTpForAllOpenTrades(
 
         if (!result || !result.triggered || !result.type) continue
 
-        const reason = result.type === 'SL' ? 'SL' : 'TP'
+        // Determine close reason: distinguish trailing-stop-triggered SL from manual SL
+        let reason: string = result.type === 'SL' ? 'SL' : 'TP'
+        if (result.type === 'SL' && trade.trailingStop && trade.lastSlAdjust) {
+          reason = 'Trailing Stop'
+        }
         const eventName = result.type === 'SL' ? TRADE_EVENTS.SL_TRIGGERED : TRADE_EVENTS.TP_TRIGGERED
 
         if (result.type === 'SL') slTriggered++
@@ -526,13 +530,16 @@ export async function closeTrade(
 /**
  * Adjust the trailing stop for a trade based on a new price.
  *
- * BUY:  When price rises, track the highest price. Once price has moved
- *       `trailingDist` above the highest, move SL up to (highest - trailingDist).
- * SELL: When price falls, track the lowest price. Once price has moved
- *       `trailingDist` below the lowest, move SL down to (lowest + trailingDist).
+ * Activation threshold: the trailing stop does NOT fire until the trade has
+ * moved at least `trailingDist` in the favorable direction:
+ *   BUY:  price >= entryPrice + trailingDist
+ *   SELL: price <= entryPrice - trailingDist
  *
- * The SL is ONLY ever moved in the favorable direction (never worse).
- * Updates highestPrice / lowestPrice tracking for future adjustments.
+ * Once activated:
+ *   BUY:  Track the highest price. SL ratchets to (highest - trailingDist).
+ *         SL only moves UP, never down.
+ *   SELL: Track the lowest price. SL ratchets to (lowest + trailingDist).
+ *         SL only moves DOWN, never up.
  *
  * Returns the adjustment details including the new SL (if adjusted).
  */
@@ -540,6 +547,7 @@ export function adjustTrailingStop(
   trade: {
     id: string
     direction: string
+    entryPrice: number
     currentPrice: number
     trailingStop: boolean
     trailingDist: number | null
@@ -554,10 +562,29 @@ export function adjustTrailingStop(
     return { adjusted: false, reason: 'Trailing stop not enabled or no distance set' }
   }
 
-  const { direction, trailingDist } = trade
+  const { direction, entryPrice, trailingDist } = trade
   const currentHighest = trade.highestPrice ?? trade.currentPrice
   const currentLowest = trade.lowestPrice ?? trade.currentPrice
   const currentSl = trade.sl
+
+  // --- Activation threshold: the trade must be in profit by at least trailingDist ---
+  // BUY:  price must reach entryPrice + trailingDist before trailing starts
+  // SELL: price must fall to  entryPrice - trailingDist before trailing starts
+  if (direction === 'BUY') {
+    if (newPrice < entryPrice + trailingDist) {
+      return {
+        adjusted: false,
+        reason: `Activation threshold not met: price ${newPrice} < entry ${entryPrice} + dist ${trailingDist}`,
+      }
+    }
+  } else {
+    if (newPrice > entryPrice - trailingDist) {
+      return {
+        adjusted: false,
+        reason: `Activation threshold not met: price ${newPrice} > entry ${entryPrice} - dist ${trailingDist}`,
+      }
+    }
+  }
 
   if (direction === 'BUY') {
     // Update highest price tracking
@@ -639,6 +666,7 @@ export async function processTrailingStopsForAllTrades(
           {
             id: trade.id,
             direction: trade.direction,
+            entryPrice: trade.entryPrice,
             currentPrice: trade.currentPrice,
             trailingStop: trade.trailingStop,
             trailingDist: trade.trailingDist,

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -23,7 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Bell, Plus, Trash2, BellOff, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
+import { Bell, Plus, Trash2, BellOff, ArrowUpCircle, ArrowDownCircle, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 type AlertCondition = 'Above' | 'Below' | 'Cross Up' | 'Cross Down'
 type AlertStatus = 'Active' | 'Triggered'
@@ -45,48 +46,21 @@ const SYMBOLS = [
   'BBCA', 'BBRI', 'TLKM', 'ASII', 'UNVR', 'BMRI', 'GOTO', 'BRIS', 'ICBP', 'ARTO', 'EXCL', 'TBIG',
 ]
 
-const defaultAlerts: PriceAlert[] = [
-  {
-    id: 'A1',
-    symbol: 'BBCA',
-    condition: 'Above',
-    targetPrice: 10000,
-    message: 'BBCA broke 10K resistance!',
-    active: true,
-    status: 'Active',
-    createdAt: '2025-01-15T08:00:00Z',
-  },
-  {
-    id: 'A2',
-    symbol: 'BBRI',
-    condition: 'Below',
-    targetPrice: 5300,
-    message: 'BBRI approaching support level.',
-    active: true,
-    status: 'Active',
-    createdAt: '2025-01-15T09:00:00Z',
-  },
-  {
-    id: 'A3',
-    symbol: 'GOTO',
-    condition: 'Cross Up',
-    targetPrice: 85,
-    message: 'GOTO crossed above MA20.',
-    active: true,
-    status: 'Active',
-    createdAt: '2025-01-15T07:30:00Z',
-  },
-  {
-    id: 'A4',
-    symbol: 'TLKM',
-    condition: 'Cross Down',
-    targetPrice: 3400,
-    message: 'TLKM broke support.',
-    active: false,
-    status: 'Triggered',
-    createdAt: '2025-01-14T14:00:00Z',
-  },
-]
+/** Map UI condition display names to API uppercase values */
+const CONDITION_TO_API: Record<AlertCondition, string> = {
+  Above: 'ABOVE',
+  Below: 'BELOW',
+  'Cross Up': 'CROSS_UP',
+  'Cross Down': 'CROSS_DOWN',
+}
+
+/** Map API uppercase condition back to display names */
+const API_TO_CONDITION: Record<string, AlertCondition> = {
+  ABOVE: 'Above',
+  BELOW: 'Below',
+  CROSS_UP: 'Cross Up',
+  CROSS_DOWN: 'Cross Down',
+}
 
 const conditionIcon = (cond: AlertCondition) => {
   switch (cond) {
@@ -105,9 +79,27 @@ const conditionColor: Record<AlertCondition, string> = {
   'Cross Down': 'bg-orange-100 text-orange-700 hover:bg-orange-100 dark:bg-orange-950/50 dark:text-orange-400',
 }
 
+/** Map API response item to UI PriceAlert interface */
+function mapApiAlert(raw: Record<string, unknown>): PriceAlert {
+  const apiCondition = String(raw.condition ?? 'ABOVE')
+  return {
+    id: String(raw.id),
+    symbol: String(raw.symbol),
+    condition: API_TO_CONDITION[apiCondition] ?? 'Above',
+    targetPrice: Number(raw.price),
+    message: raw.message ? String(raw.message) : '',
+    active: Boolean(raw.active),
+    status: raw.triggered ? 'Triggered' : 'Active',
+    createdAt: raw.createdAt ? new Date(String(raw.createdAt)).toISOString() : new Date().toISOString(),
+  }
+}
+
 export default function PriceAlerts() {
-  const [alerts, setAlerts] = useState<PriceAlert[]>(defaultAlerts)
+  const [alerts, setAlerts] = useState<PriceAlert[]>([])
   const [loading, setLoading] = useState(true)
+  const [creating, setCreating] = useState(false)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
 
   // Form state
@@ -116,15 +108,19 @@ export default function PriceAlerts() {
   const [newPrice, setNewPrice] = useState('')
   const [newMessage, setNewMessage] = useState('')
 
+  // Track which triggered alert IDs have already been toasted
+  const toastedIdsRef = useRef<Set<string>>(new Set())
+
   const fetchAlerts = useCallback(async () => {
     try {
       const res = await fetch('/api/alerts')
       if (res.ok) {
         const json = await res.json()
-        setAlerts(Array.isArray(json) ? json : json.alerts ?? defaultAlerts)
+        const data = json.data ?? json.alerts ?? []
+        setAlerts(Array.isArray(data) ? data.map(mapApiAlert) : [])
       }
     } catch {
-      // use default
+      // Silently fail — will show empty state
     } finally {
       setLoading(false)
     }
@@ -134,35 +130,118 @@ export default function PriceAlerts() {
     fetchAlerts()
   }, [fetchAlerts])
 
-  const handleDelete = (id: string) => {
-    setAlerts((prev) => prev.filter((a) => a.id !== id))
-  }
+  // Poll for newly triggered alerts and show toast notifications
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/alerts')
+        if (!res.ok) return
+        const json = await res.json()
+        const data: Array<Record<string, unknown>> = json.data ?? []
+        const thirtySecondsAgo = new Date(Date.now() - 30_000)
 
-  const handleToggleActive = (id: string) => {
-    setAlerts((prev) =>
-      prev.map((a) =>
-        a.id === id
-          ? { ...a, active: !a.active, status: a.active ? 'Active' : a.status }
-          : a
-      )
-    )
-  }
+        for (const item of data) {
+          if (
+            item.triggered &&
+            item.triggeredAt &&
+            !toastedIdsRef.current.has(String(item.id))
+          ) {
+            const triggeredAt = new Date(String(item.triggeredAt))
+            if (triggeredAt >= thirtySecondsAgo) {
+              toastedIdsRef.current.add(String(item.id))
+              const apiCondition = String(item.condition ?? 'ABOVE')
+              const displayCondition = API_TO_CONDITION[apiCondition] ?? apiCondition
+              toast.info(
+                `${item.symbol} ${displayCondition} Rp ${Number(item.price).toLocaleString()}`,
+                { description: item.message ? String(item.message) : undefined }
+              )
+            }
+          }
+        }
+      } catch {
+        // Silently fail polling
+      }
+    }, 10_000)
 
-  const handleCreate = () => {
-    if (!newSymbol || !newPrice) return
-    const alert: PriceAlert = {
-      id: `A${Date.now()}`,
-      symbol: newSymbol.toUpperCase(),
-      condition: newCondition,
-      targetPrice: parseFloat(newPrice),
-      message: newMessage,
-      active: true,
-      status: 'Active',
-      createdAt: new Date().toISOString(),
+    return () => clearInterval(interval)
+  }, [])
+
+  const handleDelete = async (id: string) => {
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/alerts/${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        setAlerts((prev) => prev.filter((a) => a.id !== id))
+      } else {
+        toast.error('Failed to delete alert')
+      }
+    } catch {
+      toast.error('Failed to delete alert')
+    } finally {
+      setDeletingId(null)
     }
-    setAlerts((prev) => [alert, ...prev])
-    setDialogOpen(false)
-    resetForm()
+  }
+
+  const handleToggleActive = async (id: string) => {
+    const alert = alerts.find((a) => a.id === id)
+    if (!alert) return
+
+    setTogglingId(id)
+    try {
+      const res = await fetch(`/api/alerts/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: !alert.active }),
+      })
+      if (res.ok) {
+        setAlerts((prev) =>
+          prev.map((a) =>
+            a.id === id ? { ...a, active: !a.active } : a
+          )
+        )
+      } else {
+        toast.error('Failed to toggle alert')
+      }
+    } catch {
+      toast.error('Failed to toggle alert')
+    } finally {
+      setTogglingId(null)
+    }
+  }
+
+  const handleCreate = async () => {
+    if (!newSymbol || !newPrice) return
+
+    setCreating(true)
+    try {
+      const res = await fetch('/api/alerts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: newSymbol,
+          condition: CONDITION_TO_API[newCondition],
+          price: parseFloat(newPrice),
+          message: newMessage || undefined,
+        }),
+      })
+
+      if (res.ok) {
+        const json = await res.json()
+        const created = json.data
+        if (created) {
+          setAlerts((prev) => [mapApiAlert(created), ...prev])
+        }
+        setDialogOpen(false)
+        resetForm()
+      } else {
+        const json = await res.json().catch(() => ({}))
+        toast.error(json.error ?? 'Failed to create alert')
+      }
+    } catch {
+      toast.error('Failed to create alert')
+    } finally {
+      setCreating(false)
+    }
   }
 
   const resetForm = () => {
@@ -264,8 +343,9 @@ export default function PriceAlerts() {
                 </Button>
                 <Button
                   onClick={handleCreate}
-                  disabled={!newSymbol || !newPrice}
+                  disabled={!newSymbol || !newPrice || creating}
                 >
+                  {creating && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
                   Create Alert
                 </Button>
               </DialogFooter>
@@ -337,6 +417,7 @@ export default function PriceAlerts() {
                   <Switch
                     checked={alert.active}
                     onCheckedChange={() => handleToggleActive(alert.id)}
+                    disabled={togglingId === alert.id}
                   />
 
                   <Button
@@ -344,8 +425,13 @@ export default function PriceAlerts() {
                     size="sm"
                     className="h-8 w-8 p-0 text-muted-foreground hover:text-red-600"
                     onClick={() => handleDelete(alert.id)}
+                    disabled={deletingId === alert.id}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {deletingId === alert.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-4 w-4" />
+                    )}
                     <span className="sr-only">Delete alert</span>
                   </Button>
                 </div>

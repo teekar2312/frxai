@@ -1618,6 +1618,83 @@ export interface PriceUpdateResult {
 }
 
 /**
+ * Evaluate all active price alerts against current prices.
+ * For each triggered alert, mark it as triggered in DB and return the triggered alerts.
+ */
+export async function evaluatePriceAlerts(
+  priceUpdate: Map<string, number>,
+): Promise<{
+  triggered: number
+  alerts: Array<{ id: string; symbol: string; condition: string; price: number; message: string | null }>
+}> {
+  const triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; message: string | null }> = []
+
+  try {
+    const activeAlerts = await db.priceAlert.findMany({
+      where: { active: true, triggered: false },
+    })
+
+    for (const alert of activeAlerts) {
+      const currentPrice = priceUpdate.get(alert.symbol)
+      if (currentPrice == null) continue
+
+      let isTriggered = false
+
+      switch (alert.condition) {
+        case 'ABOVE':
+          isTriggered = currentPrice >= alert.price
+          break
+        case 'BELOW':
+          isTriggered = currentPrice <= alert.price
+          break
+        case 'CROSS_UP':
+          isTriggered = currentPrice >= alert.price
+          break
+        case 'CROSS_DOWN':
+          isTriggered = currentPrice <= alert.price
+          break
+        default:
+          continue
+      }
+
+      if (isTriggered) {
+        try {
+          await db.priceAlert.update({
+            where: { id: alert.id },
+            data: { triggered: true, triggeredAt: new Date() },
+          })
+          triggeredAlerts.push({
+            id: alert.id,
+            symbol: alert.symbol,
+            condition: alert.condition,
+            price: alert.price,
+            message: alert.message,
+          })
+        } catch (err) {
+          logger.error('TRADE_EXECUTION', `Failed to mark alert ${alert.id} as triggered`, {
+            details: err instanceof Error ? err.message : String(err),
+          })
+        }
+      }
+    }
+
+    if (triggeredAlerts.length > 0) {
+      logger.info('TRADE_EXECUTION', `Price alerts triggered: ${triggeredAlerts.length}`, {
+        metadata: {
+          alerts: triggeredAlerts.map((a) => ({ id: a.id, symbol: a.symbol, condition: a.condition })),
+        },
+      })
+    }
+  } catch (err) {
+    logger.error('TRADE_EXECUTION', 'Error evaluating price alerts', {
+      details: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  return { triggered: triggeredAlerts.length, alerts: triggeredAlerts }
+}
+
+/**
  * Process a price update through the full pipeline.
  *
  * Execution order:

@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   Wallet,
   TrendingUp,
@@ -11,7 +11,7 @@ import {
   Activity,
   Target,
   Percent,
-  Zap,
+  Gauge,
 } from 'lucide-react'
 
 interface AccountData {
@@ -19,6 +19,7 @@ interface AccountData {
   equity: number
   marginUsed: number
   freeMargin: number
+  marginLevel: number
   dailyPnL: number
   openPositions: number
   totalTradesToday: number
@@ -29,14 +30,15 @@ interface AccountData {
 }
 
 const defaultData: AccountData = {
-  balance: 10000,
-  equity: 10250.75,
-  marginUsed: 1250.0,
-  freeMargin: 9000.75,
-  dailyPnL: 250.75,
-  openPositions: 3,
-  totalTradesToday: 12,
-  winRate: 67.5,
+  balance: 0,
+  equity: 0,
+  marginUsed: 0,
+  freeMargin: 0,
+  marginLevel: 0,
+  dailyPnL: 0,
+  openPositions: 0,
+  totalTradesToday: 0,
+  winRate: 0,
   leverage: '1:25',
   spreadFrom: '0.5 pip',
   commission: '$1/lot',
@@ -53,41 +55,73 @@ function formatCurrency(value: number): string {
 export default function AccountSummary() {
   const [data, setData] = useState<AccountData>(defaultData)
   const [loading, setLoading] = useState(true)
+  const [marketOpen, setMarketOpen] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const fetchAccount = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/account')
-      if (res.ok) {
-        const json = await res.json()
+      const [accountRes, mt5Res] = await Promise.all([
+        fetch('/api/account'),
+        fetch('/api/mt5/status'),
+      ])
+
+      // Process account data
+      if (accountRes.ok) {
+        const json = await accountRes.json()
         const d = json.data ?? json
         setData({
-          balance: d.balance ?? d.balance ?? 10000,
-          equity: d.equity ?? 10250.75,
-          marginUsed: d.marginUsed ?? 1250,
-          freeMargin: d.freeMargin ?? 9000.75,
-          dailyPnL: d.dailyPnl ?? 250.75,
-          openPositions: d.openPositions ?? 3,
-          totalTradesToday: d.totalTradesToday ?? 12,
-          winRate: d.winRate ?? 67.5,
+          balance: d.balance ?? 0,
+          equity: d.equity ?? 0,
+          marginUsed: d.marginUsed ?? 0,
+          freeMargin: d.freeMargin ?? 0,
+          marginLevel: d.marginLevel ?? 0,
+          dailyPnl: d.dailyPnl ?? 0,
+          openPositions: d.openPositions ?? 0,
+          totalTradesToday: d.totalTradesToday ?? 0,
+          winRate: d.winRate ?? 0,
           leverage: d.leverage ?? '1:25',
           spreadFrom: d.spread?.replace(/^from\s+/i, '') ?? d.spreadFrom?.replace(/^from\s+/i, '') ?? '0.5 pip',
           commission: d.commission ?? '$1/lot',
         })
       }
+
+      // Process MT5 status for market awareness
+      if (mt5Res.ok) {
+        const mt5Json = await mt5Res.json()
+        setMarketOpen(mt5Json.data?.isMarketOpen ?? false)
+      }
     } catch {
-      // Use default data on error
+      // Keep previous data on error
     } finally {
       setLoading(false)
     }
   }, [])
 
+  // Smart polling: 10s during market hours, 60s outside
   useEffect(() => {
-    fetchAccount()
-    const interval = setInterval(fetchAccount, 5000)
-    return () => clearInterval(interval)
-  }, [fetchAccount])
+    let active = true
+
+    const scheduleNext = () => {
+      const delay = marketOpen ? 10000 : 60000
+      timerRef.current = setTimeout(async () => {
+        if (!active) return
+        await fetchData()
+        scheduleNext()
+      }, delay)
+    }
+
+    // Initial fetch
+    fetchData().then(() => scheduleNext())
+
+    return () => {
+      active = false
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [fetchData, marketOpen])
 
   const isProfit = data.dailyPnL >= 0
+  const isMarginLow = data.marginLevel > 0 && data.marginLevel < 150
+  const isMarginCritical = data.marginLevel > 0 && data.marginLevel < 50
 
   const stats = [
     {
@@ -152,11 +186,19 @@ export default function AccountSummary() {
           : 'bg-red-50 dark:bg-red-950/40',
     },
     {
-      label: 'Leverage',
-      value: data.leverage,
-      icon: Zap,
-      color: 'text-orange-600',
-      bg: 'bg-orange-50 dark:bg-orange-950/40',
+      label: 'Margin Level',
+      value: data.marginLevel > 0 ? `${data.marginLevel.toFixed(1)}%` : 'N/A',
+      icon: Gauge,
+      color: isMarginCritical
+        ? 'text-red-600'
+        : isMarginLow
+          ? 'text-amber-600'
+          : 'text-emerald-600',
+      bg: isMarginCritical
+        ? 'bg-red-50 dark:bg-red-950/40'
+        : isMarginLow
+          ? 'bg-amber-50 dark:bg-amber-950/40'
+          : 'bg-emerald-50 dark:bg-emerald-950/40',
     },
   ]
 

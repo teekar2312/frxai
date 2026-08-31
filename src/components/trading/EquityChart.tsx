@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, useMemo, useSyncExternalStore } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useState, useEffect, useMemo } from 'react'
+import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { TrendingUp, TrendingDown, DollarSign, Mountain, ArrowDownToLine } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Mountain, ArrowDownToLine, BarChart3 } from 'lucide-react'
 import {
   AreaChart,
   Area,
@@ -19,57 +19,8 @@ type TimeRange = '1D' | '1W' | '1M' | '3M'
 
 interface EquityDataPoint {
   date: string
-  time: string
   balance: number
   equity: number
-}
-
-function generateMockData(): EquityDataPoint[] {
-  const points: EquityDataPoint[] = []
-  let balance = 10000
-  let unrealizedPnL = 0
-  const now = new Date()
-
-  for (let i = 89; i >= 0; i--) {
-    const date = new Date(now)
-    date.setDate(date.getDate() - i)
-
-    // Realistic daily equity fluctuations
-    const baseTrend = i > 60 ? 0.0005 : i > 30 ? 0.0008 : -0.0002
-    const dailyReturn = baseTrend + (Math.random() - 0.48) * 0.025
-    balance = balance * (1 + dailyReturn)
-    balance = Math.max(balance, 3000)
-
-    // Unrealized P&L oscillates more
-    unrealizedPnL = (Math.random() - 0.4) * 500
-    const equity = balance + unrealizedPnL
-
-    const hours = 9 + Math.floor(Math.random() * 7)
-    const mins = Math.floor(Math.random() * 60)
-
-    points.push({
-      date: date.toISOString().split('T')[0],
-      time: `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`,
-      balance: Math.round(balance * 100) / 100,
-      equity: Math.round(equity * 100) / 100,
-    })
-  }
-  return points
-}
-
-let cachedData: EquityDataPoint[] | null = null
-
-function getMockDataSnapshot(): EquityDataPoint[] {
-  if (cachedData === null) {
-    cachedData = generateMockData()
-  }
-  return cachedData
-}
-
-const emptySubscribe = () => () => {}
-
-function useMockData() {
-  return useSyncExternalStore(emptySubscribe, getMockDataSnapshot, () => [] as EquityDataPoint[])
 }
 
 function formatCurrency(value: number): string {
@@ -85,43 +36,41 @@ const TIME_RANGES: TimeRange[] = ['1D', '1W', '1M', '3M']
 
 export default function EquityChart() {
   const [timeRange, setTimeRange] = useState<TimeRange>('1M')
-  const ALL_DATA = useMockData()
+  const [data, setData] = useState<EquityDataPoint[]>([])
+  const [loading, setLoading] = useState(true)
 
-  const filteredData = useMemo(() => {
-    if (ALL_DATA.length === 0) return []
-    const now = new Date()
-    let cutoff: Date
-    switch (timeRange) {
-      case '1D':
-        cutoff = new Date(now)
-        cutoff.setDate(cutoff.getDate() - 1)
-        break
-      case '1W':
-        cutoff = new Date(now)
-        cutoff.setDate(cutoff.getDate() - 7)
-        break
-      case '1M':
-        cutoff = new Date(now)
-        cutoff.setMonth(cutoff.getMonth() - 1)
-        break
-      case '3M':
-        cutoff = new Date(now)
-        cutoff.setMonth(cutoff.getMonth() - 3)
-        break
-    }
-    return ALL_DATA.filter((p) => new Date(p.date) >= cutoff)
-  }, [timeRange, ALL_DATA])
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/account/equity-curve?range=${timeRange}`)
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch')
+        return res.json()
+      })
+      .then((json) => {
+        if (!cancelled) {
+          setData(json.data ?? [])
+          setLoading(false)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setData([])
+          setLoading(false)
+        }
+      })
+    return () => { cancelled = true }
+  }, [timeRange])
 
   const stats = useMemo(() => {
-    if (filteredData.length === 0) return { start: 0, current: 0, peak: 0, trough: 0, maxDD: 0 }
-    const start = filteredData[0].equity
-    const current = filteredData[filteredData.length - 1].equity
+    if (data.length === 0) return { start: 0, current: 0, peak: 0, trough: 0, maxDD: 0 }
+    const start = data[0].equity
+    const current = data[data.length - 1].equity
     let peak = -Infinity
     let trough = Infinity
     let maxDD = 0
     let runningPeak = -Infinity
 
-    for (const p of filteredData) {
+    for (const p of data) {
       if (p.equity > peak) peak = p.equity
       if (p.equity < trough) trough = p.equity
       if (p.equity > runningPeak) runningPeak = p.equity
@@ -136,9 +85,9 @@ export default function EquityChart() {
       trough: Math.round(trough),
       maxDD: Math.round(maxDD * 10) / 10,
     }
-  }, [filteredData])
+  }, [data])
 
-  const isPositive = stats.current >= stats.start
+  const isPositive = data.length > 0 ? stats.current >= stats.start : true
 
   const labelFormatter = (label: string) => {
     const d = new Date(label)
@@ -180,7 +129,7 @@ export default function EquityChart() {
             </div>
             <div className="min-w-0">
               <p className="text-[10px] text-muted-foreground">Starting</p>
-              <p className="text-xs font-bold">{formatCurrency(stats.start)}</p>
+              <p className="text-xs font-bold">{loading ? '—' : formatCurrency(stats.start)}</p>
             </div>
           </CardContent>
         </Card>
@@ -196,7 +145,7 @@ export default function EquityChart() {
             <div className="min-w-0">
               <p className="text-[10px] text-muted-foreground">Current</p>
               <p className={`text-xs font-bold ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
-                {formatCurrency(stats.current)}
+                {loading ? '—' : formatCurrency(stats.current)}
               </p>
             </div>
           </CardContent>
@@ -205,11 +154,11 @@ export default function EquityChart() {
         <Card className="py-3">
           <CardContent className="flex items-center gap-2 p-3">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50 dark:bg-emerald-950/40">
-              <TrendingUp className="h-4 w-4 text-emerald-600" />
+              <BarChart3 className="h-4 w-4 text-emerald-600" />
             </div>
             <div className="min-w-0">
               <p className="text-[10px] text-muted-foreground">Peak</p>
-              <p className="text-xs font-bold text-emerald-600">{formatCurrency(stats.peak)}</p>
+              <p className="text-xs font-bold text-emerald-600">{loading ? '—' : formatCurrency(stats.peak)}</p>
             </div>
           </CardContent>
         </Card>
@@ -221,7 +170,7 @@ export default function EquityChart() {
             </div>
             <div className="min-w-0">
               <p className="text-[10px] text-muted-foreground">Trough</p>
-              <p className="text-xs font-bold text-red-600">{formatCurrency(stats.trough)}</p>
+              <p className="text-xs font-bold text-red-600">{loading ? '—' : formatCurrency(stats.trough)}</p>
             </div>
           </CardContent>
         </Card>
@@ -234,7 +183,7 @@ export default function EquityChart() {
             <div className="min-w-0">
               <p className="text-[10px] text-muted-foreground">Max Drawdown</p>
               <p className={`text-xs font-bold ${stats.maxDD > 10 ? 'text-red-600' : 'text-amber-600'}`}>
-                {stats.maxDD}%
+                {loading ? '—' : `${stats.maxDD}%`}
               </p>
             </div>
           </CardContent>
@@ -244,68 +193,82 @@ export default function EquityChart() {
       {/* Chart */}
       <Card>
         <CardContent className="p-4">
-          <div className="h-72 sm:h-80 lg:h-96">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={filteredData}>
-                <defs>
-                  <linearGradient id="balanceGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2} />
-                    <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={isPositive ? '#10b981' : '#ef4444'} stopOpacity={0.3} />
-                    <stop offset="95%" stopColor={isPositive ? '#10b981' : '#ef4444'} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 11 }}
-                  stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={labelFormatter}
-                  interval="preserveStartEnd"
-                />
-                <YAxis
-                  tick={{ fontSize: 11 }}
-                  stroke="hsl(var(--muted-foreground))"
-                  tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`}
-                  domain={['dataMin - 500', 'dataMax + 500']}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: 'hsl(var(--card))',
-                    border: '1px solid hsl(var(--border))',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                  }}
-                  formatter={(value: number, name: string) => [
-                    `$${value.toLocaleString()}`,
-                    name === 'balance' ? 'Balance' : 'Equity',
-                  ]}
-                  labelFormatter={(label: string) => `Date: ${label}`}
-                />
-                <Legend
-                  formatter={(value: string) => (value === 'balance' ? 'Balance' : 'Equity')}
-                  wrapperStyle={{ fontSize: '12px' }}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="balance"
-                  stroke="#0ea5e9"
-                  fill="url(#balanceGradient)"
-                  strokeWidth={1.5}
-                  strokeDasharray="4 2"
-                />
-                <Area
-                  type="monotone"
-                  dataKey="equity"
-                  stroke={isPositive ? '#10b981' : '#ef4444'}
-                  fill="url(#equityGradient)"
-                  strokeWidth={2}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          {loading ? (
+            <div className="flex h-72 sm:h-80 lg:h-96 items-center justify-center">
+              <BarChart3 className="h-8 w-8 text-muted-foreground animate-pulse" />
+            </div>
+          ) : data.length === 0 ? (
+            <div className="flex h-72 sm:h-80 lg:h-96 items-center justify-center">
+              <div className="text-center space-y-2">
+                <BarChart3 className="h-8 w-8 text-muted-foreground mx-auto" />
+                <p className="text-sm text-muted-foreground">No equity data yet</p>
+                <p className="text-xs text-muted-foreground">Daily performance records will appear here once trading begins.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="h-72 sm:h-80 lg:h-96">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={data}>
+                  <defs>
+                    <linearGradient id="balanceGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.2} />
+                      <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={isPositive ? '#10b981' : '#ef4444'} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={isPositive ? '#10b981' : '#ef4444'} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 11 }}
+                    stroke="hsl(var(--muted-foreground))"
+                    tickFormatter={labelFormatter}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11 }}
+                    stroke="hsl(var(--muted-foreground))"
+                    tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`}
+                    domain={['dataMin - 500', 'dataMax + 500']}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'hsl(var(--card))',
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                    }}
+                    formatter={(value: number, name: string) => [
+                      `$${value.toLocaleString()}`,
+                      name === 'balance' ? 'Balance' : 'Equity',
+                    ]}
+                    labelFormatter={(label: string) => `Date: ${label}`}
+                  />
+                  <Legend
+                    formatter={(value: string) => (value === 'balance' ? 'Balance' : 'Equity')}
+                    wrapperStyle={{ fontSize: '12px' }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="balance"
+                    stroke="#0ea5e9"
+                    fill="url(#balanceGradient)"
+                    strokeWidth={1.5}
+                    strokeDasharray="4 2"
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="equity"
+                    stroke={isPositive ? '#10b981' : '#ef4444'}
+                    fill="url(#equityGradient)"
+                    strokeWidth={2}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

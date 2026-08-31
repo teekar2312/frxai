@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server"
-import { processPriceUpdate } from "@/lib/trade-execution-engine"
+import { processPriceUpdate, evaluatePriceAlerts } from "@/lib/trade-execution-engine"
 
 /**
  * POST /api/execution/price-update
  * Receives a map of symbol→price and processes the full pipeline:
- * trailing stops → SL/TP triggers → partial close triggers
+ * trailing stops → SL/TP triggers → partial close triggers → price alert evaluation
  */
 export async function POST(request: NextRequest) {
   try {
@@ -24,7 +24,16 @@ export async function POST(request: NextRequest) {
 
     const result = await processPriceUpdate(priceMap)
 
-    return NextResponse.json({ success: true, data: result })
+    // Evaluate price alerts after the main pipeline
+    const alertResult = await evaluatePriceAlerts(priceMap)
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        ...result,
+        alertsTriggered: alertResult.triggered,
+      },
+    })
   } catch (error) {
     console.error('Error processing price update:', error)
     return NextResponse.json(

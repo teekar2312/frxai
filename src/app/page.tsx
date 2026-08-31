@@ -22,6 +22,7 @@ import {
   Loader2,
   AlertCircle,
   Clock,
+  History,
 } from 'lucide-react'
 import AccountSummary from '@/components/trading/AccountSummary'
 import StockWatchlist from '@/components/trading/StockWatchlist'
@@ -36,7 +37,9 @@ import TradingSessions from '@/components/trading/TradingSessions'
 import EquityChart from '@/components/trading/EquityChart'
 import LogViewer from '@/components/trading/LogViewer'
 import AuditCompliance from '@/components/trading/AuditCompliance'
+import TradeHistory from '@/components/trading/TradeHistory'
 import SentimentFilter from '@/components/trading/SentimentFilter'
+import { useLiveNotifications } from '@/lib/notification-hooks'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -50,11 +53,15 @@ const NAV_ITEMS = [
   { id: 'sessions', label: 'Sessions', icon: Globe },
   { id: 'logs', label: 'System Logs', icon: Terminal },
   { id: 'audit', label: 'Audit', icon: ShieldCheck },
+  { id: 'history', label: 'Trade History', icon: History },
 ] as const
 
 type TabId = (typeof NAV_ITEMS)[number]['id']
 
 export default function TradingDashboard() {
+  // Enable toast notifications for critical risk events
+  useLiveNotifications()
+
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [autoTrading, setAutoTrading] = useState(false)
   const [mt5Status, setMt5Status] = useState<string>('DISCONNECTED')
@@ -226,6 +233,10 @@ export default function TradingDashboard() {
 
           <TabsContent value="audit" className="space-y-6">
             <AuditCompliance />
+          </TabsContent>
+
+          <TabsContent value="history" className="space-y-6">
+            <TradeHistory />
           </TabsContent>
 
           <TabsContent value="sessions" className="space-y-6">

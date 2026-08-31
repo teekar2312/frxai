@@ -15,18 +15,38 @@ const VALID_CATEGORIES: LogCategory[] = [
   "API_RATE_LIMIT",
 ]
 
+const DEFAULT_LIMIT = 10000
+const MAX_LIMIT = 50000
+
 /**
- * GET /api/logs/export?level=ERROR&category=MT5_CONNECTION&startDate=...&endDate=...&format=json|csv
+ * GET /api/logs/export?level=ERROR&category=MT5_CONNECTION&startDate=...&endDate=...&format=json|csv&limit=10000
  * Exports trading logs as a downloadable file (JSON or CSV).
+ *
+ * Security: limit caps at 50000, default startDate to 7 days ago to prevent OOM.
  */
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const level = searchParams.get("level")
     const category = searchParams.get("category")
-    const startDateStr = searchParams.get("startDate")
+    let startDateStr = searchParams.get("startDate")
     const endDateStr = searchParams.get("endDate")
     const format = searchParams.get("format") ?? "json"
+    const limitParam = parseInt(searchParams.get("limit") || String(DEFAULT_LIMIT), 10)
+
+    // Validate limit
+    if (isNaN(limitParam) || limitParam < 1) {
+      return NextResponse.json(
+        { success: false, error: "limit must be a positive integer" },
+        { status: 400 },
+      )
+    }
+    if (limitParam > MAX_LIMIT) {
+      return NextResponse.json(
+        { success: false, error: `limit cannot exceed ${MAX_LIMIT}. Use a smaller range or add startDate filter.` },
+        { status: 400 },
+      )
+    }
 
     if (format !== "json" && format !== "csv") {
       return NextResponse.json(
@@ -35,13 +55,21 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    // Default startDate to 7 days ago if not provided
+    if (!startDateStr) {
+      const sevenDaysAgo = new Date()
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+      startDateStr = sevenDaysAgo.toISOString()
+    }
+
     const params: {
       level?: LogLevel
       category?: LogCategory
       startDate?: Date
       endDate?: Date
       format: "json" | "csv"
-    } = { format: format as "json" | "csv" }
+      limit: number
+    } = { format: format as "json" | "csv", limit: limitParam }
 
     if (level && VALID_LEVELS.includes(level as LogLevel)) {
       params.level = level as LogLevel

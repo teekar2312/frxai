@@ -1017,8 +1017,9 @@ export async function exportLogs(params: {
   startDate?: Date
   endDate?: Date
   format?: 'json' | 'csv'
+  limit?: number
 }): Promise<string> {
-  const { level, category, startDate, endDate, format = 'json' } = params
+  const { level, category, startDate, endDate, format = 'json', limit = 10000 } = params
 
   const where: Record<string, unknown> = {}
   if (level) where.level = level
@@ -1033,7 +1034,7 @@ export async function exportLogs(params: {
   const logs = await db.tradingLog.findMany({
     where,
     orderBy: { createdAt: 'desc' },
-    take: 10000,
+    take: limit,
   })
 
   if (format === 'csv') {

@@ -1373,3 +1373,181 @@ Stage Summary:
 - ESLint passes clean with zero errors
 - All changes are additive — existing functionality preserved
 ---
+## TASK 2-a: Dashboard Module — 3 CRUCIAL Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+**Agent**: Task 2-a
+
+### Context
+The Dashboard module (AccountSummary, EquityChart, notifications) had critical gaps:
+1. EquityChart used 100% mock data with `generateMockData()` — never connected to the database
+2. AccountSummary API hardcoded `baseBalance = 10000` instead of reading DailyPerformance, and polled every 5s regardless of market hours
+3. No toast notification system for critical risk events despite sonner being installed
+
+---
+
+### Improvement 1: Connect EquityChart to Real Data
+
+**Problem**: EquityChart generated 90 days of random mock data via `useSyncExternalStore` + `generateMockData()`. No API calls were ever made.
+
+**Files Changed**:
+- **NEW** `src/app/api/account/equity-curve/route.ts` — API endpoint that queries `DailyPerformance` table
+  - Accepts `range` query param (1D|1W|1M|3M, default 1M)
+  - Filters by date range based on WIB/UTC+7 timezone
+  - Returns `{ date, balance: startBalance, equity: startBalance + totalPnl }`
+  - Returns empty array (not mock) when no data exists
+- **REWRITTEN** `src/components/trading/EquityChart.tsx`
+  - Removed all mock data code (`generateMockData`, `cachedData`, `useMockData`, `useSyncExternalStore`)
+  - Added `useEffect` + `useState` to fetch from `/api/account/equity-curve?range=${timeRange}`
+  - Refetches when `timeRange` changes
+  - Shows "No equity data yet" message with icon when array is empty
+  - Shows loading spinner during initial fetch
+  - All existing UI preserved (stats row, chart, time range buttons)
+
+---
+
+### Improvement 2: Fix AccountSummary — Real Balance + Smart Polling
+
+**Problem 1 (API)**: `/api/account/route.ts` used hardcoded `baseBalance = 10000` and computed daily P&L from trades instead of using DailyPerformance records.
+
+**Fix** (`src/app/api/account/route.ts`):
+- Reads today's `DailyPerformance.startBalance` as base balance
+- Falls back to most recent `DailyPerformance.endBalance` if no today record, then 10000
+- Uses `todayPerf.totalPnl` for daily P&L when available
+- Already returned `marginLevel` — now prominently used in UI
+- Removed fallback mock data from error handler (returns 500 instead)
+
+**Problem 2 (Component)**: `AccountSummary.tsx` polled every 5 seconds regardless of market hours, and showed static 'Leverage' card.
+
+**Fix** (`src/components/trading/AccountSummary.tsx`):
+- Changed from `setInterval` to `setTimeout`-based smart polling:
+  - **10s** when `isMarketOpen` is true (market hours)
+  - **60s** when `isMarketOpen` is false (outside market hours)
+- Fetches `/api/mt5/status` alongside `/api/account` in parallel to get market status
+- Replaced static 'Leverage' card with dynamic 'Margin Level %' card:
+  - Green when >150%, amber when 50-150%, red when <50%
+  - Shows N/A when no margin is used
+- Default values zeroed out (no fake $10,000 display)
+- Removed `Zap` icon import, added `Gauge` for margin level
+
+---
+
+### Improvement 3: Toast Notifications for Critical Events
+
+**Problem**: Despite sonner being installed (`@/components/ui/sonner`), the layout used the shadcn/ui Toaster (`@/components/ui/toaster`) and no notification hooks existed.
+
+**Files Changed**:
+- **UPDATED** `src/app/layout.tsx`
+  - Changed import from `@/components/ui/toaster` to `@/components/ui/sonner`
+  - The Sonner Toaster was already exported, just not used in layout
+- **NEW** `src/lib/notification-hooks.ts`
+  - `useLiveNotifications()` hook that polls `/api/risk-events?resolved=false&limit=5` every 15 seconds
+  - Tracks notified event IDs in a `Set` (max 200, pruned FIFO) to prevent duplicate toasts
+  - Shows `toast.error()` for CRITICAL severity events (8s duration)
+  - Shows `toast.warning()` for HIGH severity events (6s duration)
+  - Silent failure on network errors
+- **UPDATED** `src/app/page.tsx`
+  - Imported `useLiveNotifications` from `@/lib/notification-hooks`
+  - Called `useLiveNotifications()` inside `TradingDashboard` component
+
+---
+
+### Verification
+- `bun run lint` passes with **zero errors**
+- No mock data remains in EquityChart
+- No hardcoded balance in account API
+- Sonner Toaster active in layout
+- All existing UI elements preserved
+
+---
+
+## Task 2-b: Price Alerts Module — 4 Crucial Improvements
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Summary
+Connected the Price Alerts module end-to-end: UI ↔ API ↔ price update pipeline. Eliminated all hardcoded data, fixed field mismatches, added server-side alert evaluation, and implemented toast notifications for triggered alerts.
+
+---
+
+### Improvement 1: Connect PriceAlerts UI to Real API
+
+**File**: `src/components/trading/PriceAlerts.tsx`
+
+- **Removed** the `defaultAlerts` hardcoded array entirely. Empty API response → empty state.
+- **`fetchAlerts`**: Calls `GET /api/alerts`, maps `json.data` array via `mapApiAlert()` which:
+  - Maps `price` → `targetPrice`
+  - Maps `triggered` boolean → `'Triggered'` / `'Active'` status
+  - Converts API `ABOVE`/`BELOW`/`CROSS_UP`/`CROSS_DOWN` → display `'Above'`/`'Below'`/`'Cross Up'`/`'Cross Down'`
+- **`handleCreate`**: Calls `POST /api/alerts` with `{ symbol, condition: uppercase, price, message }`. Prepend returned alert on success, show `toast.error` on failure.
+- **`handleToggleActive`**: Calls `PATCH /api/alerts/${id}` with `{ active: !alert.active }`. Updates local state on success.
+- **`handleDelete`**: Calls `DELETE /api/alerts/${id}`. Removes from local state on success.
+- **Loading states**: `creating`, `deletingId`, `togglingId` with `Loader2` spinners on buttons.
+- **Exact same UI layout/styling** preserved — only data flow changed.
+
+### Improvement 2: Add Price Alert Evaluation to Price Update Pipeline
+
+**File**: `src/lib/trade-execution-engine.ts` — new `evaluatePriceAlerts()` function
+
+- Queries `db.priceAlert.findMany({ where: { active: true, triggered: false } })`
+- For each alert, gets `priceUpdate.get(alert.symbol)`
+- Evaluates: `ABOVE` (currentPrice >=), `BELOW` (currentPrice <=), `CROSS_UP` (currentPrice >=), `CROSS_DOWN` (currentPrice <=)
+- On trigger: updates DB `{ triggered: true, triggeredAt: new Date() }`, pushes to result array
+- Returns `{ triggered: number, alerts: [...] }`
+
+**File**: `src/app/api/execution/price-update/route.ts`
+
+- Imports `evaluatePriceAlerts`
+- Calls it after `processPriceUpdate()`
+- Includes `alertsTriggered` count in response
+
+### Improvement 3: Fix Field Mismatches
+
+**File**: `src/app/api/alerts/route.ts`
+
+1. **`price` / `targetPrice` dual support**: `const price = body.price ?? body.targetPrice`
+2. **Condition normalization**: `const normalizedCondition = (condition as string).toUpperCase()` — so `'Above'` becomes `'ABOVE'`
+3. **GET `?active=true` filter**: `const where = activeOnly ? { active: true } : undefined`
+
+### Improvement 4: Toast Notification When Alert Triggers
+
+**File**: `src/components/trading/PriceAlerts.tsx`
+
+- `useEffect` with `setInterval` (10 seconds) polls `GET /api/alerts`
+- For each alert where `triggered: true` AND `triggeredAt` is within the last 30 seconds:
+  - Shows `toast.info("${symbol} ${condition} Rp ${price}", { description: message })`
+  - Tracks shown IDs in `toastedIdsRef` (Set in a ref) to prevent duplicate toasts
+
+---
+
+### Files Modified
+| File | Change |
+|------|--------|
+| `src/components/trading/PriceAlerts.tsx` | Full rewrite: API-connected, loading states, toast polling |
+| `src/app/api/alerts/route.ts` | `targetPrice` fallback, condition uppercase, `?active=true` filter |
+| `src/app/api/execution/price-update/route.ts` | Added `evaluatePriceAlerts` call + `alertsTriggered` in response |
+| `src/lib/trade-execution-engine.ts` | New `evaluatePriceAlerts()` export (76 lines) |
+
+### Verification
+- `bun run lint` — zero errors
+
+---
+Task ID: 2-c
+Agent: full-stack-developer
+Task: Deep audit improvements for Reporting module
+
+Work Log:
+- Read existing worklog, prisma schema, page.tsx, logs/export route, trading-logger.ts, db client
+- Created /api/reports/performance endpoint (GET) — computes overall metrics (totalTrades, winRate, totalPnl, avgPnl, profitFactor, maxDrawdown, avgWin, avgLoss, avgHoldHours, totalCommission, totalSlippage), grouped breakdown by symbol/strategy/session, and daily P&L time series from DailyPerformance table
+- Created /api/trades/history endpoint (GET) — server-side paginated (20/page, max 100), filterable by symbol, strategy, outcome (win/loss/all), date range, sortable by closeTime/pnl/pnlPercent
+- Created TradeHistory.tsx component — summary stats (Total P&L, Win Rate, Avg P&L), filter bar with symbol input, strategy input, outcome select, date pickers, reset button; data table with colored BUY/SELL badges, colored P&L, reason badges with semantic colors, duration formatting, close time formatting; sortable columns with ArrowUpDown icons; pagination with ellipsis; loading skeletons; empty state; responsive
+- Added TradeHistory tab to Dashboard page.tsx — imported History icon from lucide-react, added to NAV_ITEMS after audit, added TabsContent
+- Fixed /api/logs/export — added limit query param (default 10000, max 50000, 400 error if exceeded); default startDate to 7 days ago if not provided; updated exportLogs() in trading-logger.ts to accept limit param
+
+Stage Summary:
+- 3 new files: src/app/api/reports/performance/route.ts, src/app/api/trades/history/route.ts, src/components/trading/TradeHistory.tsx
+- 3 modified files: src/app/page.tsx (added History tab), src/app/api/logs/export/route.ts (limit + date defaults), src/lib/trading-logger.ts (limit param)
+- bun run lint passes with zero errors
+

@@ -283,7 +283,8 @@ function buildCacheKey(options: NewsFetchOptions, provider: NewsProvider): strin
   const symbols = (options.symbols ?? DEFAULT_SYMBOLS).sort().join(',')
   const categories = (options.categories ?? []).sort().join(',')
   const today = new Date().toISOString().slice(0, 10) // Date component prevents cross-day stale hits
-  return `news:${provider}:${today}:${symbols}:${categories}`
+  const maxArticles = options.maxArticles ?? 50
+  return `news:${provider}:${today}:${symbols}:${categories}:${maxArticles}`
 }
 
 // ============================================================================
@@ -301,6 +302,7 @@ interface InMemoryRateLimitEntry {
   rateLimitPerMin: number
   rateLimitPerDay: number
   enabled: boolean
+  apiKey: string | null  // cached API key from DB config
 }
 
 const inMemoryRateLimits: Map<NewsProvider, InMemoryRateLimitEntry> = new Map()
@@ -353,6 +355,7 @@ async function syncRateLimitFromDb(provider: NewsProvider): Promise<InMemoryRate
       rateLimitPerMin: config.rateLimitPerMin,
       rateLimitPerDay: config.rateLimitPerDay,
       enabled: config.enabled,
+      apiKey: config.apiKey,
     }
     inMemoryRateLimits.set(provider, entry)
     return entry
@@ -747,11 +750,15 @@ async function saveArticles(articles: NormalizedArticle[]): Promise<number> {
         where: { title: { in: chunk } },
         select: { title: true },
       })
-      for (const e of existing) existingTitles.add(e.title)
+      for (const e of existing) existingTitles.add(e.title.toLowerCase().trim())
     }
 
-    // Create only new articles
-    const newArticles = articles.filter(a => !existingTitles.has(a.title))
+    // Create only new articles (normalize titles for consistent dedup matching)
+    const normalizedTitles = new Set(existingTitles) // already normalized above
+    const newArticles = articles.filter(a => {
+      const normalized = a.title.toLowerCase().trim()
+      return !normalizedTitles.has(normalized)
+    })
     if (newArticles.length === 0) return 0
 
     // FIX 2: Use createMany for batch insert, fall back to individual on failure
@@ -816,17 +823,29 @@ async function saveArticles(articles: NormalizedArticle[]): Promise<number> {
   }
 }
 
+const PROVIDERS_CACHE_TTL_MS = 60_000 // 60 seconds
+let cachedProviders: NewsProvider[] | null = null
+let providersCachedAt = 0
+
 /**
  * Determine the best available provider from DB configs.
  * Returns providers sorted by priority (highest first) that are enabled.
+ * Results are cached in-memory for 60s to avoid repeated DB queries.
  */
 async function getAvailableProviders(): Promise<NewsProvider[]> {
+  // Return cached result if fresh
+  if (cachedProviders !== null && (Date.now() - providersCachedAt) < PROVIDERS_CACHE_TTL_MS) {
+    return cachedProviders
+  }
+
   try {
     const configs = await db.newsSourceConfig.findMany({
       where: { enabled: true },
       orderBy: { priority: 'desc' },
     })
-    return configs.map(c => c.provider as NewsProvider)
+    cachedProviders = configs.map(c => c.provider as NewsProvider)
+    providersCachedAt = Date.now()
+    return cachedProviders
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     logger.error('SYSTEM', 'Failed to fetch available providers', {
@@ -836,16 +855,35 @@ async function getAvailableProviders(): Promise<NewsProvider[]> {
   }
 }
 
+/** Invalidate the cached providers list (useful after config updates) */
+export function invalidateProvidersCache(): void {
+  cachedProviders = null
+  providersCachedAt = 0
+}
+
 /**
- * Get the API key for a provider from the DB config.
+ * Get the API key for a provider. Checks in-memory rate limit entry first
+ * (avoids a DB query), falls back to DB if not cached.
  */
 async function getProviderApiKey(provider: NewsProvider): Promise<string | null> {
+  // Fast path: check in-memory rate limit entry which already has the apiKey
+  const entry = inMemoryRateLimits.get(provider)
+  if (entry?.apiKey) {
+    return entry.apiKey
+  }
+
+  // Slow path: fetch from DB
   try {
     const config = await db.newsSourceConfig.findUnique({
       where: { provider },
       select: { apiKey: true },
     })
-    return config?.apiKey ?? null
+    const apiKey = config?.apiKey ?? null
+    // Store in the in-memory entry if it exists for future fast path
+    if (entry && apiKey) {
+      entry.apiKey = apiKey
+    }
+    return apiKey
   } catch {
     return null
   }
@@ -1225,7 +1263,8 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
     })
   }
 
-  for (const fetchConfig of fetchConfigs) {
+  // Concurrent fetching with Promise.allSettled (same pattern as Finnhub)
+  const fetchPromises = fetchConfigs.map(async (fetchConfig) => {
     try {
       const response = await fetchWithRetry(fetchConfig.url, {
         headers: { 'Accept': 'application/json' },
@@ -1238,37 +1277,47 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
           source: 'MARKETAUX',
           details: errorText,
         })
-        lastError = errorText
-        continue
+        return { config: fetchConfig, articles: [] as NormalizedArticle[], error: errorText, rawCount: 0 }
       }
 
       const data: unknown = await response.json()
 
       // Validate response shape
       if (!data || typeof data !== 'object' || !('data' in data) || !Array.isArray((data as Record<string, unknown>).data)) {
-        lastError = 'Invalid MARKETAUX response shape'
+        const errorMsg = 'Invalid MARKETAUX response shape'
         logger.warn('SYSTEM', `MARKETAUX invalid response shape (${fetchConfig.label})`)
-        continue
+        return { config: fetchConfig, articles: [] as NormalizedArticle[], error: errorMsg, rawCount: 0 }
       }
 
       const marketauxResponse = data as MarketauxResponse
       const rawArticles = marketauxResponse.data
-      totalRawFetched += rawArticles.length
-      endpointsCalled.push(fetchConfig.endpoint)
-
-      for (const raw of rawArticles) {
-        allArticles.push(normalizeMarketauxArticle(raw))
-      }
-
-      anySuccess = true
+      const articles = rawArticles.map((raw: MarketauxArticle) => normalizeMarketauxArticle(raw))
+      return { config: fetchConfig, articles, error: undefined, rawCount: rawArticles.length }
     } catch (fetchError) {
       const message = fetchError instanceof Error ? fetchError.message : String(fetchError)
       logger.error('SYSTEM', `MARKETAUX fetch failed (${fetchConfig.label})`, {
         source: 'MARKETAUX',
         stackTrace: message,
       })
-      lastError = message
+      return { config: fetchConfig, articles: [] as NormalizedArticle[], error: message, rawCount: 0 }
     }
+  })
+
+  const results = await Promise.allSettled(fetchPromises)
+
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const { config, articles, error, rawCount } = result.value
+      if (error) {
+        lastError = error
+      } else {
+        allArticles.push(...articles)
+        totalRawFetched += rawCount
+        endpointsCalled.push(config.endpoint)
+        anySuccess = true
+      }
+    }
+    // Rejected promises are already caught inside the individual fetch, so 'rejected' shouldn't happen
   }
 
   const responseTimeMs = Date.now() - startTime
@@ -1533,7 +1582,7 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
             symbols,
             publishedAt: article.publishedAt,
             category: article.category,
-            provider: (article.source ?? 'unknown').toLowerCase().includes('marketaux') ? 'MARKETAUX' : 'FINNHUB',
+            provider: (article.source ?? '').toLowerCase() === 'marketaux' ? 'MARKETAUX' : 'FINNHUB',
           },
           matchedKeywords,
         })
@@ -1687,6 +1736,30 @@ export async function cleanupFetchLogs(keepLastDays: number = 30): Promise<numbe
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     logger.error('SYSTEM', 'Fetch log cleanup failed', { stackTrace: message })
+    return 0
+  }
+}
+
+/**
+ * Cleanup old NewsArticle records to prevent unbounded table growth.
+ * Deletes articles whose `fetchedAt` is older than `keepLastDays`.
+ *
+ * @param keepLastDays - Number of days to retain (default: 90)
+ * @returns Count of deleted records
+ */
+export async function cleanupOldArticles(keepLastDays: number = 90): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - keepLastDays * 24 * 60 * 60 * 1000)
+    const result = await db.newsArticle.deleteMany({
+      where: { fetchedAt: { lt: cutoff } },
+    })
+    if (result.count > 0) {
+      logger.info('SYSTEM', `Cleaned up ${result.count} old articles (older than ${keepLastDays} days)`)
+    }
+    return result.count
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error('SYSTEM', 'Old articles cleanup failed', { stackTrace: message })
     return 0
   }
 }

@@ -307,6 +307,9 @@ const RECENCY_HALF_LIFE_HOURS = 6
 const sentimentCache = new Map<string, { data: Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>; cachedAt: number }>()
 const SENTIMENT_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes (shorter than DB stale threshold of 30 min)
 
+// In-memory lock to prevent concurrent computeSymbolSentiment/computeMarketSentiment for same key
+const computeLocks = new Map<string, Promise<unknown>>() // symbol -> ongoing computation promise
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -406,6 +409,11 @@ function symbolInJsonSymbols(jsonSymbols: string | null, symbol: string): boolea
 // 3. CORE SCORING ENGINE
 // ============================================================================
 
+/** Escape special regex characters in a string */
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 /**
  * Analyze text and return a sentiment score.
  *
@@ -436,7 +444,7 @@ export function analyzeText(text: string): SentimentScore {
   for (const phrase of MULTI_WORD_PHRASES) {
     const token = phrase.replace(/\s+/g, "_")
     // Use a regex to replace all occurrences
-    const regex = new RegExp(phrase.replace(/\s+/g, "\\s+"), "gi")
+    const regex = new RegExp(escapeRegex(phrase).replace(/\s+/g, "\\s+"), "gi")
     if (regex.test(processedText)) {
       phraseMap.set(token, phrase)
       processedText = processedText.replace(regex, ` ${token} `)
@@ -696,6 +704,13 @@ export async function computeSymbolSentiment(symbol: string) {
     }
   }
 
+  // Prevent concurrent computation for the same symbol
+  const existingLock = computeLocks.get(symbol)
+  if (existingLock) {
+    return existingLock as Awaited<ReturnType<typeof computeSymbolSentiment>>
+  }
+
+  const computationPromise = (async () => {
   // Score articles that haven't been scored yet
   let positiveCount = 0
   let negativeCount = 0
@@ -704,6 +719,7 @@ export async function computeSymbolSentiment(symbol: string) {
   let totalWeight = 0
   const positiveWordCount = new Map<string, number>()
   const negativeWordCount = new Map<string, number>()
+  const unscoredUpdates: Array<{ id: string; sentiment: string; sentimentScore: number }> = []
 
   for (const article of articles) {
     let sentimentScore = article.sentimentScore as number
@@ -723,18 +739,7 @@ export async function computeSymbolSentiment(symbol: string) {
         negativeWordCount.set(w, (negativeWordCount.get(w) ?? 0) + 1)
       }
 
-      // Persist score to article
-      try {
-        await db.newsArticle.update({
-          where: { id: article.id },
-          data: { sentiment: sentimentLabel, sentimentScore: sentimentScore },
-        })
-      } catch (err) {
-        logger.warn("AI_ENGINE", `Failed to update article sentiment for ${article.id}`, {
-          details: err instanceof Error ? err.message : String(err),
-          symbol,
-        })
-      }
+      unscoredUpdates.push({ id: article.id, sentiment: sentimentLabel, sentimentScore })
     }
 
     // Weight: more recent articles get higher weight (exponential decay)
@@ -748,6 +753,25 @@ export async function computeSymbolSentiment(symbol: string) {
     if (sentimentLabel === "POSITIVE") positiveCount++
     else if (sentimentLabel === "NEGATIVE") negativeCount++
     else neutralCount++
+  }
+
+  // Batch-persist unscored article updates concurrently (N+1 fix)
+  const BATCH_SIZE = 10
+  for (let i = 0; i < unscoredUpdates.length; i += BATCH_SIZE) {
+    const batch = unscoredUpdates.slice(i, i + BATCH_SIZE)
+    await Promise.all(
+      batch.map(u =>
+        db.newsArticle.update({
+          where: { id: u.id },
+          data: { sentiment: u.sentiment, sentimentScore: u.sentimentScore },
+        }).catch(err => {
+          logger.warn('AI_ENGINE', `Failed to update article sentiment for ${u.id}`, {
+            details: err instanceof Error ? err.message : String(err),
+            symbol,
+          })
+        })
+      )
+    )
   }
 
   // Calculate weighted average score
@@ -856,6 +880,11 @@ export async function computeSymbolSentiment(symbol: string) {
     setCachedSentiment(symbol, fallbackSnapshot as NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>)
     return fallbackSnapshot
   }
+  })()
+
+  computeLocks.set(symbol, computationPromise)
+  computationPromise.finally(() => computeLocks.delete(symbol))
+  return computationPromise
 }
 
 // ============================================================================
@@ -898,6 +927,13 @@ export async function computeMarketSentiment() {
     }
   }
 
+  // Prevent concurrent computation for the same key
+  const existingLock = computeLocks.get('MARKET')
+  if (existingLock) {
+    return existingLock as Awaited<ReturnType<typeof computeMarketSentiment>>
+  }
+
+  const computationPromise = (async () => {
   let positiveCount = 0
   let negativeCount = 0
   let neutralCount = 0
@@ -908,6 +944,7 @@ export async function computeMarketSentiment() {
   const sectorMap = new Map<string, { totalScore: number; count: number }>()
   const marketPositiveWords = new Map<string, number>()
   const marketNegativeWords = new Map<string, number>()
+  const unscoredUpdates: Array<{ id: string; sentiment: string; sentimentScore: number }> = []
 
   for (const article of articles) {
     let sentimentScore = article.sentimentScore as number
@@ -927,17 +964,7 @@ export async function computeMarketSentiment() {
         marketNegativeWords.set(w, (marketNegativeWords.get(w) ?? 0) + 1)
       }
 
-      // Persist score to article
-      try {
-        await db.newsArticle.update({
-          where: { id: article.id },
-          data: { sentiment: sentimentLabel, sentimentScore: sentimentScore },
-        })
-      } catch (err) {
-        logger.warn("AI_ENGINE", `Failed to update article sentiment for ${article.id}`, {
-          details: err instanceof Error ? err.message : String(err),
-        })
-      }
+      unscoredUpdates.push({ id: article.id, sentiment: sentimentLabel, sentimentScore })
     }
 
     // Recency weight (exponential decay)
@@ -958,6 +985,24 @@ export async function computeMarketSentiment() {
     existing.totalScore += sentimentScore
     existing.count++
     sectorMap.set(sector, existing)
+  }
+
+  // Batch-persist unscored article updates concurrently (N+1 fix)
+  const BATCH_SIZE = 10
+  for (let i = 0; i < unscoredUpdates.length; i += BATCH_SIZE) {
+    const batch = unscoredUpdates.slice(i, i + BATCH_SIZE)
+    await Promise.all(
+      batch.map(u =>
+        db.newsArticle.update({
+          where: { id: u.id },
+          data: { sentiment: u.sentiment, sentimentScore: u.sentimentScore },
+        }).catch(err => {
+          logger.warn('AI_ENGINE', `Failed to update article sentiment for ${u.id}`, {
+            details: err instanceof Error ? err.message : String(err),
+          })
+        })
+      )
+    )
   }
 
   // Calculate aggregate values
@@ -1063,6 +1108,11 @@ export async function computeMarketSentiment() {
     setCachedSentiment("MARKET", fallbackSnapshot as NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>)
     return fallbackSnapshot
   }
+  })()
+
+  computeLocks.set('MARKET', computationPromise)
+  computationPromise.finally(() => computeLocks.delete('MARKET'))
+  return computationPromise
 }
 
 // ============================================================================
@@ -1406,33 +1456,52 @@ export async function filterTrade(
 /**
  * Get aggregate sentiment statistics across all snapshots.
  *
+ * @param maxSnapshots - Maximum number of recent snapshots to fetch (capped at 500)
  * @returns SentimentStats with totals, distributions, and top symbols
  */
-export async function getSentimentStats(): Promise<SentimentStats> {
+export async function getSentimentStats(maxSnapshots: number = 200): Promise<SentimentStats> {
   try {
-    const [totalSnapshots, latestMarket, allSnapshots, bullishSymbols, bearishSymbols] =
+    const [totalSnapshots, latestMarket, allSnapshots] =
       await Promise.all([
         db.sentimentSnapshot.count(),
         db.sentimentSnapshot.findFirst({
           where: { symbol: "MARKET" },
           orderBy: { timestamp: "desc" },
         }),
-        db.sentimentSnapshot.findMany({ orderBy: { timestamp: "desc" }, take: 200 }),
-        // Top 5 bullish symbols (excluding MARKET)
-        db.sentimentSnapshot.findMany({
-          where: { symbol: { not: "MARKET" } },
-          orderBy: { overallScore: "desc" },
-          take: 5,
-          distinct: ["symbol"],
-        }),
-        // Top 5 bearish symbols (excluding MARKET)
-        db.sentimentSnapshot.findMany({
-          where: { symbol: { not: "MARKET" } },
-          orderBy: { overallScore: "asc" },
-          take: 5,
-          distinct: ["symbol"],
-        }),
+        db.sentimentSnapshot.findMany({ orderBy: { timestamp: "desc" }, take: Math.min(maxSnapshots, 500) }),
       ])
+
+    // Manual distinct for SQLite compatibility: top 5 bullish symbols by highest score
+    const allSymbolSnapshots = await db.sentimentSnapshot.findMany({
+      where: { symbol: { not: "MARKET" } },
+      orderBy: { overallScore: "desc" },
+      take: 200,
+    })
+    const seenSymbols = new Set<string>()
+    const bullishSymbols: typeof allSymbolSnapshots = []
+    for (const s of allSymbolSnapshots) {
+      if (!seenSymbols.has(s.symbol)) {
+        seenSymbols.add(s.symbol)
+        bullishSymbols.push(s)
+        if (bullishSymbols.length >= 5) break
+      }
+    }
+
+    // Manual distinct for SQLite compatibility: top 5 bearish symbols by lowest score
+    const allSymbolSnapshotsAsc = await db.sentimentSnapshot.findMany({
+      where: { symbol: { not: "MARKET" } },
+      orderBy: { overallScore: "asc" },
+      take: 200,
+    })
+    const seenSymbolsBear = new Set<string>()
+    const bearishSymbols: typeof allSymbolSnapshotsAsc = []
+    for (const s of allSymbolSnapshotsAsc) {
+      if (!seenSymbolsBear.has(s.symbol)) {
+        seenSymbolsBear.add(s.symbol)
+        bearishSymbols.push(s)
+        if (bearishSymbols.length >= 5) break
+      }
+    }
 
     // Average confidence
     const avgConfidence = allSnapshots.length > 0

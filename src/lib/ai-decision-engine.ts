@@ -160,6 +160,9 @@ const MAX_BREAKING_NEWS = 2
 const SL_MULTIPLIER = 1.0
 const TP_MULTIPLIER = 1.5
 const DEFAULT_ATR_PCT = 0.015 // 1.5% estimated ATR for SL/TP calc
+// Breaking news cache (shared across symbols within the same minute)
+let breakingNewsCache: { items: Awaited<ReturnType<typeof detectBreakingNews>>; cachedAt: number } | null = null
+const BREAKING_NEWS_CACHE_TTL_MS = 60_000 // 1 minute
 const MATCHING_WINDOW_MS = 5 * 60 * 1000 // 5 minutes to match decision to trade
 const ESTIMATED_ACCOUNT_VALUE = 100_000_000 // 100M IDR estimate
 const RISK_PER_TRADE_PCT = 0.01 // 1% risk per trade
@@ -541,10 +544,12 @@ export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
       ? Math.round((relevantCount / articles.length) * 100)
       : 0
 
-    // Count breaking news
+    // Count breaking news (cached for 1 minute across symbols)
     try {
-      const breakingItems = await detectBreakingNews()
-      factors.breakingNewsCount = breakingItems.filter(
+      if (!breakingNewsCache || (Date.now() - breakingNewsCache.cachedAt) > BREAKING_NEWS_CACHE_TTL_MS) {
+        breakingNewsCache = { items: await detectBreakingNews(), cachedAt: Date.now() }
+      }
+      factors.breakingNewsCount = breakingNewsCache.items.filter(
         item => item.article.symbols.includes(symbol),
       ).length
     } catch {
@@ -579,26 +584,24 @@ export async function analyzeSentimentFactors(symbol: string): Promise<Sentiment
   const factors = defaultSentimentFactors()
 
   try {
-    // Get trade filter result (primary integration point)
-    // This also triggers computeSymbolSentiment if stale
-    const filterResult: SentimentFilterResult = await filterTrade(symbol, 'BUY')
-    factors.isBlocked = filterResult.shouldBlock
-    factors.regime = filterResult.regime
-    factors.symbolScore = filterResult.symbolScore
-    factors.marketScore = filterResult.marketScore
-    factors.confidence = filterResult.confidence
-    factors.sizeAdjustment = filterResult.sizeAdjustment
+    // Check BOTH directions to avoid directional bias
+    const [buyFilter, sellFilter] = await Promise.all([
+      filterTrade(symbol, 'BUY'),
+      filterTrade(symbol, 'SELL'),
+    ])
 
-    // If BUY is blocked, also check SELL direction to refine
-    if (filterResult.shouldBlock) {
-      try {
-        const sellFilter = await filterTrade(symbol, 'SELL')
-        if (!sellFilter.shouldBlock) {
-          factors.sizeAdjustment = sellFilter.sizeAdjustment
-        }
-      } catch {
-        // Keep original filter result
-      }
+    // Use the less restrictive result for isBlocked (block only if BOTH are blocked)
+    factors.isBlocked = buyFilter.shouldBlock && sellFilter.shouldBlock
+    factors.regime = buyFilter.regime // Same for both directions
+    factors.symbolScore = buyFilter.symbolScore
+    factors.marketScore = buyFilter.marketScore
+    factors.confidence = buyFilter.confidence
+    // Use the more conservative (lower) size adjustment
+    factors.sizeAdjustment = Math.min(buyFilter.sizeAdjustment, sellFilter.sizeAdjustment)
+
+    // Store which direction is blocked for reasoning
+    if (buyFilter.shouldBlock && !sellFilter.shouldBlock) {
+      factors.isBlocked = false // Only BUY blocked, SELL still allowed
     }
   } catch (err) {
     logger.error('AI_ENGINE', `Sentiment filter failed for ${symbol}`, {
@@ -669,6 +672,11 @@ export async function analyzeRiskFactors(): Promise<RiskFactors> {
     } catch {
     // Use default estimate
   }
+
+    // Fix: Compute margin usage percentage
+    factors.marginUsagePct = baseEquity > 0
+      ? Math.round((totalMargin / baseEquity) * 100)
+      : 0
 
     // Portfolio risk as percentage of equity
     factors.portfolioRiskPct = baseEquity > 0
@@ -851,9 +859,9 @@ function generateReasoning(
       parts.push('Insufficient signal strength to generate actionable decision.')
     }
   } else if (decision === 'REDUCE') {
-    // Fix 4 (Task 7): REDUCE reasoning
+    const reductionPct = risk.consecutiveLosses >= 4 ? 50 : 30
     parts.push(
-      `REDUCE signal: risk score ${risk.riskScore}/10 with ${risk.openPositions} open positions and ${risk.consecutiveLosses} consecutive losses.`,
+      `REDUCE signal: risk score ${risk.riskScore}/10 with ${risk.openPositions} open positions and ${risk.consecutiveLosses} consecutive losses. Recommended: reduce position sizes by ~${reductionPct}% or close weakest positions.`,
     )
   } else if (decision === 'CLOSE_ALL') {
     // Fix 4 (Task 7): CLOSE_ALL reasoning
@@ -1605,11 +1613,13 @@ export async function getDecisionHistory(
   symbol?: string,
   limit: number = 50,
 ) {
+  // Safety cap
+  const safeLimit = Math.min(Math.max(limit, 1), 500)
   try {
     return await db.decisionLog.findMany({
       where: symbol ? { symbol } : undefined,
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      take: safeLimit,
     })
   } catch (err) {
     logger.error('AI_ENGINE', 'Failed to fetch decision history', {
@@ -1783,6 +1793,20 @@ export async function updateDecisionConfig(
           normalized: { sentiment: newSentimentW, technical: newTechnicalW, news: newNewsW },
         },
       })
+    }
+
+    // Ensure normalized weights sum to exactly 1.0
+    const normalizedSum = newSentimentW + newTechnicalW + newNewsW
+    if (Math.abs(normalizedSum - 1.0) > 0.001) {
+      // Adjust the largest weight to make the sum exactly 1.0
+      const diff = 1.0 - normalizedSum
+      if (newTechnicalW >= newSentimentW && newTechnicalW >= newNewsW) {
+        newTechnicalW = Math.round((newTechnicalW + diff) * 100) / 100
+      } else if (newSentimentW >= newNewsW) {
+        newSentimentW = Math.round((newSentimentW + diff) * 100) / 100
+      } else {
+        newNewsW = Math.round((newNewsW + diff) * 100) / 100
+      }
     }
 
     const updated = await db.aiDecisionConfig.update({

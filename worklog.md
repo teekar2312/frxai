@@ -1194,3 +1194,55 @@ Stage Summary:
 - `bun run lint` passed with no errors
 
 ---
+Task ID: 2
+Agent: news-api-audit-pass3
+Task: Third-pass deep audit fixes for news-api.ts
+
+Work Log:
+- Fix 1: MARKETAUX concurrent fetch with Promise.allSettled
+- Fix 2: Include maxArticles in cache key
+- Fix 3: Cache getAvailableProviders (60s TTL)
+- Fix 4: Cache API key in rate limit entry
+- Fix 5: Fix fragile provider detection in detectBreakingNews
+- Fix 6: Add cleanupOldArticles export
+- Fix 7: Normalize titles in saveArticles for consistency
+
+Stage Summary:
+- 7 improvements applied to news-api.ts
+- All changes are performance, correctness, and maintenance improvements
+---
+
+Task ID: 3
+Agent: sentiment-filter-audit-pass3
+Task: Third-pass deep audit fixes for sentiment-filter.ts
+
+Work Log:
+- Fix 1: Batch article scoring updates with concurrent Promise.all (N+1 fix)
+- Fix 2: Manual distinct for SQLite in getSentimentStats
+- Fix 3: Regex escape for multi-word phrases in analyzeText
+- Fix 4: Computation debounce lock for computeSymbolSentiment/computeMarketSentiment
+- Fix 5: getSentimentStats max limit cap with safety bound
+
+Stage Summary:
+- 5 improvements applied to sentiment-filter.ts
+- Key fix: N+1 DB writes reduced to batched concurrent updates
+- SQLite compatibility fix for distinct queries
+---
+---
+Task ID: 4
+Agent: ai-decision-engine-audit-pass3
+Task: Third-pass deep audit fixes for ai-decision-engine.ts
+
+Work Log:
+- Fix 1: CRITICAL BUG - marginUsagePct now computed from totalMargin/baseEquity
+- Fix 2: Breaking news cached for 1 minute across symbols in batch
+- Fix 3: getDecisionHistory max limit capped at 500
+- Fix 4: REDUCE decision now includes specific reduction guidance
+- Fix 5: analyzeSentimentFactors now checks both BUY and SELL directions
+- Fix 6: Weight normalization corrected to sum to exactly 1.0
+
+Stage Summary:
+- 6 improvements applied to ai-decision-engine.ts
+- Critical bug fixed: marginUsagePct was always 0, now properly computed
+- Batch performance: breaking news computed once instead of per-symbol
+---

@@ -661,12 +661,14 @@ export async function computeSymbolSentiment(symbol: string) {
     articles = await db.newsArticle.findMany({
       where: { publishedAt: { gte: since } },
       orderBy: { publishedAt: "desc" },
+      take: 200,
     })
   } else {
     // Fetch all recent articles and filter by JSON symbols field
     articles = await db.newsArticle.findMany({
       where: { publishedAt: { gte: since } },
       orderBy: { publishedAt: "desc" },
+      take: 200,
     })
     articles = articles.filter((a) => symbolInJsonSymbols(a.symbols as string, symbol))
   }
@@ -707,28 +709,25 @@ export async function computeSymbolSentiment(symbol: string) {
     let sentimentScore = article.sentimentScore as number
     let sentimentLabel: string = article.sentiment as string
 
-    // Always extract top words (even for already-scored articles)
-    const wordResult = scoreArticle({ title: article.title, content: article.content as string | null })
-    for (const w of wordResult.topPositive) {
-      positiveWordCount.set(w, (positiveWordCount.get(w) ?? 0) + 1)
-    }
-    for (const w of wordResult.topNegative) {
-      negativeWordCount.set(w, (negativeWordCount.get(w) ?? 0) + 1)
-    }
-
-    // Score if not already scored (sentimentScore === 0)
+    // Only run full NLP analysis for unscored articles (performance optimization)
     if (sentimentScore === 0 || !sentimentScore) {
+      const wordResult = scoreArticle({ title: article.title, content: article.content as string | null })
       sentimentScore = wordResult.score
       sentimentLabel = wordResult.label
+
+      // Track words from newly-scored articles
+      for (const w of wordResult.topPositive) {
+        positiveWordCount.set(w, (positiveWordCount.get(w) ?? 0) + 1)
+      }
+      for (const w of wordResult.topNegative) {
+        negativeWordCount.set(w, (negativeWordCount.get(w) ?? 0) + 1)
+      }
 
       // Persist score to article
       try {
         await db.newsArticle.update({
           where: { id: article.id },
-          data: {
-            sentiment: sentimentLabel,
-            sentimentScore: sentimentScore,
-          },
+          data: { sentiment: sentimentLabel, sentimentScore: sentimentScore },
         })
       } catch (err) {
         logger.warn("AI_ENGINE", `Failed to update article sentiment for ${article.id}`, {
@@ -875,6 +874,7 @@ export async function computeMarketSentiment() {
   const articles = await db.newsArticle.findMany({
     where: { publishedAt: { gte: since } },
     orderBy: { publishedAt: "desc" },
+    take: 200,
   })
 
   if (articles.length === 0) {
@@ -913,27 +913,25 @@ export async function computeMarketSentiment() {
     let sentimentScore = article.sentimentScore as number
     let sentimentLabel: string = article.sentiment as string
 
-    // Always extract top words (even for already-scored articles)
-    const wordResult = scoreArticle({ title: article.title, content: article.content as string | null })
-    for (const w of wordResult.topPositive) {
-      marketPositiveWords.set(w, (marketPositiveWords.get(w) ?? 0) + 1)
-    }
-    for (const w of wordResult.topNegative) {
-      marketNegativeWords.set(w, (marketNegativeWords.get(w) ?? 0) + 1)
-    }
-
-    // Score if not already scored
+    // Only run full NLP analysis for unscored articles (performance optimization)
     if (sentimentScore === 0 || !sentimentScore) {
+      const wordResult = scoreArticle({ title: article.title, content: article.content as string | null })
       sentimentScore = wordResult.score
       sentimentLabel = wordResult.label
 
+      // Track words from newly-scored articles
+      for (const w of wordResult.topPositive) {
+        marketPositiveWords.set(w, (marketPositiveWords.get(w) ?? 0) + 1)
+      }
+      for (const w of wordResult.topNegative) {
+        marketNegativeWords.set(w, (marketNegativeWords.get(w) ?? 0) + 1)
+      }
+
+      // Persist score to article
       try {
         await db.newsArticle.update({
           where: { id: article.id },
-          data: {
-            sentiment: sentimentLabel,
-            sentimentScore: sentimentScore,
-          },
+          data: { sentiment: sentimentLabel, sentimentScore: sentimentScore },
         })
       } catch (err) {
         logger.warn("AI_ENGINE", `Failed to update article sentiment for ${article.id}`, {
@@ -1161,8 +1159,10 @@ export async function getSentimentTrend(symbol: string, hours: number = 24): Pro
  *  - EXTREME_FEAR or EXTREME_GREED on symbol → block
  *  - EXTREME_FEAR on market → block BUY (don't buy into panic)
  *  - EXTREME_GREED on market → block SELL (don't short into euphoria)
- *  - BUY against strong negative sentiment (< -40) → 50% size reduction
- *  - SELL against strong positive sentiment (> 40) → 50% size reduction
+ *  - BUY against negative sentiment (< -20) → graduated size reduction
+ *  - SELL against positive sentiment (> 20) → graduated size reduction
+ *  - BULLISH market regime → size boost for BUY, reduction for SELL
+ *  - BEARISH market regime → size boost for SELL, reduction for BUY
  *  - Low confidence (< 20) → warning
  *
  * @param symbol - Ticker symbol
@@ -1299,27 +1299,40 @@ export async function filterTrade(
       return result
     }
 
-    // Rule: BUY against strong negative sentiment → reduce size 50%
-    if (direction === "BUY" && symbolScore < -40) {
-      result.sizeAdjustment = 0.5
-      const warning = `Buying against strong negative sentiment (score=${symbolScore})`
+    // Rule: BUY against negative sentiment → graduated size reduction
+    if (direction === "BUY" && symbolScore < -20) {
+      const absScore = Math.abs(symbolScore)
+      if (absScore > 60) {
+        result.sizeAdjustment = 0.3
+      } else if (absScore > 40) {
+        result.sizeAdjustment = 0.5
+      } else {
+        result.sizeAdjustment = 0.7
+      }
+      const warning = `Buying against negative sentiment (score=${symbolScore}), size reduced to ${Math.round(result.sizeAdjustment * 100)}%`
       result.warnings.push(warning)
 
       logger.info("RISK_MANAGEMENT", `Sentiment filter SIZE ADJUSTMENT for ${direction} ${symbol}: ${warning}`, {
         symbol,
-        metadata: { direction, symbolScore, sizeAdjustment: 0.5 },
+        metadata: { direction, symbolScore, sizeAdjustment: result.sizeAdjustment },
       })
     }
 
-    // Rule: SELL against strong positive sentiment → reduce size 50%
-    if (direction === "SELL" && symbolScore > 40) {
-      result.sizeAdjustment = 0.5
-      const warning = `Selling against strong positive sentiment (score=${symbolScore})`
+    // Rule: SELL against positive sentiment → graduated size reduction
+    if (direction === "SELL" && symbolScore > 20) {
+      if (symbolScore > 60) {
+        result.sizeAdjustment = 0.3
+      } else if (symbolScore > 40) {
+        result.sizeAdjustment = 0.5
+      } else {
+        result.sizeAdjustment = 0.7
+      }
+      const warning = `Selling against positive sentiment (score=${symbolScore}), size reduced to ${Math.round(result.sizeAdjustment * 100)}%`
       result.warnings.push(warning)
 
       logger.info("RISK_MANAGEMENT", `Sentiment filter SIZE ADJUSTMENT for ${direction} ${symbol}: ${warning}`, {
         symbol,
-        metadata: { direction, symbolScore, sizeAdjustment: 0.5 },
+        metadata: { direction, symbolScore, sizeAdjustment: result.sizeAdjustment },
       })
     }
 
@@ -1332,6 +1345,29 @@ export async function filterTrade(
         metadata: { confidence: symbolConfidence },
       })
     }
+
+    // Rule: BULLISH market regime → additional size boost for BUY, reduction for SELL
+    if (marketRegime === "BULLISH") {
+      if (direction === "BUY") {
+        result.sizeAdjustment = Math.min(1.0, result.sizeAdjustment * 1.2)
+      } else if (direction === "SELL") {
+        result.sizeAdjustment = result.sizeAdjustment * 0.8
+      }
+      result.warnings.push(`Market regime BULLISH: ${direction} size adjusted by regime factor`)
+    }
+
+    // Rule: BEARISH market regime → additional size boost for SELL, reduction for BUY
+    if (marketRegime === "BEARISH") {
+      if (direction === "SELL") {
+        result.sizeAdjustment = Math.min(1.0, result.sizeAdjustment * 1.2)
+      } else if (direction === "BUY") {
+        result.sizeAdjustment = result.sizeAdjustment * 0.8
+      }
+      result.warnings.push(`Market regime BEARISH: ${direction} size adjusted by regime factor`)
+    }
+
+    // Clamp final adjustment
+    result.sizeAdjustment = clamp(result.sizeAdjustment, 0.1, 1.0)
 
     // Log the final filter result
     logger.info("AI_ENGINE", `Sentiment filter result for ${direction} ${symbol}: block=${result.shouldBlock}, sizeAdj=${result.sizeAdjustment}, regime=${symbolRegime}`, {

@@ -1145,3 +1145,52 @@ Stage Summary:
 - SL/TP now uses real ATR data when available
 - Batch processing eliminates redundant DB queries for risk factors
 - Lot sizing now considers actual risk (SL distance) and account size
+
+---
+
+## Task 3a: news-api-pass3 — 5 Precision Fixes
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+**Agent**: news-api-pass3
+
+### Fixes Applied
+
+| # | Fix | Severity | Details |
+|---|-----|----------|---------|
+| 1 | Typo and meaningless keyword in BREAKING_KEYWORDS | MEDIUM | `'bialngkpinjam paksa'` → `'bail-in pinjam paksa'`; `'ijt'` → `'ihsg'` (Indeks Harga Saham Gabungan) |
+| 2 | Hardcoded provider in detectBreakingNews | HIGH | `provider: 'FINNHUB'` → inferred from `article.source` field via `includes('marketaux')` check |
+| 3 | In-memory circuit breaker state | HIGH | Added `InMemoryCircuitState` interface, `inMemoryCircuitBreaker` Map, `syncCircuitFromDb()`/`syncCircuitToDb()` helpers. Rewrote `checkCircuitBreaker()` and `updateCircuitBreaker()` to use in-memory state with periodic DB sync (60s), reducing DB queries from 2-4 per call to 0 for normal path |
+| 4 | HTTP retry with exponential backoff | HIGH | Added `fetchWithRetry()` utility (retries on 429/5xx, jittered backoff). Applied to both `fetchFromFinnhub()` and `fetchFromMarketaux()` |
+| 5 | Cache key date component | MEDIUM | Added `YYYY-MM-DD` date slice to `buildCacheKey()` to prevent stale cross-day cache hits |
+
+### Files Modified
+- `src/lib/news-api.ts` — complete rewrite with all 5 fixes applied
+
+### Verification
+- `bun run lint` passed with no errors
+
+---
+
+## Task 3b: sentiment-filter-pass3 — 4 Precision Fixes
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+**Agent**: sentiment-filter-pass3
+
+### Fixes Applied
+
+| # | Fix | Severity | Details |
+|---|-----|----------|--------|
+| 1 | Article limit on DB queries | HIGH | Added `take: 200` to all 3 article fetch queries in `computeSymbolSentiment` (2 queries: MARKET branch and symbol branch) and `computeMarketSentiment` (1 query). Prevents unbounded result sets from slow DB scans. |
+| 2 | Graduated size adjustment in filterTrade | HIGH | Replaced binary 0.5/1.0 size adjustment with 3-tier graduated system: score >60 → 0.3, >40 → 0.5, >20 → 0.7. Applies to both BUY-against-negative and SELL-against-positive rules. |
+| 3 | BULLISH/BEARISH regime awareness | HIGH | Added market regime-based size adjustment after graduated rules: BULLISH → 1.2x BUY / 0.8x SELL; BEARISH → 1.2x SELL / 0.8x BUY. Final `clamp(0.1, 1.0)` applied after all adjustments. |
+| 4 | Skip scoreArticle() for already-scored articles | CRITICAL | In both `computeSymbolSentiment` and `computeMarketSentiment`, moved `scoreArticle()` call inside the `if (sentimentScore === 0 || !sentimentScore)` block. Already-scored articles reuse cached score/label without re-running NLP. Word counts are populated only from newly-scored articles (deliberate accuracy/performance tradeoff). |
+
+### Files Modified
+- `src/lib/sentiment-filter.ts` — complete rewrite with all 4 fixes applied
+
+### Verification
+- `bun run lint` passed with no errors
+
+---

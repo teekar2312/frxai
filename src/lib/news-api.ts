@@ -12,12 +12,13 @@
  * Features:
  *   1. LRU in-memory cache (max 100 entries, configurable TTL)
  *   2. Per-provider rate limiting backed by DB (NewsSourceConfig) with in-memory fast path
- *   3. Circuit breaker per provider (CLOSED → OPEN → HALF_OPEN)
+ *   3. Circuit breaker per provider (CLOSED → OPEN → HALF_OPEN) with in-memory state
  *   4. Title-hash deduplication across providers
  *   5. Breaking news keyword detection (last 15 min)
  *   6. Aggregate news statistics
  *   7. Automatic provider failover (primary → secondary)
  *   8. Seed/initialization of default provider configs
+ *   9. HTTP retry with exponential backoff for transient errors
  */
 
 import { db } from './db'
@@ -185,9 +186,9 @@ const BREAKING_KEYWORDS = [
   'kenaikan suku bunga', 'penurunan suku bunga', 'gunung meletus',
   'gempa bumi', 'tsunami', 'banjir', 'kerusuhan', 'demo', 'unjuk rasa',
   'revaluasi', 'devaluasi', 'korupsi', 'pidana', 'tipikor',
-  'ott', 'kpk', 'bialngkpinjam paksa', 'bailout', 'negara bangkrut',
+  'ott', 'kpk', 'bail-in pinjam paksa', 'bailout', 'negara bangkrut',
   'kelangkaan', 'defisit transaksi berjalan', 'rupiah anjlok', 'rupiah melemah',
-  'ijt', 'bank indonesia', 'bi rate', 'inflasi tinggi',
+  'ihsg', 'bank indonesia', 'bi rate', 'inflasi tinggi',
   'pemilu', 'politik', 'kabinet', 'reshuffle',
 ]
 
@@ -276,11 +277,13 @@ export function getCacheStats(): CacheStats {
 
 /**
  * Build a deterministic cache key from fetch options.
+ * Includes today's date to prevent stale cross-day cache hits.
  */
 function buildCacheKey(options: NewsFetchOptions, provider: NewsProvider): string {
   const symbols = (options.symbols ?? DEFAULT_SYMBOLS).sort().join(',')
   const categories = (options.categories ?? []).sort().join(',')
-  return `news:${provider}:${symbols}:${categories}`
+  const today = new Date().toISOString().slice(0, 10) // Date component prevents cross-day stale hits
+  return `news:${provider}:${today}:${symbols}:${categories}`
 }
 
 // ============================================================================
@@ -303,6 +306,17 @@ interface InMemoryRateLimitEntry {
 const inMemoryRateLimits: Map<NewsProvider, InMemoryRateLimitEntry> = new Map()
 const IN_MEMORY_STALE_MS = 60_000      // Re-sync from DB if no call for 60s
 const DB_SYNC_INTERVAL_MS = 30_000    // Sync to DB every 30s
+
+// In-memory circuit breaker state to reduce DB queries
+interface InMemoryCircuitState {
+  state: CircuitState
+  consecutiveErrors: number
+  openUntil: number | null  // timestamp
+  lastDbSyncAt: number
+}
+
+const inMemoryCircuitBreaker: Map<NewsProvider, InMemoryCircuitState> = new Map()
+const CIRCUIT_DB_SYNC_INTERVAL_MS = 60_000 // Sync to DB every 60s
 
 /**
  * Load rate limit state from DB into memory for a provider.
@@ -461,7 +475,49 @@ export async function checkRateLimit(provider: NewsProvider): Promise<RateLimitC
 // ============================================================================
 
 /**
+ * Load circuit breaker state from DB into memory for a provider.
+ * Returns the in-memory state or null if provider not configured.
+ */
+async function syncCircuitFromDb(provider: NewsProvider): Promise<InMemoryCircuitState | null> {
+  try {
+    const config = await db.newsSourceConfig.findUnique({ where: { provider } })
+    if (!config) return null
+    const state: InMemoryCircuitState = {
+      state: config.circuitState as CircuitState,
+      consecutiveErrors: config.consecutiveErrors,
+      openUntil: config.circuitOpenUntil ? new Date(config.circuitOpenUntil).getTime() : null,
+      lastDbSyncAt: Date.now(),
+    }
+    inMemoryCircuitBreaker.set(provider, state)
+    return state
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Persist current in-memory circuit breaker state to DB.
+ */
+function syncCircuitToDb(provider: NewsProvider): void {
+  const state = inMemoryCircuitBreaker.get(provider)
+  if (!state) return
+  state.lastDbSyncAt = Date.now()
+  db.newsSourceConfig.update({
+    where: { provider },
+    data: {
+      circuitState: state.state,
+      consecutiveErrors: state.consecutiveErrors,
+      circuitOpenUntil: state.openUntil ? new Date(state.openUntil) : null,
+    },
+  }).catch(() => {})
+}
+
+/**
  * Check the circuit breaker state for a provider.
+ *
+ * Uses in-memory state for fast path (0 DB queries for normal case).
+ * Falls back to DB on first call or when in-memory is stale (>120s).
+ * Periodically syncs to DB (every 60s on state changes).
  *
  * - CLOSED: normal operation, calls allowed
  * - OPEN: if cooldown has passed, transition to HALF_OPEN (probe call).
@@ -472,54 +528,34 @@ export async function checkRateLimit(provider: NewsProvider): Promise<RateLimitC
  */
 export async function checkCircuitBreaker(provider: NewsProvider): Promise<{ allowed: boolean; reason?: string }> {
   try {
-    const config = await db.newsSourceConfig.findUnique({
-      where: { provider },
-    })
+    let state = inMemoryCircuitBreaker.get(provider)
+    const now = Date.now()
 
-    if (!config) {
-      return { allowed: false, reason: `Provider ${provider} not configured` }
+    // Load from DB if not in memory or stale
+    if (!state || (now - state.lastDbSyncAt) > 120_000) {
+      state = await syncCircuitFromDb(provider)
+      if (!state) return { allowed: false, reason: `Provider ${provider} not configured` }
     }
 
-    const state = config.circuitState as CircuitState
-    const now = new Date()
+    // Check CLOSED
+    if (state.state === 'CLOSED') return { allowed: true }
 
-    if (state === 'CLOSED') {
-      return { allowed: true }
-    }
-
-    if (state === 'OPEN') {
-      const openUntil = config.circuitOpenUntil ? new Date(config.circuitOpenUntil) : null
-      if (openUntil && now > openUntil) {
-        // Cooldown passed, transition to HALF_OPEN for a probe call
-        await db.newsSourceConfig.update({
-          where: { provider },
-          data: { circuitState: 'HALF_OPEN' },
-        })
-        logger.info('SYSTEM', `Circuit breaker ${provider}: OPEN → HALF_OPEN (cooldown elapsed)`, {
-          source: provider,
-        })
+    // Check OPEN
+    if (state.state === 'OPEN') {
+      if (state.openUntil && now > state.openUntil) {
+        state.state = 'HALF_OPEN'
+        if ((now - state.lastDbSyncAt) > CIRCUIT_DB_SYNC_INTERVAL_MS) syncCircuitToDb(provider)
         return { allowed: true }
       }
-      // Still in cooldown
-      const waitMs = openUntil ? openUntil.getTime() - now.getTime() : 0
-      return {
-        allowed: false,
-        reason: `Circuit breaker OPEN for ${provider}, ${Math.ceil(waitMs / 1000)}s remaining`,
-      }
+      const waitMs = state.openUntil ? state.openUntil - now : 0
+      return { allowed: false, reason: `Circuit breaker OPEN for ${provider}, ${Math.ceil(waitMs / 1000)}s remaining` }
     }
 
-    if (state === 'HALF_OPEN') {
-      // Allow one probe call
-      return { allowed: true }
-    }
-
-    return { allowed: false, reason: `Unknown circuit state: ${state}` }
+    // HALF_OPEN: allow one probe
+    return { allowed: true }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    logger.error('SYSTEM', `Circuit breaker check failed for ${provider}`, {
-      source: provider,
-      stackTrace: message,
-    })
+    logger.error('SYSTEM', `Circuit breaker check failed for ${provider}`, { source: provider, stackTrace: message })
     return { allowed: true, reason: 'Circuit breaker check failed, allowing call' }
   }
 }
@@ -527,90 +563,49 @@ export async function checkCircuitBreaker(provider: NewsProvider): Promise<{ all
 /**
  * Update the circuit breaker state after an API call result.
  *
+ * Uses in-memory state for fast path, syncs to DB on every update.
+ *
  * Transition rules:
  * - HALF_OPEN + success → CLOSED (reset consecutive errors)
  * - HALF_OPEN + failure → OPEN (back to open with 60s cooldown)
  * - CLOSED + failure → increment consecutiveErrors, if >= 3 → OPEN (60s cooldown)
  * - CLOSED + success → reset consecutiveErrors to 0
+ * - OPEN state: transitions happen only in checkCircuitBreaker
  */
 export async function updateCircuitBreaker(provider: NewsProvider, success: boolean): Promise<void> {
   try {
-    const config = await db.newsSourceConfig.findUnique({
-      where: { provider },
-    })
+    let state = inMemoryCircuitBreaker.get(provider)
+    if (!state) {
+      state = await syncCircuitFromDb(provider)
+      if (!state) return
+    }
 
-    if (!config) return
-
-    const currentState = config.circuitState as CircuitState
-
-    if (currentState === 'HALF_OPEN') {
+    if (state.state === 'HALF_OPEN') {
       if (success) {
-        await db.newsSourceConfig.update({
-          where: { provider },
-          data: {
-            circuitState: 'CLOSED',
-            consecutiveErrors: 0,
-            circuitOpenUntil: null,
-            lastError: null,
-          },
-        })
-        logger.info('SYSTEM', `Circuit breaker ${provider}: HALF_OPEN → CLOSED (probe succeeded)`, {
-          source: provider,
-        })
+        state.state = 'CLOSED'
+        state.consecutiveErrors = 0
+        state.openUntil = null
       } else {
-        const openUntil = new Date(Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS)
-        await db.newsSourceConfig.update({
-          where: { provider },
-          data: {
-            circuitState: 'OPEN',
-            circuitOpenUntil: openUntil,
-          },
-        })
-        logger.warn('SYSTEM', `Circuit breaker ${provider}: HALF_OPEN → OPEN (probe failed, cooldown 60s)`, {
-          source: provider,
-        })
+        state.state = 'OPEN'
+        state.openUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS
       }
-    } else if (currentState === 'CLOSED') {
+    } else if (state.state === 'CLOSED') {
       if (success) {
-        if (config.consecutiveErrors > 0) {
-          await db.newsSourceConfig.update({
-            where: { provider },
-            data: { consecutiveErrors: 0, lastError: null },
-          })
-        }
+        if (state.consecutiveErrors > 0) state.consecutiveErrors = 0
       } else {
-        const newErrors = config.consecutiveErrors + 1
-        if (newErrors >= 3) {
-          const openUntil = new Date(Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS)
-          await db.newsSourceConfig.update({
-            where: { provider },
-            data: {
-              circuitState: 'OPEN',
-              consecutiveErrors: newErrors,
-              circuitOpenUntil: openUntil,
-            },
-          })
-          logger.warn('SYSTEM', `Circuit breaker ${provider}: CLOSED → OPEN (${newErrors} consecutive errors, cooldown 60s)`, {
-            source: provider,
-          })
-        } else {
-          await db.newsSourceConfig.update({
-            where: { provider },
-            data: { consecutiveErrors: newErrors },
-          })
-          logger.info('SYSTEM', `Circuit breaker ${provider}: ${newErrors}/3 consecutive errors`, {
-            source: provider,
-          })
+        state.consecutiveErrors++
+        if (state.consecutiveErrors >= 3) {
+          state.state = 'OPEN'
+          state.openUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS
         }
       }
     }
-    // OPEN state: no updates needed, transitions happen only in checkCircuitBreaker
+    // OPEN state: transitions happen only in checkCircuitBreaker
+
+    syncCircuitToDb(provider)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    logger.error('SYSTEM', `Circuit breaker update failed for ${provider}`, {
-      source: provider,
-      stackTrace: message,
-    })
+    logger.error('SYSTEM', `Circuit breaker update failed for ${provider}`, { source: provider, stackTrace: message })
   }
 }
 
@@ -654,6 +649,38 @@ export function deduplicateArticles(articles: NormalizedArticle[]): Deduplicatio
     unique: Array.from(seen.values()),
     duplicates,
   }
+}
+
+/**
+ * Fetch with retry support for transient HTTP errors.
+ * Retries up to `maxRetries` times with exponential backoff.
+ * Only retries on 429 (rate limited) or 5xx (server error) status codes.
+ */
+async function fetchWithRetry(url: string, options: RequestInit, maxRetries: number = 1): Promise<Response> {
+  let lastError: Error | null = null
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, options)
+      // Only retry on transient errors
+      if (response.status === 429 || response.status >= 500) {
+        if (attempt < maxRetries) {
+          const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 500
+          logger.info('SYSTEM', `HTTP ${response.status}, retrying in ${Math.round(backoffMs)}ms (attempt ${attempt + 1}/${maxRetries})`)
+          await new Promise(resolve => setTimeout(resolve, backoffMs))
+          continue
+        }
+      }
+      return response
+    } catch (fetchError) {
+      lastError = fetchError instanceof Error ? fetchError : new Error(String(fetchError))
+      if (attempt < maxRetries) {
+        const backoffMs = Math.pow(2, attempt) * 1000 + Math.random() * 500
+        await new Promise(resolve => setTimeout(resolve, backoffMs))
+        continue
+      }
+    }
+  }
+  throw lastError ?? new Error('Fetch failed after retries')
 }
 
 /**
@@ -975,7 +1002,7 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
       url.searchParams.set('to', toDate.toISOString().split('T')[0])
       url.searchParams.set('token', apiKey)
 
-      const response = await fetch(url.toString(), {
+      const response = await fetchWithRetry(url.toString(), {
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(15_000),
       })
@@ -1200,7 +1227,7 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
 
   for (const fetchConfig of fetchConfigs) {
     try {
-      const response = await fetch(fetchConfig.url, {
+      const response = await fetchWithRetry(fetchConfig.url, {
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(15_000),
       })
@@ -1506,7 +1533,7 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
             symbols,
             publishedAt: article.publishedAt,
             category: article.category,
-            provider: 'FINNHUB', // Fix #3: DB doesn't store provider, infer from source field
+            provider: (article.source ?? 'unknown').toLowerCase().includes('marketaux') ? 'MARKETAUX' : 'FINNHUB',
           },
           matchedKeywords,
         })

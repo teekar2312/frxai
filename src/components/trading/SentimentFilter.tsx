@@ -35,11 +35,12 @@ interface SentimentSnapshot {
   timestamp: string
 }
 
+// Fix #12: topBullish/topBearish are string arrays from API, not objects
 interface MarketStats {
   totalSnapshots: number
   latestMarket: SentimentSnapshot | null
-  topBullish: Array<{ symbol: string; score: number }>
-  topBearish: Array<{ symbol: string; score: number }>
+  topBullish: string[]
+  topBearish: string[]
   avgConfidence: number
   regimeDistribution: Record<string, number>
 }
@@ -198,11 +199,11 @@ export default function SentimentFilter() {
               <div>
                 <div className="text-[10px] text-emerald-600 font-medium mb-1.5">MOST BULLISH</div>
                 {(stats?.topBullish ?? []).length > 0 ? (
-                  stats!.topBullish.slice(0, 3).map(item => (
-                    <div key={item.symbol} className="flex justify-between items-center py-1">
-                      <span className="text-xs font-mono">{item.symbol}</span>
+                  stats!.topBullish.slice(0, 3).map(sym => (
+                    <div key={sym} className="flex justify-between items-center py-1">
+                      <span className="text-xs font-mono">{sym}</span>
                       <Badge variant="outline" className="text-emerald-600 text-[10px] h-5">
-                        +{item.score.toFixed(1)}
+                        Bullish
                       </Badge>
                     </div>
                   ))
@@ -214,11 +215,11 @@ export default function SentimentFilter() {
               <div>
                 <div className="text-[10px] text-red-600 font-medium mb-1.5">MOST BEARISH</div>
                 {(stats?.topBearish ?? []).length > 0 ? (
-                  stats!.topBearish.slice(0, 3).map(item => (
-                    <div key={item.symbol} className="flex justify-between items-center py-1">
-                      <span className="text-xs font-mono">{item.symbol}</span>
+                  stats!.topBearish.slice(0, 3).map(sym => (
+                    <div key={sym} className="flex justify-between items-center py-1">
+                      <span className="text-xs font-mono">{sym}</span>
                       <Badge variant="outline" className="text-red-600 text-[10px] h-5">
-                        {item.score.toFixed(1)}
+                        Bearish
                       </Badge>
                     </div>
                   ))
@@ -323,6 +324,16 @@ export default function SentimentFilter() {
         </CardContent>
       </Card>
 
+      {/* Fix #15: Live Trade Filter Demo */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Live Trade Filter Test</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <TradeFilterDemo />
+        </CardContent>
+      </Card>
+
       {/* Filter Rules Info */}
       <Card>
         <CardHeader className="pb-2">
@@ -353,6 +364,80 @@ export default function SentimentFilter() {
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
           Error: {error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Fix #15: Live trade filter demo component
+interface SentimentFilterResultData {
+  shouldBlock: boolean
+  blockReason?: string
+  sizeAdjustment: number
+  regime: string
+  symbolScore: number
+  marketScore: number
+  confidence: number
+  warnings: string[]
+}
+
+function TradeFilterDemo() {
+  const [symbol, setSymbol] = useState('BBCA')
+  const [direction, setDirection] = useState<'BUY' | 'SELL'>('BUY')
+  const [result, setResult] = useState<SentimentFilterResultData | null>(null)
+  const [testing, setTesting] = useState(false)
+
+  const testFilter = async () => {
+    setTesting(true)
+    try {
+      const res = await fetch('/api/sentiment/filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, direction }),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        if (json.success) setResult(json.data)
+      }
+    } catch { /* ignore */ }
+    setTesting(false)
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <input
+          className="h-8 w-24 rounded-md border bg-background px-2 text-xs font-mono"
+          value={symbol}
+          onChange={e => setSymbol(e.target.value.toUpperCase())}
+          placeholder="Symbol"
+        />
+        <Button
+          size="sm"
+          variant={direction === 'BUY' ? 'default' : 'destructive'}
+          className={"h-8 text-xs " + (direction === 'BUY' ? 'bg-emerald-600 hover:bg-emerald-700' : '')}
+          onClick={() => setDirection(d => d === 'BUY' ? 'SELL' : 'BUY')}
+        >{direction}</Button>
+        <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={testFilter} disabled={testing}>
+          <ShieldAlert className="h-3 w-3" />
+          {testing ? 'Testing...' : 'Test Filter'}
+        </Button>
+      </div>
+      {result && (
+        <div className={`rounded-lg border p-3 space-y-2 ${result.shouldBlock ? 'border-red-300 bg-red-50' : 'border-emerald-300 bg-emerald-50'}`}>
+          <div className="flex items-center gap-2">
+            {result.shouldBlock ? <ShieldAlert className="h-4 w-4 text-red-600" /> : <Activity className="h-4 w-4 text-emerald-600" />}
+            <span className="text-xs font-medium">{result.shouldBlock ? 'BLOCKED' : 'ALLOWED'}: {direction} {symbol}</span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px]">
+            <div>Symbol Score: <span className="font-mono font-medium">{result.symbolScore.toFixed(1)}</span></div>
+            <div>Market Score: <span className="font-mono font-medium">{result.marketScore.toFixed(1)}</span></div>
+            <div>Regime: <span className="font-mono font-medium">{result.regime}</span></div>
+            <div>Size Adj: <span className="font-mono font-medium">{(result.sizeAdjustment * 100).toFixed(0)}%</span></div>
+          </div>
+          {result.blockReason && <p className="text-xs text-red-700">{result.blockReason}</p>}
+          {result.warnings.map((w, i) => <p key={i} className="text-[10px] text-amber-700">⚠ {w}</p>)}
         </div>
       )}
     </div>

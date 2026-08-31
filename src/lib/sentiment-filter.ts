@@ -227,6 +227,10 @@ export const SENTIMENT_LEXICON: Record<string, LexiconEntry> = {
   rebound:              { category: "POSITIVE", weight: 1.8, language: "ID" },
   pulih:                { category: "POSITIVE", weight: 1.5, language: "ID" },
   surplus:              { category: "POSITIVE", weight: 1.3, language: "ID" },
+  melonjak:             { category: "POSITIVE", weight: 2.0, language: "ID" },
+  menguat:              { category: "POSITIVE", weight: 1.5, language: "ID" },
+  cerah:                { category: "POSITIVE", weight: 1.2, language: "ID" },
+  prospektif:           { category: "POSITIVE", weight: 1.3, language: "ID" },
 
   // ── NEGATIVE (ID - Indonesian) ──
   turun:                { category: "NEGATIVE", weight: 1.3, language: "ID" },
@@ -238,6 +242,24 @@ export const SENTIMENT_LEXICON: Record<string, LexiconEntry> = {
   inflasi:              { category: "NEGATIVE", weight: 1.5, language: "ID" },
   defisit:              { category: "NEGATIVE", weight: 1.3, language: "ID" },
   "gagal bayar":        { category: "NEGATIVE", weight: 2.0, language: "ID" },
+  anjlok:               { category: "NEGATIVE", weight: 2.0, language: "ID" },
+  merosot:              { category: "NEGATIVE", weight: 1.5, language: "ID" },
+  gagal:                { category: "NEGATIVE", weight: 1.5, language: "ID" },
+  terpuruk:             { category: "NEGATIVE", weight: 1.8, language: "ID" },
+
+  // ── FINANCIAL_POSITIVE (ID - Indonesian) ──
+  "laba bersih":        { category: "FINANCIAL_POSITIVE", weight: 2.0, language: "ID" },
+  "suku bunga turun":   { category: "FINANCIAL_POSITIVE", weight: 1.8, language: "ID" },
+  "dividen tunai":      { category: "FINANCIAL_POSITIVE", weight: 1.8, language: "ID" },
+  "ekspansi bisnis":    { category: "FINANCIAL_POSITIVE", weight: 1.5, language: "ID" },
+  "rating naik":        { category: "FINANCIAL_POSITIVE", weight: 2.0, language: "ID" },
+
+  // ── FINANCIAL_NEGATIVE (ID - Indonesian) ──
+  "suku bunga naik":    { category: "FINANCIAL_NEGATIVE", weight: 1.8, language: "ID" },
+  "laba turun":         { category: "FINANCIAL_NEGATIVE", weight: 1.8, language: "ID" },
+  "rugi bersih":        { category: "FINANCIAL_NEGATIVE", weight: 2.0, language: "ID" },
+  "pemutusan hubungan": { category: "FINANCIAL_NEGATIVE", weight: 2.0, language: "ID" },
+  "skor kredit turun":  { category: "FINANCIAL_NEGATIVE", weight: 2.0, language: "ID" },
 }
 
 // ============================================================================
@@ -643,6 +665,8 @@ export async function computeSymbolSentiment(symbol: string) {
   let totalWeight = 0
   const allTopPositive: Array<{ word: string; count: number }> = []
   const allTopNegative: Array<{ word: string; count: number }> = []
+  const positiveWordCount = new Map<string, number>()
+  const negativeWordCount = new Map<string, number>()
 
   for (const article of articles) {
     let sentimentScore = article.sentimentScore as number
@@ -653,6 +677,14 @@ export async function computeSymbolSentiment(symbol: string) {
       const result = scoreArticle({ title: article.title, content: article.content as string | null })
       sentimentScore = result.score
       sentimentLabel = result.label
+
+      // Collect top words from scoring (Fix #9: populate word tracking)
+      for (const w of result.topPositive) {
+        positiveWordCount.set(w, (positiveWordCount.get(w) ?? 0) + 1)
+      }
+      for (const w of result.topNegative) {
+        negativeWordCount.set(w, (negativeWordCount.get(w) ?? 0) + 1)
+      }
 
       // Persist score to article
       try {
@@ -701,9 +733,38 @@ export async function computeSymbolSentiment(symbol: string) {
   // Calculate weighted score (score adjusted by confidence)
   const weightedScore = Math.round(clampedScore * (confidence / 100))
 
-  // Build top words
-  const topPositiveStr = toJsonString(allTopPositive.slice(0, 5).map((w) => w.word))
-  const topNegativeStr = toJsonString(allTopNegative.slice(0, 5).map((w) => w.word))
+  // Build top words from accumulated counts (Fix #9: was always empty)
+  const sortedPositiveWords = Array.from(positiveWordCount.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([word]) => word)
+  const sortedNegativeWords = Array.from(negativeWordCount.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([word]) => word)
+  const topPositiveStr = toJsonString(sortedPositiveWords)
+  const topNegativeStr = toJsonString(sortedNegativeWords)
+
+  // Fix #11: Delete old snapshots for this symbol before creating new one (prevent unbounded growth)
+  try {
+    const maxSnapshotsPerSymbol = 50
+    const existingCount = await db.sentimentSnapshot.count({ where: { symbol } })
+    if (existingCount >= maxSnapshotsPerSymbol) {
+      const toDelete = existingCount - maxSnapshotsPerSymbol + 1
+      const oldest = await db.sentimentSnapshot.findMany({
+        where: { symbol },
+        orderBy: { timestamp: "asc" },
+        take: toDelete,
+      })
+      if (oldest.length > 0) {
+        await db.sentimentSnapshot.deleteMany({
+          where: { id: { in: oldest.map((s) => s.id) } },
+        })
+      }
+    }
+  } catch {
+    // Non-critical cleanup
+  }
 
   // Save snapshot
   try {
@@ -804,6 +865,8 @@ export async function computeMarketSentiment() {
 
   // Sector breakdown: group by category, compute avg sentiment per sector
   const sectorMap = new Map<string, { totalScore: number; count: number }>()
+  const marketPositiveWords = new Map<string, number>()
+  const marketNegativeWords = new Map<string, number>()
 
   for (const article of articles) {
     let sentimentScore = article.sentimentScore as number
@@ -814,6 +877,14 @@ export async function computeMarketSentiment() {
       const result = scoreArticle({ title: article.title, content: article.content as string | null })
       sentimentScore = result.score
       sentimentLabel = result.label
+
+      // Track top words for market sentiment (Fix #9)
+      for (const w of result.topPositive) {
+        marketPositiveWords.set(w, (marketPositiveWords.get(w) ?? 0) + 1)
+      }
+      for (const w of result.topNegative) {
+        marketNegativeWords.set(w, (marketNegativeWords.get(w) ?? 0) + 1)
+      }
 
       try {
         await db.newsArticle.update({
@@ -870,6 +941,37 @@ export async function computeMarketSentiment() {
   }
 
   try {
+    // Fix #9: Build top words from accumulated counts
+    const marketTopPositive = Array.from(marketPositiveWords.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([word]) => word)
+    const marketTopNegative = Array.from(marketNegativeWords.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([word]) => word)
+
+    // Fix #11: Prune old MARKET snapshots
+    try {
+      const maxSnapshots = 50
+      const existingCount = await db.sentimentSnapshot.count({ where: { symbol: "MARKET" } })
+      if (existingCount >= maxSnapshots) {
+        const toDelete = existingCount - maxSnapshots + 1
+        const oldest = await db.sentimentSnapshot.findMany({
+          where: { symbol: "MARKET" },
+          orderBy: { timestamp: "asc" },
+          take: toDelete,
+        })
+        if (oldest.length > 0) {
+          await db.sentimentSnapshot.deleteMany({
+            where: { id: { in: oldest.map((s) => s.id) } },
+          })
+        }
+      }
+    } catch {
+      // Non-critical cleanup
+    }
+
     const snapshot = await db.sentimentSnapshot.create({
       data: {
         symbol: "MARKET",
@@ -881,8 +983,8 @@ export async function computeMarketSentiment() {
         sentimentRegime: regime,
         confidence,
         weightedScore,
-        topPositiveWords: "[]",
-        topNegativeWords: "[]",
+        topPositiveWords: toJsonString(marketTopPositive),
+        topNegativeWords: toJsonString(marketTopNegative),
         sectorBreakdown: toJsonString(sectorBreakdown),
         timestamp: new Date(),
       },
@@ -908,8 +1010,8 @@ export async function computeMarketSentiment() {
       sentimentRegime: regime,
       confidence,
       weightedScore,
-      topPositiveWords: "[]",
-      topNegativeWords: "[]",
+      topPositiveWords: toJsonString(marketTopPositive),
+      topNegativeWords: toJsonString(marketTopNegative),
       sectorBreakdown: toJsonString(sectorBreakdown),
       timestamp: new Date(),
       createdAt: new Date(),

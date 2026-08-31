@@ -371,9 +371,9 @@ export default function AiAnalysisPanel() {
                   const factors = typeof decisionHistory[0].factors === 'string' ? JSON.parse(decisionHistory[0].factors) : decisionHistory[0].factors
                   return (
                     <div className="grid grid-cols-2 gap-3">
-                      {factors.technical && factorBar(factors.technical.score, 'Technical')}
-                      {factors.news && factorBar(factors.news.score, 'News')}
-                      {factors.sentiment && factorBar(factors.sentiment.score, 'Sentiment')}
+                      {factors.technical && factorBar(factors.technical.overallScore ?? 0, 'Technical')}
+                      {factors.news && factorBar(factors.news.impactScore ?? 0, 'News')}
+                      {factors.sentiment && factorBar(factors.sentiment.score ?? 0, 'Sentiment')}
                       {factors.risk && (
                         <div className="space-y-1">
                           <div className="flex justify-between text-xs">

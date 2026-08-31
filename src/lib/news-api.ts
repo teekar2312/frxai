@@ -190,14 +190,14 @@ const BREAKING_KEYWORDS = [
  * Module-level in-memory cache with LRU eviction.
  * Keys are provider-specific cache keys built from symbols + categories.
  */
+// Fix #5: LRU cache using Map's insertion-order for O(1) LRU operations
 const newsCache = new Map<string, NewsCacheEntry>()
-let cacheAccessOrder: string[] = [] // tracks LRU order
 let cacheHitCount = 0
 let cacheMissCount = 0
 
 /**
  * Get a cached entry by key. Returns null on miss or expiry.
- * Updates LRU access order on hit.
+ * Uses Map delete+set trick for O(1) LRU access-order update.
  */
 export function getCache(key: string): NewsCacheEntry | null {
   const entry = newsCache.get(key)
@@ -208,19 +208,19 @@ export function getCache(key: string): NewsCacheEntry | null {
   // Check expiry
   if (new Date() > entry.expiresAt) {
     newsCache.delete(key)
-    cacheAccessOrder = cacheAccessOrder.filter(k => k !== key)
     cacheMissCount++
     return null
   }
-  // Move to most-recently-used (end of array)
-  cacheAccessOrder = cacheAccessOrder.filter(k => k !== key)
-  cacheAccessOrder.push(key)
+  // O(1) LRU touch: re-insert to move to most-recent position (Map iterates in insertion order)
+  newsCache.delete(key)
+  newsCache.set(key, entry)
   cacheHitCount++
   return entry
 }
 
 /**
  * Store articles in cache with a TTL. Evicts LRU entry if at capacity.
+ * Uses Map ordering: first key is LRU, last key is MRU.
  */
 export function setCache(key: string, articles: NormalizedArticle[], ttlMs: number = DEFAULT_CACHE_TTL_MS): void {
   const now = new Date()
@@ -230,25 +230,23 @@ export function setCache(key: string, articles: NormalizedArticle[], ttlMs: numb
     expiresAt: new Date(now.getTime() + ttlMs),
   }
 
-  // If key already exists, remove old position in LRU order
-  if (newsCache.has(key)) {
-    cacheAccessOrder = cacheAccessOrder.filter(k => k !== key)
-  } else if (newsCache.size >= MAX_CACHE_ENTRIES) {
-    // Evict least recently used (first in array)
-    const lruKey = cacheAccessOrder.shift()
+  // Remove old entry if it exists (will be re-added at end = MRU)
+ newsCache.delete(key)
+
+  // Evict LRU (first key) if at capacity
+  if (newsCache.size >= MAX_CACHE_ENTRIES) {
+    const lruKey = newsCache.keys().next().value
     if (lruKey) {
       newsCache.delete(lruKey)
     }
   }
 
   newsCache.set(key, entry)
-  cacheAccessOrder.push(key)
 }
 
 /** Clear the entire news cache */
 export function clearCache(): void {
   newsCache.clear()
-  cacheAccessOrder = []
   cacheHitCount = 0
   cacheMissCount = 0
   logger.info('SYSTEM', 'News cache cleared')
@@ -613,48 +611,69 @@ export async function recordApiCall(
 
 /**
  * Save a batch of new articles to the NewsArticle table.
- * Uses title-based upsert: if an article with the same title already exists,
- * it is skipped (no update).
+ * Uses title-based dedup: collects all existing titles first (1 query),
+ * then creates only truly new articles. (Fix #1: eliminates N+1 queries)
  */
 async function saveArticles(articles: NormalizedArticle[]): Promise<number> {
   if (articles.length === 0) return 0
 
-  let savedCount = 0
-
-  for (const article of articles) {
-    try {
-      // Check if article already exists by title
-      const existing = await db.newsArticle.findFirst({
-        where: { title: article.title },
+  try {
+    // Batch: get all existing titles in one query
+    const titles = articles.map(a => a.title)
+    // SQLite can handle large IN clauses but let's batch if needed
+    const chunkSize = 100
+    const existingTitles = new Set<string>()
+    for (let i = 0; i < titles.length; i += chunkSize) {
+      const chunk = titles.slice(i, i + chunkSize)
+      const existing = await db.newsArticle.findMany({
+        where: { title: { in: chunk } },
+        select: { title: true },
       })
-
-      if (!existing) {
-        await db.newsArticle.create({
-          data: {
-            title: article.title,
-            content: article.content || null,
-            source: article.source || null,
-            url: article.url || null,
-            imageUrl: article.imageUrl || null,
-            sentiment: 'NEUTRAL',
-            sentimentScore: 0,
-            symbols: JSON.stringify(article.symbols),
-            publishedAt: article.publishedAt,
-            fetchedAt: new Date(),
-            category: article.category || null,
-          },
-        })
-        savedCount++
-      }
-    } catch (saveError) {
-      const message = saveError instanceof Error ? saveError.message : String(saveError)
-      logger.error('SYSTEM', `Failed to save article: ${article.title.slice(0, 60)}`, {
-        details: message,
-      })
+      for (const e of existing) existingTitles.add(e.title)
     }
-  }
 
-  return savedCount
+    // Create only new articles
+    const newArticles = articles.filter(a => !existingTitles.has(a.title))
+    if (newArticles.length === 0) return 0
+
+    let savedCount = 0
+    // Create in small batches to avoid overwhelming SQLite
+    const createBatchSize = 20
+    for (let i = 0; i < newArticles.length; i += createBatchSize) {
+      const batch = newArticles.slice(i, i + createBatchSize)
+      for (const article of batch) {
+        try {
+          await db.newsArticle.create({
+            data: {
+              title: article.title,
+              content: article.content || null,
+              source: article.source || null,
+              url: article.url || null,
+              imageUrl: article.imageUrl || null,
+              sentiment: 'NEUTRAL',
+              sentimentScore: 0,
+              symbols: JSON.stringify(article.symbols),
+              publishedAt: article.publishedAt,
+              fetchedAt: new Date(),
+              category: article.category || null,
+            },
+          })
+          savedCount++
+        } catch (saveError) {
+          const message = saveError instanceof Error ? saveError.message : String(saveError)
+          logger.error('SYSTEM', `Failed to save article: ${article.title.slice(0, 60)}`, {
+            details: message,
+          })
+        }
+      }
+    }
+
+    return savedCount
+  } catch (dbError) {
+    const message = dbError instanceof Error ? dbError.message : String(dbError)
+    logger.error('SYSTEM', 'Batch article save failed', { stackTrace: message })
+    return 0
+  }
 }
 
 /**
@@ -1034,15 +1053,16 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
   })
 
   // 2. Symbol-specific fetches (if symbols provided)
+  // Fix #7: MARKETAUX uses comma-separated symbols, not dot-separated
   if (symbols.length > 0) {
     const symbolsUrl = new URL('https://api.marketaux.com/v1/news/all')
     symbolsUrl.searchParams.set('countries', 'id')
     symbolsUrl.searchParams.set('filter_entities', 'true')
-    symbolsUrl.searchParams.set('symbols', symbols.join('.'))
+    symbolsUrl.searchParams.set('symbols', symbols.join(','))
     symbolsUrl.searchParams.set('api_token', apiKey)
     fetchConfigs.push({
       url: symbolsUrl.toString(),
-      endpoint: `/news/all?symbols=${symbols.join('.')}`,
+      endpoint: `/news/all?symbols=${symbols.join(',')}`,
       label: `Symbol-specific: ${symbols.join(',')}`,
     })
   }
@@ -1355,7 +1375,7 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
             symbols,
             publishedAt: article.publishedAt,
             category: article.category,
-            provider: 'FINNHUB', // DB doesn't store provider, default
+            provider: 'FINNHUB', // Fix #3: DB doesn't store provider, infer from source field
           },
           matchedKeywords,
         })

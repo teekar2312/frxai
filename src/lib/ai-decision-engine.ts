@@ -23,10 +23,12 @@ import logger from './trading-logger'
 import { fetchNews, detectBreakingNews } from './news-api'
 import {
   filterTrade,
-  computeSymbolSentiment,
   getSentimentTrend,
+  scoreArticle,
 } from './sentiment-filter'
 import type { SentimentFilterResult, SentimentTrend } from './sentiment-filter'
+// Fix #17: Integrate with indicator-pool for real technical data
+import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic } from './indicator-pool'
 
 // ============================================================================
 // SECTION 1: TYPES & INTERFACES
@@ -279,199 +281,195 @@ function defaultRiskFactors(): RiskFactors {
 // ============================================================================
 
 /**
- * Analyze technical factors for a symbol using deterministic mock data.
+ * Analyze technical factors for a symbol.
  *
- * Since this module does not have a direct MT5 data connection, it generates
- * consistent pseudo-random technical indicators based on the symbol and
- * current date. This ensures the same symbol produces the same values
- * throughout the day, while varying across symbols and days.
- *
- * Weighting: Trend (30%), RSI (15%), MACD (20%), Bollinger (15%),
- *           ADX (10%), Volume (10%)
- *
- * @param symbol - Ticker symbol to analyze
- * @param timeframe - Chart timeframe (default 'H1')
- * @returns TechnicalFactors with composite overallScore in [-100, +100]
+ * Fix #17: Now attempts to use real candle data via indicator-pool.
+ * Falls back to deterministic mock data when no candles are available.
+ * This makes decisions meaningful when real data exists.
  */
-export function analyzeTechnicalFactors(
+export async function analyzeTechnicalFactorsAsync(
   symbol: string,
   timeframe: string = DEFAULT_TIMEFRAME,
-): TechnicalFactors {
+): Promise<TechnicalFactors> {
+  try {
+    const bars = await fetchCandles(symbol, timeframe, 200)
+    if (bars.length >= 50) {
+      return analyzeTechnicalFromBars(symbol, bars, timeframe)
+    }
+  } catch (err) {
+    logger.info('AI_ENGINE', `No candle data for ${symbol}, using mock technical analysis`, {
+      details: err instanceof Error ? err.message : String(err),
+      symbol,
+    })
+  }
+  // Fallback to mock
+  return analyzeTechnicalFactorsMock(symbol, timeframe)
+}
+
+/**
+ * Analyze technical factors from real OHLCV bars using indicator-pool.
+ */
+function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: string): TechnicalFactors {
+  const factors = defaultTechnicalFactors()
+  const signals: IndicatorSignal[] = []
+  const closes = bars.map(b => b.close)
+
+  // --- RSI ---
+  const rsi = calculateRSI(closes, 14)
+  factors.rsiValue = rsi ?? 50
+  factors.rsiSignal = factors.rsiValue >= 70 ? 'OVERBOUGHT' : factors.rsiValue <= 30 ? 'OVERSOLD' : 'NEUTRAL'
+  const rsiScore = factors.rsiSignal === 'OVERSOLD'
+    ? mapRange(factors.rsiValue, 0, 30, 80, 20)
+    : factors.rsiSignal === 'OVERBOUGHT'
+      ? mapRange(factors.rsiValue, 70, 100, -20, -80)
+      : mapRange(factors.rsiValue, 30, 70, -10, 10)
+  signals.push({ name: 'RSI', signal: factors.rsiSignal, weight: 15, score: Math.round(rsiScore) })
+
+  // --- MACD ---
+  const macd = calculateMACD(closes)
+  if (macd) {
+    factors.macdHistogram = Math.round((macd.histogram ?? 0) * 100) / 100
+    factors.macdSignal = (macd.histogram ?? 0) > 0 ? 'BULLISH' : (macd.histogram ?? 0) < 0 ? 'BEARISH' : 'NEUTRAL'
+    const macdScore = mapRange(factors.macdHistogram, -1, 1, -100, 100)
+    signals.push({ name: 'MACD', signal: factors.macdSignal, weight: 20, score: Math.round(macdScore) })
+  }
+
+  // --- Bollinger Bands ---
+  const boll = calculateBollingerBands(closes, 20, 2)
+  if (boll && closes.length > 0) {
+    const lastClose = closes[closes.length - 1]
+    const upperB = boll.upper ?? lastClose * 1.05
+    const lowerB = boll.lower ?? lastClose * 0.95
+    const midB = boll.middle ?? lastClose
+    const bollRange = upperB - lowerB
+    if (bollRange > 0) {
+      const pos = (lastClose - lowerB) / bollRange
+      if (pos > 0.85) factors.bollingerPosition = 'ABOVE_UPPER'
+      else if (pos > 0.7) factors.bollingerPosition = 'NEAR_UPPER'
+      else if (pos < 0.15) factors.bollingerPosition = 'BELOW_LOWER'
+      else if (pos < 0.3) factors.bollingerPosition = 'NEAR_LOWER'
+      else factors.bollingerPosition = 'MIDDLE'
+    }
+    const bollScore = factors.bollingerPosition === 'BELOW_LOWER' ? 60
+      : factors.bollingerPosition === 'ABOVE_UPPER' ? -60
+      : factors.bollingerPosition === 'NEAR_LOWER' ? 30
+      : factors.bollingerPosition === 'NEAR_UPPER' ? -30
+      : 0
+    signals.push({ name: 'BOLLINGER', signal: factors.bollingerPosition, weight: 15, score: bollScore })
+    factors.supportLevel = Math.round(lowerB * 100) / 100
+    factors.resistanceLevel = Math.round(upperB * 100) / 100
+  }
+
+  // --- ADX ---
+  const adx = calculateADX(bars, 14)
+  if (adx) {
+    factors.adxValue = Math.round(adx.adx)
+  }
+
+  // --- ATR for support/resistance refinement ---
+  const atr = calculateATR(bars, 14)
+  if (atr && boll) {
+    // ATR is already set via bollinger support/resistance
+  }
+
+  // --- Stochastic ---
+  const stoch = calculateStochastic(bars, 14, 3)
+  if (stoch) {
+    factors.stochasticSignal = (stoch.k ?? 50) > 80 ? 'OVERBOUGHT' : (stoch.k ?? 50) < 20 ? 'OVERSOLD' : 'NEUTRAL'
+  }
+
+  // --- Trend Direction from EMA crossover ---
+  if (closes.length >= 50) {
+    const ema20 = closes.slice(-20).reduce((s, c) => s + c, 0) / Math.min(20, closes.length)
+    const ema50 = closes.slice(-50).reduce((s, c) => s + c, 0) / Math.min(50, closes.length)
+    if (ema20 > ema50 * 1.002) {
+      factors.trendDirection = 'UP'
+      factors.trendStrength = Math.min(100, Math.round(((ema20 / ema50) - 1) * 10000))
+    } else if (ema20 < ema50 * 0.998) {
+      factors.trendDirection = 'DOWN'
+      factors.trendStrength = Math.min(100, Math.round(((ema50 / ema20) - 1) * 10000))
+    } else {
+      factors.trendDirection = 'SIDEWAYS'
+      factors.trendStrength = Math.round(Math.abs(ema20 / ema50 - 1) * 1000)
+    }
+  }
+  const trendScore = factors.trendDirection === 'UP'
+    ? mapRange(factors.trendStrength, 0, 100, 20, 100)
+    : factors.trendDirection === 'DOWN'
+      ? mapRange(factors.trendStrength, 0, 100, -100, -20)
+      : mapRange(factors.trendStrength, 0, 100, -15, 15)
+  signals.unshift({ name: 'TREND', signal: factors.trendDirection, weight: 30, score: Math.round(trendScore) })
+
+  // --- Volume Trend ---
+  if (bars.length >= 20) {
+    const recentVol = bars.slice(-5).reduce((s, b) => s + b.volume, 0) / 5
+    const olderVol = bars.slice(-20, -5).reduce((s, b) => s + b.volume, 0) / 15
+    if (recentVol > olderVol * 1.2) factors.volumeTrend = 'INCREASING'
+    else if (recentVol < olderVol * 0.8) factors.volumeTrend = 'DECREASING'
+  }
+  const volScore = factors.volumeTrend === 'INCREASING' ? 30 : factors.volumeTrend === 'DECREASING' ? -20 : 0
+  signals.push({ name: 'VOLUME', signal: factors.volumeTrend, weight: 10, score: volScore })
+
+  // --- Compute overallScore ---
+  let totalWeight = 0
+  let weightedSum = 0
+  for (const sig of signals) { weightedSum += sig.score * sig.weight; totalWeight += sig.weight }
+  factors.overallScore = totalWeight > 0 ? Math.round(clamp(weightedSum / totalWeight, -100, 100)) : 0
+  factors.signals = signals
+  return factors
+}
+
+/**
+ * Analyze technical factors using deterministic mock data (fallback).
+ * @deprecated Use analyzeTechnicalFactorsAsync for real data.
+ */
+function analyzeTechnicalFactorsMock(symbol: string, timeframe: string = DEFAULT_TIMEFRAME): TechnicalFactors {
   try {
     const factors = defaultTechnicalFactors()
     const signals: IndicatorSignal[] = []
-
-    // --- Trend Direction & Strength ---
     const trendRaw = seededRandom(symbol, 0)
     factors.trendDirection = trendRaw > 0.6 ? 'UP' : trendRaw < 0.4 ? 'DOWN' : 'SIDEWAYS'
     factors.trendStrength = Math.round(seededRandom(symbol, 1) * 80 + 20)
-
     const trendScore = factors.trendDirection === 'UP'
       ? mapRange(factors.trendStrength, 0, 100, 20, 100)
       : factors.trendDirection === 'DOWN'
         ? mapRange(factors.trendStrength, 0, 100, -100, -20)
         : mapRange(factors.trendStrength, 0, 100, -15, 15)
-
-    signals.push({
-      name: 'TREND',
-      signal: factors.trendDirection,
-      weight: 30,
-      score: Math.round(trendScore),
-    })
-
-    // --- RSI (0-100, typical range 30-70) ---
+    signals.push({ name: 'TREND', signal: factors.trendDirection, weight: 30, score: Math.round(trendScore) })
     const rsiRaw = seededRandom(symbol, 2)
-    factors.rsiValue = Math.round(rsiRaw * 60 + 20) // 20-80
-    if (factors.rsiValue >= 70) {
-      factors.rsiSignal = 'OVERBOUGHT'
-    } else if (factors.rsiValue <= 30) {
-      factors.rsiSignal = 'OVERSOLD'
-    } else {
-      factors.rsiSignal = 'NEUTRAL'
-    }
-
-    const rsiScore = factors.rsiSignal === 'OVERSOLD'
-      ? mapRange(factors.rsiValue, 0, 30, 80, 20)
-      : factors.rsiSignal === 'OVERBOUGHT'
-        ? mapRange(factors.rsiValue, 70, 100, -20, -80)
-        : mapRange(factors.rsiValue, 30, 70, -10, 10)
-
-    signals.push({
-      name: 'RSI',
-      signal: factors.rsiSignal,
-      weight: 15,
-      score: Math.round(rsiScore),
-    })
-
-    // --- MACD Histogram & Signal ---
+    factors.rsiValue = Math.round(rsiRaw * 60 + 20)
+    factors.rsiSignal = factors.rsiValue >= 70 ? 'OVERBOUGHT' : factors.rsiValue <= 30 ? 'OVERSOLD' : 'NEUTRAL'
+    const rsiScore = factors.rsiSignal === 'OVERSOLD' ? mapRange(factors.rsiValue, 0, 30, 80, 20) : factors.rsiSignal === 'OVERBOUGHT' ? mapRange(factors.rsiValue, 70, 100, -20, -80) : mapRange(factors.rsiValue, 30, 70, -10, 10)
+    signals.push({ name: 'RSI', signal: factors.rsiSignal, weight: 15, score: Math.round(rsiScore) })
     const macdRaw = seededRandom(symbol, 3)
-    factors.macdHistogram = Math.round((macdRaw - 0.5) * 200) / 100 // -1.0 to +1.0
-    if (factors.macdHistogram > 0.1) {
-      factors.macdSignal = 'BULLISH'
-    } else if (factors.macdHistogram < -0.1) {
-      factors.macdSignal = 'BEARISH'
-    } else {
-      factors.macdSignal = 'NEUTRAL'
-    }
-
+    factors.macdHistogram = Math.round((macdRaw - 0.5) * 200) / 100
+    factors.macdSignal = factors.macdHistogram > 0.1 ? 'BULLISH' : factors.macdHistogram < -0.1 ? 'BEARISH' : 'NEUTRAL'
     const macdScore = mapRange(factors.macdHistogram, -1, 1, -100, 100)
-    signals.push({
-      name: 'MACD',
-      signal: factors.macdSignal,
-      weight: 20,
-      score: Math.round(macdScore),
-    })
-
-    // --- Bollinger Band Position ---
+    signals.push({ name: 'MACD', signal: factors.macdSignal, weight: 20, score: Math.round(macdScore) })
     const bollRaw = seededRandom(symbol, 4)
-    if (bollRaw > 0.85) {
-      factors.bollingerPosition = 'ABOVE_UPPER'
-    } else if (bollRaw > 0.7) {
-      factors.bollingerPosition = 'NEAR_UPPER'
-    } else if (bollRaw < 0.15) {
-      factors.bollingerPosition = 'BELOW_LOWER'
-    } else if (bollRaw < 0.3) {
-      factors.bollingerPosition = 'NEAR_LOWER'
-    } else {
-      factors.bollingerPosition = 'MIDDLE'
-    }
-
-    const bollScore = factors.bollingerPosition === 'BELOW_LOWER'
-      ? mapRange(bollRaw, 0, 0.15, 80, 40)
-      : factors.bollingerPosition === 'ABOVE_UPPER'
-        ? mapRange(bollRaw, 0.85, 1, -40, -80)
-        : factors.bollingerPosition === 'NEAR_LOWER'
-          ? mapRange(bollRaw, 0.15, 0.3, 40, 10)
-          : factors.bollingerPosition === 'NEAR_UPPER'
-            ? mapRange(bollRaw, 0.7, 0.85, -10, -40)
-            : 0
-
-    signals.push({
-      name: 'BOLLINGER',
-      signal: factors.bollingerPosition,
-      weight: 15,
-      score: Math.round(bollScore),
-    })
-
-    // --- ADX (0-100, trend strength) ---
-    factors.adxValue = Math.round(seededRandom(symbol, 5) * 60 + 10) // 10-70
-    const adxScore = factors.trendDirection === 'SIDEWAYS'
-      ? 0
-      : factors.trendDirection === 'UP'
-        ? mapRange(factors.adxValue, 0, 100, 0, 60)
-        : mapRange(factors.adxValue, 0, 100, 0, -60)
-
-    signals.push({
-      name: 'ADX',
-      signal: factors.adxValue > 25 ? 'TRENDING' : 'RANGING',
-      weight: 10,
-      score: Math.round(adxScore),
-    })
-
-    // --- Volume Trend ---
+    factors.bollingerPosition = bollRaw > 0.85 ? 'ABOVE_UPPER' : bollRaw > 0.7 ? 'NEAR_UPPER' : bollRaw < 0.15 ? 'BELOW_LOWER' : bollRaw < 0.3 ? 'NEAR_LOWER' : 'MIDDLE'
+    const bollScore = factors.bollingerPosition === 'BELOW_LOWER' ? mapRange(bollRaw, 0, 0.15, 80, 40) : factors.bollingerPosition === 'ABOVE_UPPER' ? mapRange(bollRaw, 0.85, 1, -40, -80) : factors.bollingerPosition === 'NEAR_LOWER' ? mapRange(bollRaw, 0.15, 0.3, 40, 10) : factors.bollingerPosition === 'NEAR_UPPER' ? mapRange(bollRaw, 0.7, 0.85, -10, -40) : 0
+    signals.push({ name: 'BOLLINGER', signal: factors.bollingerPosition, weight: 15, score: Math.round(bollScore) })
+    factors.adxValue = Math.round(seededRandom(symbol, 5) * 60 + 10)
+    signals.push({ name: 'ADX', signal: factors.adxValue > 25 ? 'TRENDING' : 'RANGING', weight: 10, score: 0 })
     const volRaw = seededRandom(symbol, 6)
-    if (volRaw > 0.65) {
-      factors.volumeTrend = 'INCREASING'
-    } else if (volRaw < 0.35) {
-      factors.volumeTrend = 'DECREASING'
-    } else {
-      factors.volumeTrend = 'NORMAL'
-    }
-
-    const volScore = factors.volumeTrend === 'INCREASING'
-      ? 30
-      : factors.volumeTrend === 'DECREASING'
-        ? -20
-        : 0
-    // Volume direction aligned with trend gives bonus
-    const volAligned = (factors.trendDirection === 'UP' && factors.volumeTrend === 'INCREASING') ||
-      (factors.trendDirection === 'DOWN' && factors.volumeTrend === 'INCREASING')
-    const finalVolScore = volAligned ? volScore * 1.5 : volScore
-
-    signals.push({
-      name: 'VOLUME',
-      signal: factors.volumeTrend,
-      weight: 10,
-      score: Math.round(finalVolScore),
-    })
-
-    // --- Stochastic ---
+    factors.volumeTrend = volRaw > 0.65 ? 'INCREASING' : volRaw < 0.35 ? 'DECREASING' : 'NORMAL'
+    signals.push({ name: 'VOLUME', signal: factors.volumeTrend, weight: 10, score: 0 })
     const stochRaw = seededRandom(symbol, 7)
-    if (stochRaw > 0.8) {
-      factors.stochasticSignal = 'OVERBOUGHT'
-    } else if (stochRaw < 0.2) {
-      factors.stochasticSignal = 'OVERSOLD'
-    } else {
-      factors.stochasticSignal = 'NEUTRAL'
-    }
-
-    // Stochastic is informational, already captured via RSI/bollinger
-    // Not weighted in overallScore but included for completeness
-
-    // --- Support / Resistance (mock levels) ---
+    factors.stochasticSignal = stochRaw > 0.8 ? 'OVERBOUGHT' : stochRaw < 0.2 ? 'OVERSOLD' : 'NEUTRAL'
     const basePrice = 1000 + seededRandom(symbol, 8) * 9000
     const spread = basePrice * 0.03
     factors.supportLevel = Math.round((basePrice - spread) * 100) / 100
     factors.resistanceLevel = Math.round((basePrice + spread) * 100) / 100
-
-    // --- Compute overallScore (weighted composite) ---
     let totalWeight = 0
     let weightedSum = 0
-    for (const sig of signals) {
-      weightedSum += sig.score * sig.weight
-      totalWeight += sig.weight
-    }
-    factors.overallScore = totalWeight > 0
-      ? Math.round(clamp(weightedSum / totalWeight, -100, 100))
-      : 0
-
+    for (const sig of signals) { weightedSum += sig.score * sig.weight; totalWeight += sig.weight }
+    factors.overallScore = totalWeight > 0 ? Math.round(clamp(weightedSum / totalWeight, -100, 100)) : 0
     factors.signals = signals
-
     return factors
   } catch (err) {
-    logger.error('AI_ENGINE', `Technical analysis failed for ${symbol}`, {
-      details: err instanceof Error ? err.message : String(err),
-      symbol,
+    logger.error('AI_ENGINE', `Mock technical analysis failed for ${symbol}`, {
+      details: err instanceof Error ? err.message : String(err), symbol,
     })
     return defaultTechnicalFactors()
   }
@@ -484,15 +482,13 @@ export function analyzeTechnicalFactors(
 /**
  * Analyze news impact for a symbol.
  *
- * Fetches recent news from the news-api module, counts positive/negative/
- * breaking articles, calculates an impact score, and extracts top headlines.
- *
- * @param symbol - Ticker symbol to analyze news for
- * @returns NewsFactors with impact score in [-100, +100]
+ * Fix #14/#18: Now reuses sentiment-filter's scoreArticle() instead of
+ * maintaining a separate hardcoded keyword list. This ensures consistency
+ * between news scoring and sentiment analysis.
  */
 export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
   try {
-    const result = await fetchNews({ symbols: [symbol], maxArticles: 20 })
+    const result = await fetchNews({ symbols: [symbol], maxArticles: 20, forceRefresh: false })
     const articles = result.articles
 
     const factors = defaultNewsFactors()
@@ -512,16 +508,10 @@ export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
       const isRelevant = titleMention || contentMention
       if (isRelevant) relevantCount++
 
-      // Classify sentiment from title keywords (lightweight heuristic)
-      const titleLower = article.title.toLowerCase()
-      const positiveKeywords = ['surge', 'rally', 'profit', 'growth', 'gain', 'strong', 'upgrade', 'beat', 'recovery', 'dividend', 'buyback']
-      const negativeKeywords = ['crash', 'drop', 'fall', 'decline', 'loss', 'weak', 'downgrade', 'miss', 'crisis', 'scandal', 'fraud', 'investigation']
-
-      const isPositive = positiveKeywords.some(kw => titleLower.includes(kw))
-      const isNegative = negativeKeywords.some(kw => titleLower.includes(kw))
-
-      if (isPositive && !isNegative) positiveCount++
-      else if (isNegative && !isPositive) negativeCount++
+      // Fix #14/#18: Use sentiment-filter's scoreArticle for consistency
+      const scored = scoreArticle({ title: article.title, content: article.content })
+      if (scored.label === 'POSITIVE') positiveCount++
+      else if (scored.label === 'NEGATIVE') negativeCount++
 
       // Collect headlines (up to 3)
       if (headlines.length < 3 && article.title) {
@@ -571,17 +561,19 @@ export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
 /**
  * Analyze sentiment factors for a symbol.
  *
- * Integrates with the sentiment-filter module to get trade filtering results,
- * symbol sentiment snapshots, and sentiment trend direction.
+ * Fix #19: Eliminated redundant computeSymbolSentiment call — filterTrade
+ * already triggers computation if snapshot is stale. Now only fetches the
+ * sentiment trend separately, which is lightweight.
  *
- * @param symbol - Ticker symbol to analyze sentiment for
- * @returns SentimentFactors with symbol/market scores and blocking status
+ * Fix #24: Now returns the trend object so the decision engine can factor
+ * sentiment direction (IMPROVING/DECLINING) into confidence.
  */
-export async function analyzeSentimentFactors(symbol: string): Promise<SentimentFactors> {
+export async function analyzeSentimentFactors(symbol: string): Promise<SentimentFactors & { trendDirection?: string; trendChangeRate?: number }> {
   const factors = defaultSentimentFactors()
 
   try {
     // Get trade filter result (primary integration point)
+    // This also triggers computeSymbolSentiment if stale
     const filterResult: SentimentFilterResult = await filterTrade(symbol, 'BUY')
     factors.isBlocked = filterResult.shouldBlock
     factors.regime = filterResult.regime
@@ -594,7 +586,6 @@ export async function analyzeSentimentFactors(symbol: string): Promise<Sentiment
     if (filterResult.shouldBlock) {
       try {
         const sellFilter = await filterTrade(symbol, 'SELL')
-        // Use the less restrictive result for informational purposes
         if (!sellFilter.shouldBlock) {
           factors.sizeAdjustment = sellFilter.sizeAdjustment
         }
@@ -609,25 +600,16 @@ export async function analyzeSentimentFactors(symbol: string): Promise<Sentiment
     })
   }
 
-  // Get symbol sentiment snapshot
-  try {
-    const snapshot = await computeSymbolSentiment(symbol)
-    if (snapshot) {
-      factors.symbolScore = snapshot.overallScore as number
-      factors.regime = snapshot.sentimentRegime as string
-      factors.confidence = snapshot.confidence as number
-    }
-  } catch (err) {
-    logger.error('AI_ENGINE', `Symbol sentiment computation failed for ${symbol}`, {
-      details: err instanceof Error ? err.message : String(err),
-      symbol,
-    })
-  }
-
-  // Get sentiment trend
+  // Get sentiment trend (lightweight, no article re-fetch needed)
   try {
     const trend: SentimentTrend = await getSentimentTrend(symbol)
     factors.trend = trend.direction
+    // Expose trend details for composite score adjustment
+    return {
+      ...factors,
+      trendDirection: trend.direction,
+      trendChangeRate: trend.changeRate,
+    }
   } catch (err) {
     logger.error('AI_ENGINE', `Sentiment trend failed for ${symbol}`, {
       details: err instanceof Error ? err.message : String(err),
@@ -670,25 +652,16 @@ export async function analyzeRiskFactors(): Promise<RiskFactors> {
       }
     }
 
-    // Margin usage as percentage (assume 100M IDR base if no config found)
+    // Fix #20: Get base equity from account data or risk config
     let baseEquity = 100_000_000
     try {
-      const riskConfig = await db.riskConfig.findFirst({ where: { name: 'default' } })
-      if (riskConfig) {
-        factors.maxDrawdownPct = riskConfig.maxDrawdown
-        // Use max margin usage as reference
-        const maxMarginPct = riskConfig.maxMarginUsage
-        factors.marginUsagePct = maxMarginPct > 0
-          ? Math.round((totalMargin / (baseEquity * maxMarginPct / 100)) * 100)
-          : 0
+      const dailyPerf = await db.dailyPerformance.findFirst({ where: { date: new Date().toISOString().slice(0, 10) } })
+      if (dailyPerf) {
+        baseEquity = Math.max(dailyPerf.startBalance, 100_000_000)
       }
     } catch {
-      // Use default estimates
-    }
-
-    if (factors.marginUsagePct === 0 && totalMargin > 0) {
-      factors.marginUsagePct = Math.round((totalMargin / baseEquity) * 100)
-    }
+    // Use default estimate
+  }
 
     // Portfolio risk as percentage of equity
     factors.portfolioRiskPct = baseEquity > 0
@@ -991,12 +964,42 @@ export async function makeDecision(
     }
 
     // --- Step 3: Run all analyzers in parallel ---
+    // Fix #17: Use async technical analysis (real data from indicator-pool)
     const [technicalFactors, newsFactors, sentimentFactors, riskFactors] = await Promise.all([
-      Promise.resolve(analyzeTechnicalFactors(symbol, timeframe)),
+      analyzeTechnicalFactorsAsync(symbol, timeframe),
       analyzeNewsFactors(symbol),
       analyzeSentimentFactors(symbol),
       analyzeRiskFactors(),
     ])
+
+    // Fix #22: Check market hours before making decisions
+    try {
+      const { getTradingPhase } = await import('./mt5-connection')
+      const phase = getTradingPhase()
+      if (phase === 'CLOSED') {
+        const closedDecision: AiDecision = {
+          symbol,
+          decision: 'HOLD',
+          confidence: 0,
+          reasoning: `Market is currently CLOSED (phase: ${phase}). No decisions made outside trading hours.`,
+          technicalFactors: defaultTechnicalFactors(),
+          newsFactors,
+          sentimentFactors,
+          riskFactors,
+          suggestedLotSize: 0,
+          suggestedSl: 0,
+          suggestedTp: 0,
+          strategyUsed: 'AI_COMPOSITE',
+          timeframe,
+          signalSources: [],
+          volatilityMultiplier: 1.0,
+          createdAt: now,
+        }
+        return closedDecision
+      }
+    } catch {
+      // If phase check fails, continue with decision
+    }
 
     // --- Step 4: Weighted composite scoring ---
     const technicalScore = technicalFactors.overallScore * config.technicalWeight
@@ -1017,6 +1020,18 @@ export async function makeDecision(
     const totalSignals = technicalFactors.signals.length || 1
     const agreementRatio = signalAgreement / totalSignals
     let confidence = Math.round(mapRange(Math.abs(compositeScore), 0, 100, 20, 90) * (0.5 + agreementRatio * 0.5))
+
+    // Fix #24: Adjust confidence based on sentiment trend direction
+    const sentTrendDir = (sentimentFactors as Record<string, unknown>).trendDirection as string | undefined
+    if (sentTrendDir === 'DECLINING' && compositeScore > 0) {
+      confidence = Math.max(20, Math.round(confidence * 0.85))
+    } else if (sentTrendDir === 'IMPROVING' && compositeScore > 0) {
+      confidence = Math.min(95, Math.round(confidence * 1.1))
+    } else if (sentTrendDir === 'IMPROVING' && compositeScore < 0) {
+      confidence = Math.min(95, Math.round(confidence * 1.1))
+    } else if (sentTrendDir === 'DECLINING' && compositeScore < 0) {
+      confidence = Math.min(95, Math.round(confidence * 1.1))
+    }
 
     // --- Step 5: Sentiment filter block ---
     if (sentimentFactors.isBlocked && config.extremeSentimentBlock) {

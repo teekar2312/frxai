@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   TrendingUp,
   TrendingDown,
@@ -16,30 +17,19 @@ import {
   ArrowRight,
   Zap,
   Clock,
+  RefreshCw,
+  ShieldAlert,
+  BarChart3,
+  Lock,
 } from 'lucide-react'
 
-type MarketCondition =
-  | 'TRENDING'
-  | 'RANGE_BOUND'
-  | 'HIGH_VOLATILITY'
-  | 'LOW_VOLATILITY'
-
+type MarketCondition = 'TRENDING' | 'RANGE_BOUND' | 'HIGH_VOLATILITY' | 'LOW_VOLATILITY'
 type TrendDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL'
-
 type FactorImpact = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL'
-
-type FactorKey =
-  | 'centralBankPolicy'
-  | 'economicData'
-  | 'politicalGeopolitical'
-  | 'fiscalPolicy'
-  | 'commodityPrices'
-  | 'marketSentiment'
-  | 'breakingNews'
 
 interface AnalysisFactor {
   name: string
-  key: FactorKey
+  key: string
   score: number
   impact: FactorImpact
   detail: string
@@ -62,83 +52,47 @@ interface AnalysisData {
   lastAnalyzed: string
 }
 
+// Phase 6: Decision Engine types
+interface DecisionLog {
+  id: string
+  symbol: string
+  decision: string
+  confidence: number
+  reasoning: string
+  factors: string
+  signalSources: string
+  riskScore: number
+  sentimentScore: number
+  volatilityRegime: string
+  strategyUsed: string | null
+  finalAction: string
+  overridden: boolean
+  overrideReason: string | null
+  createdAt: string
+}
+
+const SYMBOLS = ['BBCA', 'BBRI', 'BMRI', 'TLKM', 'ASII', 'UNVR', 'GOTO', 'ICBP', 'ARTO', 'EXCL']
+
 const defaultAnalysis: AnalysisData = {
   condition: 'TRENDING',
   trendDirection: 'BULLISH',
   volatilityLevel: 65,
   confidenceScore: 78,
   factors: [
-    {
-      name: 'Central Bank Policy',
-      key: 'centralBankPolicy',
-      score: 75,
-      impact: 'POSITIVE',
-      detail: 'BI maintaining accommodative stance',
-    },
-    {
-      name: 'Economic Data (NFP/CPI/GDP)',
-      key: 'economicData',
-      score: 60,
-      impact: 'POSITIVE',
-      detail: 'GDP growth above expectations at 5.2%',
-    },
-    {
-      name: 'Political / Geopolitical',
-      key: 'politicalGeopolitical',
-      score: 45,
-      impact: 'NEUTRAL',
-      detail: 'Stable domestic political environment',
-    },
-    {
-      name: 'Fiscal Policy',
-      key: 'fiscalPolicy',
-      score: 55,
-      impact: 'POSITIVE',
-      detail: 'Government stimulus in infrastructure',
-    },
-    {
-      name: 'Commodity Prices',
-      key: 'commodityPrices',
-      score: 70,
-      impact: 'POSITIVE',
-      detail: 'CPO and coal prices trending upward',
-    },
-    {
-      name: 'Market Sentiment',
-      key: 'marketSentiment',
-      score: 80,
-      impact: 'POSITIVE',
-      detail: 'Foreign net buying, retail participation up',
-    },
-    {
-      name: 'Breaking News',
-      key: 'breakingNews',
-      score: 30,
-      impact: 'NEUTRAL',
-      detail: 'No major breaking news',
-    },
+    { name: 'Central Bank Policy', key: 'centralBankPolicy', score: 75, impact: 'POSITIVE', detail: 'BI maintaining accommodative stance' },
+    { name: 'Economic Data', key: 'economicData', score: 60, impact: 'POSITIVE', detail: 'GDP growth above expectations at 5.2%' },
+    { name: 'Political / Geopolitical', key: 'politicalGeopolitical', score: 45, impact: 'NEUTRAL', detail: 'Stable domestic political environment' },
+    { name: 'Fiscal Policy', key: 'fiscalPolicy', score: 55, impact: 'POSITIVE', detail: 'Government stimulus in infrastructure' },
+    { name: 'Commodity Prices', key: 'commodityPrices', score: 70, impact: 'POSITIVE', detail: 'CPO and coal prices trending upward' },
+    { name: 'Market Sentiment', key: 'marketSentiment', score: 80, impact: 'POSITIVE', detail: 'Foreign net buying, retail participation up' },
+    { name: 'Breaking News', key: 'breakingNews', score: 30, impact: 'NEUTRAL', detail: 'No major breaking news' },
   ],
   recommendations: [
-    {
-      action: 'BUY',
-      symbol: 'BBCA',
-      reason: 'Strong uptrend with increasing volume and positive fundamental catalysts.',
-      confidence: 85,
-    },
-    {
-      action: 'SELL',
-      symbol: 'ASII',
-      reason: 'Resistance level rejection with declining momentum indicators.',
-      confidence: 72,
-    },
-    {
-      action: 'HOLD',
-      symbol: 'TLKM',
-      reason: 'Consolidation phase, wait for breakout confirmation.',
-      confidence: 60,
-    },
+    { action: 'BUY', symbol: 'BBCA', reason: 'Strong uptrend with increasing volume and positive fundamental catalysts.', confidence: 85 },
+    { action: 'SELL', symbol: 'ASII', reason: 'Resistance level rejection with declining momentum indicators.', confidence: 72 },
+    { action: 'HOLD', symbol: 'TLKM', reason: 'Consolidation phase, wait for breakout confirmation.', confidence: 60 },
   ],
-  lastAnalyzed: '2025-01-15T10:30:00Z',
+  lastAnalyzed: new Date().toISOString(),
 }
 
 const conditionConfig: Record<MarketCondition, { label: string; color: string; bg: string }> = {
@@ -150,38 +104,17 @@ const conditionConfig: Record<MarketCondition, { label: string; color: string; b
 
 const trendIcon = (dir: TrendDirection) => {
   switch (dir) {
-    case 'BULLISH':
-      return <TrendingUp className="h-5 w-5 text-emerald-600" />
-    case 'BEARISH':
-      return <TrendingDown className="h-5 w-5 text-red-600" />
-    default:
-      return <Minus className="h-5 w-5 text-amber-600" />
+    case 'BULLISH': return <TrendingUp className="h-5 w-5 text-emerald-600" />
+    case 'BEARISH': return <TrendingDown className="h-5 w-5 text-red-600" />
+    default: return <Minus className="h-5 w-5 text-amber-600" />
   }
 }
 
 const impactBadge = (impact: FactorImpact) => {
   switch (impact) {
-    case 'POSITIVE':
-      return (
-        <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-400">
-          <ArrowUpRight className="h-3 w-3" />
-          Positive
-        </Badge>
-      )
-    case 'NEGATIVE':
-      return (
-        <Badge variant="destructive">
-          <ArrowDownRight className="h-3 w-3" />
-          Negative
-        </Badge>
-      )
-    default:
-      return (
-        <Badge variant="outline">
-          <ArrowRight className="h-3 w-3" />
-          Neutral
-        </Badge>
-      )
+    case 'POSITIVE': return <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/50 dark:text-emerald-400"><ArrowUpRight className="h-3 w-3" />Positive</Badge>
+    case 'NEGATIVE': return <Badge variant="destructive"><ArrowDownRight className="h-3 w-3" />Negative</Badge>
+    default: return <Badge variant="outline"><ArrowRight className="h-3 w-3" />Neutral</Badge>
   }
 }
 
@@ -189,12 +122,44 @@ const actionColor: Record<string, string> = {
   BUY: 'bg-emerald-600 hover:bg-emerald-700',
   SELL: 'bg-red-600 hover:bg-red-700',
   HOLD: 'bg-amber-600 hover:bg-amber-700',
+  SKIP: 'bg-slate-600 hover:bg-slate-700',
+}
+
+const decisionColor: Record<string, string> = {
+  BUY: 'text-emerald-600 bg-emerald-100 dark:bg-emerald-950/50',
+  SELL: 'text-red-600 bg-red-100 dark:bg-red-950/50',
+  HOLD: 'text-amber-600 bg-amber-100 dark:bg-amber-950/50',
+  SKIP: 'text-slate-600 bg-slate-100 dark:bg-slate-950/50',
+  REDUCE: 'text-orange-600 bg-orange-100 dark:bg-orange-950/50',
+  CLOSE_ALL: 'text-red-700 bg-red-100 dark:bg-red-950/50',
+}
+
+function factorBar(score: number, label: string) {
+  const abs = Math.abs(score)
+  const color = score > 30 ? 'bg-emerald-500' : score > 0 ? 'bg-emerald-400' : score > -30 ? 'bg-red-400' : 'bg-red-500'
+  return (
+    <div className="space-y-1">
+      <div className="flex justify-between text-xs">
+        <span className="text-muted-foreground">{label}</span>
+        <span className="font-mono">{score > 0 ? '+' : ''}{score.toFixed(0)}</span>
+      </div>
+      <div className="h-2 rounded-full bg-muted overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${abs}%` }} />
+      </div>
+    </div>
+  )
 }
 
 export default function AiAnalysisPanel() {
   const [data, setData] = useState<AnalysisData>(defaultAnalysis)
   const [loading, setLoading] = useState(true)
   const [analyzing, setAnalyzing] = useState(false)
+
+  // Phase 6: Decision Engine state
+  const [selectedSymbol, setSelectedSymbol] = useState('BBCA')
+  const [deciding, setDeciding] = useState(false)
+  const [decisionHistory, setDecisionHistory] = useState<DecisionLog[]>([])
+  const [accuracy, setAccuracy] = useState<{ totalDecisions: number; winRate: number; avgConfidence: number } | null>(null)
 
   const fetchAnalysis = useCallback(async () => {
     try {
@@ -214,181 +179,268 @@ export default function AiAnalysisPanel() {
             lastAnalyzed: latest.createdAt ?? new Date().toISOString(),
           })
         }
-        // else keep default data
       }
-    } catch {
-      // use default
-    } finally {
-      setLoading(false)
-    }
+    } catch { /* use default */ }
+    finally { setLoading(false) }
+  }, [])
+
+  const fetchDecisionHistory = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ai/decide')
+      if (res.ok) {
+        const json = await res.json()
+        if (json.success) setDecisionHistory(json.data)
+      }
+    } catch { /* ignore */ }
+  }, [])
+
+  const fetchAccuracy = useCallback(async () => {
+    try {
+      const res = await fetch('/api/ai/accuracy')
+      if (res.ok) {
+        const json = await res.json()
+        if (json.success && json.data.accuracy) setAccuracy(json.data.accuracy)
+      }
+    } catch { /* ignore */ }
   }, [])
 
   useEffect(() => {
     fetchAnalysis()
-  }, [fetchAnalysis])
+    fetchDecisionHistory()
+    fetchAccuracy()
+  }, [fetchAnalysis, fetchDecisionHistory, fetchAccuracy])
 
   const handleRunAnalysis = async () => {
     setAnalyzing(true)
     try {
       const res = await fetch('/api/analysis', { method: 'POST' })
+      if (res.ok) setData(await res.json())
+    } catch { /* keep existing */ }
+    finally { setAnalyzing(false) }
+  }
+
+  const handleMakeDecision = async () => {
+    setDeciding(true)
+    try {
+      const res = await fetch('/api/ai/decide', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: selectedSymbol }),
+      })
       if (res.ok) {
         const json = await res.json()
-        setData(json)
+        if (json.success) {
+          await fetchDecisionHistory()
+          await fetchAccuracy()
+        }
       }
-    } catch {
-      // keep existing
-    } finally {
-      setAnalyzing(false)
-    }
+    } catch { /* ignore */ }
+    finally { setDeciding(false) }
   }
 
   const condCfg = conditionConfig[data.condition]
-  const timestamp = data.lastAnalyzed
-    ? new Date(data.lastAnalyzed).toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : 'N/A'
+  const timestamp = data.lastAnalyzed ? new Date(data.lastAnalyzed).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'N/A'
 
   return (
-    <Card>
-      <CardHeader className="pb-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-2">
-            <BrainCircuit className="h-5 w-5 text-violet-600" />
-            <CardTitle className="text-base">AI Market Analysis</CardTitle>
+    <div className="space-y-4">
+      {/* Original AI Market Analysis Card */}
+      <Card>
+        <CardHeader className="pb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <BrainCircuit className="h-5 w-5 text-violet-600" />
+              <CardTitle className="text-base">AI Market Analysis</CardTitle>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="flex items-center gap-1 text-xs text-muted-foreground"><Clock className="h-3 w-3" />{timestamp}</span>
+              <Button size="sm" onClick={handleRunAnalysis} disabled={analyzing} className="gap-1.5">
+                <Zap className={`h-3.5 w-3.5 ${analyzing ? 'animate-pulse' : ''}`} />{analyzing ? 'Analyzing...' : 'Run Analysis'}
+              </Button>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Clock className="h-3 w-3" />
-              {timestamp}
-            </span>
-            <Button
-              size="sm"
-              onClick={handleRunAnalysis}
-              disabled={analyzing}
-              className="gap-1.5"
-            >
-              <Zap className={`h-3.5 w-3.5 ${analyzing ? 'animate-pulse' : ''}`} />
-              {analyzing ? 'Analyzing...' : 'Run Analysis'}
+        </CardHeader>
+        <CardContent className="space-y-5">
+          {loading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Loading analysis...</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="rounded-lg border p-3">
+                  <p className="mb-1 text-xs text-muted-foreground">Market Condition</p>
+                  <Badge className={`${condCfg.bg} ${condCfg.color}`}>{condCfg.label}</Badge>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="mb-1 text-xs text-muted-foreground">Trend Direction</p>
+                  <div className="flex items-center gap-2">{trendIcon(data.trendDirection)}<span className="text-sm font-semibold">{data.trendDirection}</span></div>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="mb-1 text-xs text-muted-foreground">Volatility</p>
+                  <div className="flex items-center gap-2"><Activity className="h-4 w-4 text-orange-500" /><Progress value={data.volatilityLevel} className="h-2 flex-1" /><span className="text-xs font-medium">{data.volatilityLevel}%</span></div>
+                </div>
+              </div>
+              <div className="rounded-lg border p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-medium">AI Confidence Score</p>
+                  <span className={`text-sm font-bold ${data.confidenceScore >= 70 ? 'text-emerald-600' : data.confidenceScore >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{data.confidenceScore}%</span>
+                </div>
+                <Progress value={data.confidenceScore} className="h-3" />
+              </div>
+              <div>
+                <p className="mb-3 text-sm font-semibold">Analysis Factors</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {data.factors.map((factor) => (
+                    <div key={factor.key} className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                      <div className="min-w-0"><p className="text-sm font-medium">{factor.name}</p><p className="truncate text-xs text-muted-foreground">{factor.detail}</p></div>
+                      <div className="flex shrink-0 flex-col items-end gap-1">{impactBadge(factor.impact)}<span className="text-xs font-mono text-muted-foreground">{factor.score}</span></div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-3 text-sm font-semibold">AI Recommendations</p>
+                <div className="space-y-2">
+                  {data.recommendations.map((rec, idx) => (
+                    <div key={idx} className="flex items-start gap-3 rounded-lg border p-3">
+                      <Badge className={`${actionColor[rec.action] || ''} shrink-0`}>{rec.action}</Badge>
+                      <div className="min-w-0"><p className="text-sm font-semibold">{rec.symbol}</p><p className="text-xs text-muted-foreground">{rec.reason}</p></div>
+                      <span className={`shrink-0 text-xs font-medium ${rec.confidence >= 70 ? 'text-emerald-600' : rec.confidence >= 50 ? 'text-amber-600' : 'text-red-600'}`}>{rec.confidence}%</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Phase 6: AI Decision Engine Card */}
+      <Card>
+        <CardHeader className="pb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-violet-600" />
+              <CardTitle className="text-base">AI Decision Engine</CardTitle>
+              {accuracy && (
+                <Badge variant="outline" className="text-[10px] h-5">
+                  {accuracy.totalDecisions} decisions · {accuracy.winRate.toFixed(0)}% win · avg conf {accuracy.avgConfidence.toFixed(0)}%
+                </Badge>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Symbol Selector + Decide Button */}
+          <div className="flex items-center gap-2">
+            <div className="flex flex-wrap gap-1 flex-1">
+              {SYMBOLS.map(sym => (
+                <Button
+                  key={sym} variant={selectedSymbol === sym ? 'default' : 'outline'}
+                  size="sm" className="h-7 text-xs px-2"
+                  onClick={() => setSelectedSymbol(sym)}
+                >{sym}</Button>
+              ))}
+            </div>
+            <Button size="sm" onClick={handleMakeDecision} disabled={deciding} className="gap-1.5 h-7 shrink-0">
+              <BrainCircuit className={`h-3 w-3 ${deciding ? 'animate-pulse' : ''}`} />
+              {deciding ? 'Deciding...' : 'Decide'}
             </Button>
           </div>
-        </div>
-      </CardHeader>
 
-      <CardContent className="space-y-5">
-        {loading ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">
-            Loading analysis...
-          </div>
-        ) : (
-          <>
-            {/* Market Condition & Trend */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <div className="rounded-lg border p-3">
-                <p className="mb-1 text-xs text-muted-foreground">Market Condition</p>
-                <Badge className={`${condCfg.bg} ${condCfg.color}`}>
-                  {condCfg.label}
-                </Badge>
-              </div>
-              <div className="rounded-lg border p-3">
-                <p className="mb-1 text-xs text-muted-foreground">Trend Direction</p>
+          {/* Latest Decision Detail */}
+          {decisionHistory.length > 0 && (
+            <div className="rounded-lg border p-3 space-y-3">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  {trendIcon(data.trendDirection)}
-                  <span className="text-sm font-semibold">{data.trendDirection}</span>
+                  <span className="text-sm font-bold font-mono">{decisionHistory[0].symbol}</span>
+                  <Badge className={decisionColor[decisionHistory[0].decision] || ''}>{decisionHistory[0].decision}</Badge>
+                  {decisionHistory[0].overridden && (
+                    <Badge variant="outline" className="text-orange-600 text-[10px] h-5 gap-1">
+                      <Lock className="h-3 w-3" />Override
+                    </Badge>
+                  )}
                 </div>
-              </div>
-              <div className="rounded-lg border p-3">
-                <p className="mb-1 text-xs text-muted-foreground">Volatility</p>
-                <div className="flex items-center gap-2">
-                  <Activity className="h-4 w-4 text-orange-500" />
-                  <Progress value={data.volatilityLevel} className="h-2 flex-1" />
-                  <span className="text-xs font-medium">{data.volatilityLevel}%</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Confidence Score */}
-            <div className="rounded-lg border p-3">
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-sm font-medium">AI Confidence Score</p>
-                <span
-                  className={`text-sm font-bold ${
-                    data.confidenceScore >= 70
-                      ? 'text-emerald-600'
-                      : data.confidenceScore >= 50
-                        ? 'text-amber-600'
-                        : 'text-red-600'
-                  }`}
-                >
-                  {data.confidenceScore}%
+                <span className={`text-lg font-bold ${decisionHistory[0].confidence >= 65 ? 'text-emerald-600' : decisionHistory[0].confidence >= 45 ? 'text-amber-600' : 'text-red-600'}`}>
+                  {decisionHistory[0].confidence}%
                 </span>
               </div>
-              <Progress value={data.confidenceScore} className="h-3" />
-            </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">{decisionHistory[0].reasoning}</p>
 
-            {/* Analysis Factors */}
-            <div>
-              <p className="mb-3 text-sm font-semibold">Analysis Factors</p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {data.factors.map((factor) => (
-                  <div
-                    key={factor.key}
-                    className="flex items-start justify-between gap-3 rounded-lg border p-3"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{factor.name}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {factor.detail}
-                      </p>
+              {/* Factor Bars */}
+              {(() => {
+                try {
+                  const factors = typeof decisionHistory[0].factors === 'string' ? JSON.parse(decisionHistory[0].factors) : decisionHistory[0].factors
+                  return (
+                    <div className="grid grid-cols-2 gap-3">
+                      {factors.technical && factorBar(factors.technical.score, 'Technical')}
+                      {factors.news && factorBar(factors.news.score, 'News')}
+                      {factors.sentiment && factorBar(factors.sentiment.score, 'Sentiment')}
+                      {factors.risk && (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-xs">
+                            <span className="text-muted-foreground">Risk</span>
+                            <span className="font-mono">{factors.risk.score.toFixed(1)}/10</span>
+                          </div>
+                          <div className="h-2 rounded-full bg-muted overflow-hidden">
+                            <div className={`h-full rounded-full ${factors.risk.score > 6 ? 'bg-red-500' : factors.risk.score > 4 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${factors.risk.score * 10}%` }} />
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      {impactBadge(factor.impact)}
-                      <span className="text-xs font-mono text-muted-foreground">
-                        {factor.score}
-                      </span>
+                  )
+                } catch { return null }
+              })()}
+
+              {/* Signal Sources */}
+              {(() => {
+                try {
+                  const sources: string[] = typeof decisionHistory[0].signalSources === 'string' ? JSON.parse(decisionHistory[0].signalSources) : decisionHistory[0].signalSources
+                  if (!Array.isArray(sources) || sources.length === 0) return null
+                  return (
+                    <div className="flex flex-wrap gap-1">
+                      {sources.map(s => <Badge key={s} variant="outline" className="text-[10px] h-5">{s}</Badge>)}
                     </div>
-                  </div>
-                ))}
+                  )
+                } catch { return null }
+              })()}
+
+              {/* Meta info */}
+              <div className="flex flex-wrap gap-3 text-[10px] text-muted-foreground">
+                <span>Risk: {decisionHistory[0].riskScore}/10</span>
+                <span>Sentiment: {decisionHistory[0].sentimentScore}</span>
+                <span>Vol: {decisionHistory[0].volatilityRegime}</span>
+                {decisionHistory[0].strategyUsed && <span>Strategy: {decisionHistory[0].strategyUsed}</span>}
+                <span>{new Date(decisionHistory[0].createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
             </div>
+          )}
 
-            {/* AI Recommendations */}
+          {/* Decision History */}
+          {decisionHistory.length > 1 && (
             <div>
-              <p className="mb-3 text-sm font-semibold">AI Recommendations</p>
-              <div className="space-y-2">
-                {data.recommendations.map((rec, idx) => (
-                  <div
-                    key={idx}
-                    className="flex items-start gap-3 rounded-lg border p-3"
-                  >
-                    <Badge className={`${actionColor[rec.action] || ''} shrink-0`}>
-                      {rec.action}
-                    </Badge>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold">{rec.symbol}</p>
-                      <p className="text-xs text-muted-foreground">{rec.reason}</p>
-                    </div>
-                    <span
-                      className={`shrink-0 text-xs font-medium ${
-                        rec.confidence >= 70
-                          ? 'text-emerald-600'
-                          : rec.confidence >= 50
-                            ? 'text-amber-600'
-                            : 'text-red-600'
-                      }`}
-                    >
-                      {rec.confidence}%
-                    </span>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-sm font-semibold">Decision History</p>
+                <Button variant="ghost" size="sm" className="h-6 text-xs gap-1" onClick={fetchDecisionHistory}>
+                  <RefreshCw className="h-3 w-3" /> Refresh
+                </Button>
               </div>
+              <ScrollArea className="max-h-60 overflow-y-auto">
+                <div className="space-y-1.5 pr-2">
+                  {decisionHistory.slice(1, 15).map(d => (
+                    <div key={d.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-xs">
+                      <span className="font-mono font-medium w-12">{d.symbol}</span>
+                      <Badge className={`text-[10px] h-5 ${decisionColor[d.decision] || ''}`}>{d.decision}</Badge>
+                      <span className={`font-mono ${d.confidence >= 65 ? 'text-emerald-600' : d.confidence >= 45 ? 'text-amber-600' : 'text-red-600'}`}>{d.confidence}%</span>
+                      <span className="text-muted-foreground flex-1 truncate">{d.reasoning}</span>
+                      <span className="text-muted-foreground shrink-0">{new Date(d.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      {d.overridden && <ShieldAlert className="h-3 w-3 text-orange-500 shrink-0" />}
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
             </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   )
 }

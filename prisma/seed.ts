@@ -722,6 +722,67 @@ async function main() {
   }
   console.log(`  ✓ AI Analyses: ${createdAnalyses.length}`)
 
+  // ---- Phase 6: News Fetch Logs ----
+  console.log('Seeding Phase 6 data...')
+
+  const fetchLogs = [
+    { provider: 'FINNHUB', endpoint: '/company-news?symbol=BBCA', statusCode: 200, responseTimeMs: 342, articlesFetched: 12, articlesNew: 8, articlesDedup: 4, createdAt: new Date(Date.now() - 3600000) },
+    { provider: 'MARKETAUX', endpoint: '/news/all?countries=id', statusCode: 200, responseTimeMs: 891, articlesFetched: 25, articlesNew: 20, articlesDedup: 5, createdAt: new Date(Date.now() - 7200000) },
+    { provider: 'FINNHUB', endpoint: '/company-news?symbol=BBRI', statusCode: 200, responseTimeMs: 287, articlesFetched: 8, articlesNew: 5, articlesDedup: 3, createdAt: new Date(Date.now() - 5400000) },
+    { provider: 'FINNHUB', endpoint: '/company-news?symbol=BMRI', statusCode: 429, responseTimeMs: 125, articlesFetched: 0, articlesNew: 0, articlesDedup: 0, error: 'Rate limit exceeded', createdAt: new Date(Date.now() - 1800000) },
+    { provider: 'MARKETAUX', endpoint: '/news/all?countries=id', statusCode: 200, responseTimeMs: 763, articlesFetched: 18, articlesNew: 15, articlesDedup: 3, createdAt: new Date(Date.now() - 900000) },
+  ]
+  for (const log of fetchLogs) {
+    await db.newsFetchLog.create({ data: log })
+  }
+  console.log('  ✓ News Fetch Logs: 5')
+
+  // ---- Phase 6: Sentiment Snapshots ----
+  const sentimentSnapshots = [
+    { symbol: 'BBCA', overallScore: 62.5, articleCount: 8, positiveCount: 5, negativeCount: 2, neutralCount: 1, sentimentRegime: 'BULLISH', confidence: 72, weightedScore: 58.3, topPositiveWords: JSON.stringify(['profit', 'growth', 'dividend']), topNegativeWords: JSON.stringify(['risk']), sectorBreakdown: JSON.stringify({ Banking: 65, Overall: 62.5 }), createdAt: new Date(Date.now() - 1800000) },
+    { symbol: 'BBRI', overallScore: 45.0, articleCount: 6, positiveCount: 3, negativeCount: 1, neutralCount: 2, sentimentRegime: 'NEUTRAL', confidence: 55, weightedScore: 40.2, topPositiveWords: JSON.stringify(['expansion', 'loan']), topNegativeWords: JSON.stringify(['NPL']), sectorBreakdown: JSON.stringify({ Banking: 48 }), createdAt: new Date(Date.now() - 2400000) },
+    { symbol: 'TLKM', overallScore: -35.0, articleCount: 4, positiveCount: 1, negativeCount: 2, neutralCount: 1, sentimentRegime: 'BEARISH', confidence: 45, weightedScore: -30.5, topPositiveWords: JSON.stringify(['dividend']), topNegativeWords: JSON.stringify(['decline', 'competition']), sectorBreakdown: JSON.stringify({ Telecom: -35 }), createdAt: new Date(Date.now() - 3600000) },
+    { symbol: 'MARKET', overallScore: 28.0, articleCount: 35, positiveCount: 18, negativeCount: 10, neutralCount: 7, sentimentRegime: 'NEUTRAL', confidence: 65, weightedScore: 25.0, topPositiveWords: JSON.stringify(['growth', 'GDP', 'strong']), topNegativeWords: JSON.stringify(['inflation', 'global']), sectorBreakdown: JSON.stringify({ Banking: 55, Mining: -20, Tech: 40, Consumer: 30 }), createdAt: new Date(Date.now() - 600000) },
+    { symbol: 'ASII', overallScore: 55.0, articleCount: 5, positiveCount: 3, negativeCount: 1, neutralCount: 1, sentimentRegime: 'BULLISH', confidence: 60, weightedScore: 50.0, topPositiveWords: JSON.stringify(['sales', 'EV', 'innovation']), topNegativeWords: JSON.stringify(['supply']), sectorBreakdown: JSON.stringify({ Automotive: 55 }), createdAt: new Date(Date.now() - 1200000) },
+    { symbol: 'BMRI', overallScore: -72.0, articleCount: 7, positiveCount: 1, negativeCount: 5, neutralCount: 1, sentimentRegime: 'EXTREME_FEAR', confidence: 78, weightedScore: -68.0, topPositiveWords: JSON.stringify(['stable']), topNegativeWords: JSON.stringify(['fraud', 'scandal', 'investigation', 'loss', 'penalty']), sectorBreakdown: JSON.stringify({ Banking: -72 }), createdAt: new Date(Date.now() - 300000) },
+  ]
+  for (const snap of sentimentSnapshots) {
+    await db.sentimentSnapshot.create({ data: snap })
+  }
+  console.log('  ✓ Sentiment Snapshots: 6')
+
+  // ---- Phase 6: Decision Logs ----
+  const decisionLogs = [
+    { symbol: 'BBCA', decision: 'BUY', confidence: 78, reasoning: 'Strong bullish technical setup (RSI recovering from oversold, MACD bullish crossover) supported by positive news flow (BI rate hold) and bullish sentiment (+62.5). Risk score moderate at 3.2.', factors: JSON.stringify({ technical: { score: 72, trend: 'UP' }, news: { score: 55, breaking: 0 }, sentiment: { score: 62.5, regime: 'BULLISH' }, risk: { score: 3.2, regime: 'NORMAL' } }), signalSources: JSON.stringify(['RSI_OVERSOLD', 'MACD_BULLISH', 'NEWS_POSITIVE', 'SENTIMENT_BULLISH']), riskScore: 3.2, sentimentScore: 62.5, volatilityRegime: 'NORMAL', strategyUsed: 'EMA Crossover', timeframe: 'H1', finalAction: 'BUY', overridden: false, createdAt: new Date(Date.now() - 900000) },
+    { symbol: 'BMRI', decision: 'SKIP', confidence: 35, reasoning: 'Extreme fear sentiment regime (-72) blocks trading. Despite technical oversold conditions, sentiment filter requires position avoidance until regime stabilizes.', factors: JSON.stringify({ technical: { score: -45, trend: 'DOWN' }, news: { score: -80, breaking: 1 }, sentiment: { score: -72, regime: 'EXTREME_FEAR' }, risk: { score: 6.5, regime: 'HIGH_VOLATILITY' } }), signalSources: JSON.stringify(['SENTIMENT_EXTREME_FEAR', 'NEWS_NEGATIVE', 'RSI_OVERSOLD']), riskScore: 6.5, sentimentScore: -72, volatilityRegime: 'HIGH_VOLATILITY', strategyUsed: 'RMI Trend Sync', timeframe: 'H1', finalAction: 'SKIP', overridden: false, createdAt: new Date(Date.now() - 600000) },
+    { symbol: 'TLKM', decision: 'SELL', confidence: 68, reasoning: 'Bearish sentiment (-35) with declining trend. MACD bearish crossover confirmed. Negative news regarding competition. Risk acceptable at 3.8.', factors: JSON.stringify({ technical: { score: -55, trend: 'DOWN' }, news: { score: -40, breaking: 0 }, sentiment: { score: -35, regime: 'BEARISH' }, risk: { score: 3.8, regime: 'NORMAL' } }), signalSources: JSON.stringify(['MACD_BEARISH', 'TREND_DOWN', 'SENTIMENT_BEARISH', 'NEWS_NEGATIVE']), riskScore: 3.8, sentimentScore: -35, volatilityRegime: 'NORMAL', strategyUsed: 'Pivot Point', timeframe: 'M15', finalAction: 'SELL', overridden: false, createdAt: new Date(Date.now() - 300000) },
+    { symbol: 'ASII', decision: 'BUY', confidence: 72, reasoning: 'Bullish momentum with positive EV news catalyst. ADX confirming strong trend at 32. Sentiment supportive at +55. Volume increasing.', factors: JSON.stringify({ technical: { score: 65, trend: 'UP' }, news: { score: 60, breaking: 0 }, sentiment: { score: 55, regime: 'BULLISH' }, risk: { score: 2.8, regime: 'NORMAL' } }), signalSources: JSON.stringify(['ADX_STRONG_TREND', 'NEWS_POSITIVE', 'SENTIMENT_BULLISH', 'VOLUME_INCREASING']), riskScore: 2.8, sentimentScore: 55, volatilityRegime: 'NORMAL', strategyUsed: 'MA Ribbon', timeframe: 'H1', finalAction: 'HOLD', overridden: true, overrideReason: 'Manual override: waiting for pullback to support level', createdAt: new Date(Date.now() - 120000) },
+    { symbol: 'BBRI', decision: 'HOLD', confidence: 45, reasoning: 'Mixed signals with neutral sentiment (+45). RSI neutral at 52. MACD flat. No strong directional conviction. Wait for clearer setup.', factors: JSON.stringify({ technical: { score: 10, trend: 'SIDEWAYS' }, news: { score: 15, breaking: 0 }, sentiment: { score: 45, regime: 'NEUTRAL' }, risk: { score: 2.5, regime: 'NORMAL' } }), signalSources: JSON.stringify(['RSI_NEUTRAL', 'MACD_NEUTRAL']), riskScore: 2.5, sentimentScore: 45, volatilityRegime: 'NORMAL', strategyUsed: 'Linear Regression', timeframe: 'H1', finalAction: 'HOLD', overridden: false, createdAt: new Date(Date.now() - 60000) },
+  ]
+  for (const dec of decisionLogs) {
+    await db.decisionLog.create({ data: dec })
+  }
+  console.log('  ✓ Decision Logs: 5')
+
+  // ---- Phase 6: AI Decision Config ----
+  await db.aiDecisionConfig.upsert({
+    where: { name: 'default' },
+    update: {},
+    create: {
+      name: 'default',
+      minConfidenceBuy: 65.0,
+      minConfidenceSell: 65.0,
+      sentimentWeight: 0.25,
+      technicalWeight: 0.50,
+      newsWeight: 0.25,
+      maxPositionsPerDecision: 3,
+      cooldownSeconds: 300,
+      extremeSentimentBlock: true,
+      volatilityScalingEnabled: true,
+    },
+  })
+  console.log('  ✓ AI Decision Config: 1')
+
   console.log('Seed complete')
 }
 

@@ -1249,6 +1249,53 @@ export async function preTradeCheck(params: {
     }
   }
 
+  // ---- Phase 6: Sentiment Filter Check ----
+  try {
+    const { filterTrade } = await import("./sentiment-filter")
+    const sentimentResult = await filterTrade(params.symbol, params.direction as "BUY" | "SELL")
+    if (sentimentResult.shouldBlock) {
+      logger.warn("RISK_MANAGEMENT", `Sentiment filter BLOCKED trade ${params.symbol} ${params.direction}`, {
+        symbol: params.symbol,
+        metadata: {
+          reason: sentimentResult.blockReason,
+          regime: sentimentResult.regime,
+          symbolScore: sentimentResult.symbolScore,
+          marketScore: sentimentResult.marketScore,
+        },
+      })
+      await logRiskEvent({
+        eventType: "SENTIMENT_FILTER_BLOCK",
+        severity: "HIGH",
+        message: `Sentiment filter blocked ${params.direction} ${params.symbol}: ${sentimentResult.blockReason}`,
+        details: `Regime: ${sentimentResult.regime}, Symbol score: ${sentimentResult.symbolScore}, Market score: ${sentimentResult.marketScore}, Confidence: ${sentimentResult.confidence}`,
+        actionTaken: "TRADE_BLOCKED",
+      })
+      return {
+        approved: false,
+        reason: `Sentiment filter: ${sentimentResult.blockReason}`,
+        riskAmount,
+        riskPercent,
+        suggestedLotSize: 0,
+        warnings: [...sentimentResult.warnings],
+        positionSizeReduction: 1,
+        volatilityMultiplier,
+        gapRisk: gapRiskResult ?? undefined,
+      }
+    }
+    if (sentimentResult.sizeAdjustment < 1.0) {
+      const preAdj = suggestedLotSize
+      suggestedLotSize = Math.max(0.01, Math.round(suggestedLotSize * sentimentResult.sizeAdjustment * 100) / 100)
+      warnings.push(
+        `Sentiment size adjustment: lot reduced from ${preAdj} to ${suggestedLotSize} (${(sentimentResult.sizeAdjustment * 100).toFixed(0)}% factor, regime: ${sentimentResult.regime})`,
+      )
+    }
+    if (sentimentResult.warnings.length > 0) {
+      warnings.push(...sentimentResult.warnings)
+    }
+  } catch {
+    // Non-critical: sentiment filter failure should not block trading
+  }
+
   // ---- Approved ----
   return {
     approved: true,

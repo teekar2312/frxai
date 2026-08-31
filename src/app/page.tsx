@@ -36,11 +36,12 @@ import TradingSessions from '@/components/trading/TradingSessions'
 import EquityChart from '@/components/trading/EquityChart'
 import LogViewer from '@/components/trading/LogViewer'
 import AuditCompliance from '@/components/trading/AuditCompliance'
+import SentimentFilter from '@/components/trading/SentimentFilter'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'trading', label: 'Live Trading', icon: LineChart },
-  { id: 'ai', label: 'AI Analysis', icon: BrainCircuit },
+  { id: 'ai', label: 'AI & Sentiment', icon: BrainCircuit },
   { id: 'strategies', label: 'Strategies', icon: Cpu },
   { id: 'risk', label: 'Risk & Money', icon: Shield },
   { id: 'news', label: 'News', icon: Newspaper },
@@ -196,10 +197,7 @@ export default function TradingDashboard() {
 
           <TabsContent value="ai" className="space-y-6">
             <AiAnalysisPanel />
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-              <StrategyMonitor />
-              <RiskManagement />
-            </div>
+            <SentimentFilter />
           </TabsContent>
 
           <TabsContent value="strategies" className="space-y-6">

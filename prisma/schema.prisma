@@ -22,6 +22,11 @@ model Trade {
   tp              Float?
   trailingStop    Boolean  @default(false)
   trailingDist    Float?
+  // --- Trailing Stop Deep Audit fields ---
+  trailingSteps       String?  // JSON: TrailingStep[] for tiered trailing
+  trailingAdjustments Int     @default(0)  // Number of SL adjustments made by trailing
+  trailingActivatedAt  DateTime? // When trailing stop first activated
+  trailingCooldownSec  Int     @default(5)  // Min seconds between SL adjustments (throttle)
   pnl             Float    @default(0)
   pnlPercent      Float    @default(0)
   status          String   @default("OPEN") // OPEN, CLOSED, PENDING, REJECTED
@@ -50,6 +55,7 @@ model Trade {
   highestPrice    Float?   // Track highest price since open (for trailing stop)
   lowestPrice     Float?   // Track lowest price since open (for trailing stop)
   lastSlAdjust    DateTime? // Last time SL was adjusted by trailing stop
+  breakEvenApplied Boolean  @default(false) // Whether break-even floor was applied
   executionState  String   @default("FILLED") // FILLED, PARTIAL_FILLED, PENDING_CANCEL, CANCELLED
   indicatorSnapshot String? @default("{}") // JSON: indicator values at trade open
   createdAt       DateTime @default(now())

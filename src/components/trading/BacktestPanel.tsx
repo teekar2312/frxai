@@ -31,7 +31,12 @@ import {
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Plus, LineChart, Trash2, Loader2 } from 'lucide-react'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import { Plus, LineChart, Trash2, Loader2, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react'
 import {
   AreaChart,
   Area,
@@ -45,6 +50,18 @@ import {
 interface EquityPoint {
   date: string
   equity: number
+}
+
+interface SimulatedTrade {
+  entryBar: number
+  exitBar: number
+  direction: 'LONG' | 'SHORT'
+  entryPrice: number
+  exitPrice: number
+  pnl: number
+  commission: number
+  sl: number
+  tp: number
 }
 
 interface BacktestResult {
@@ -70,6 +87,9 @@ interface BacktestResult {
   config?: string
   equityCurve?: EquityPoint[]
   totalReturn?: number
+  simulatedTrades?: SimulatedTrade[]
+  mockWarning?: boolean
+  engine?: string
 }
 
 const SYMBOLS = [
@@ -93,6 +113,7 @@ export default function BacktestPanel() {
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedBacktest, setSelectedBacktest] = useState<BacktestResult | null>(null)
+  const [tradesOpen, setTradesOpen] = useState(false)
   const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -185,6 +206,12 @@ export default function BacktestPanel() {
     setFormEndDate('')
     setFormCapital('10000')
     setError(null)
+  }
+
+  // Reset trades collapsible when selection changes
+  const handleSelectBacktest = (bt: BacktestResult | null) => {
+    setSelectedBacktest(bt)
+    setTradesOpen(false)
   }
 
   return (
@@ -328,14 +355,32 @@ export default function BacktestPanel() {
         <Card>
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium">
-                Equity Curve — {selectedBacktest.name}
-              </CardTitle>
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-sm font-medium">
+                  Equity Curve — {selectedBacktest.name}
+                </CardTitle>
+                {/* Mock warning badge */}
+                {selectedBacktest.mockWarning && (
+                  <Badge variant="destructive" className="gap-1 text-xs">
+                    <AlertTriangle className="h-3 w-3" />
+                    Mock Data
+                  </Badge>
+                )}
+                {/* Engine badge for non-mock results */}
+                {!selectedBacktest.mockWarning && selectedBacktest.engine && (
+                  <Badge variant="outline" className="text-xs font-mono">
+                    {selectedBacktest.engine === 'EMA_CROSSOVER' ? 'EMA' :
+                     selectedBacktest.engine === 'SMA_CROSSOVER' ? 'SMA' :
+                     selectedBacktest.engine === 'SMA_CROSSOVER_FALLBACK' ? 'SMA (fallback)' :
+                     selectedBacktest.engine}
+                  </Badge>
+                )}
+              </div>
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 text-xs"
-                onClick={() => setSelectedBacktest(null)}
+                onClick={() => handleSelectBacktest(null)}
               >
                 Close
               </Button>
@@ -387,6 +432,95 @@ export default function BacktestPanel() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+
+            {/* Simulated Trades Detail Section */}
+            {selectedBacktest.simulatedTrades && selectedBacktest.simulatedTrades.length > 0 && (
+              <div className="mt-4">
+                <Collapsible open={tradesOpen} onOpenChange={setTradesOpen}>
+                  <CollapsibleTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full justify-between gap-2 text-sm"
+                    >
+                      <span className="flex items-center gap-2">
+                        Simulated Trades
+                        <Badge variant="secondary" className="text-xs">
+                          {selectedBacktest.simulatedTrades.length}
+                        </Badge>
+                      </span>
+                      {tradesOpen ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent className="mt-2">
+                    <div className="max-h-80 overflow-y-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-10">#</TableHead>
+                            <TableHead className="w-16">Dir</TableHead>
+                            <TableHead className="text-right">Entry</TableHead>
+                            <TableHead className="text-right">Exit</TableHead>
+                            <TableHead className="text-right">P&L</TableHead>
+                            <TableHead className="text-right hidden sm:table-cell">Comm</TableHead>
+                            <TableHead className="text-right hidden md:table-cell">SL</TableHead>
+                            <TableHead className="text-right hidden md:table-cell">TP</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {selectedBacktest.simulatedTrades.map((trade, idx) => {
+                            const isWin = trade.pnl > 0
+                            return (
+                              <TableRow key={idx}>
+                                <TableCell className="text-muted-foreground text-xs">
+                                  {idx + 1}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge
+                                    variant={trade.direction === 'LONG' ? 'default' : 'secondary'}
+                                    className={`text-xs font-mono ${
+                                      trade.direction === 'LONG'
+                                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400'
+                                        : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
+                                    }`}
+                                  >
+                                    {trade.direction}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs">
+                                  {trade.entryPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs">
+                                  {trade.exitPrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </TableCell>
+                                <TableCell className={`text-right font-mono text-xs font-medium ${
+                                  isWin ? 'text-emerald-600' : 'text-red-600'
+                                }`}>
+                                  {isWin ? '+' : ''}{trade.pnl.toLocaleString('en-US', { style: 'currency', currency: 'USD' })}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs text-muted-foreground hidden sm:table-cell">
+                                  {trade.commission.toFixed(2)}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs text-muted-foreground hidden md:table-cell">
+                                  {trade.sl.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </TableCell>
+                                <TableCell className="text-right font-mono text-xs text-muted-foreground hidden md:table-cell">
+                                  {trade.tp.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -429,14 +563,24 @@ export default function BacktestPanel() {
                   : backtests.map((bt) => {
                       const isProfit = bt.totalPnl >= 0
                       const isSelected = selectedBacktest?.id === bt.id
+                      // Check if this backtest used mock data (from config or mockWarning field)
+                      const isMock = bt.mockWarning === true ||
+                        (bt.config ? bt.config.includes('"engine":"MOCK"') : false)
                       return (
                         <TableRow
                           key={bt.id}
                           className={`cursor-pointer hover:bg-muted/50 ${isSelected ? 'bg-muted' : ''}`}
-                          onClick={() => setSelectedBacktest(isSelected ? null : bt)}
+                          onClick={() => handleSelectBacktest(isSelected ? null : bt)}
                         >
                           <TableCell className="font-medium max-w-[180px] truncate">
-                            {bt.name}
+                            <div className="flex items-center gap-1.5">
+                              {isMock && (
+                                <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
+                              )}
+                              <span className={isMock ? 'text-amber-700 dark:text-amber-400' : ''}>
+                                {bt.name}
+                              </span>
+                            </div>
                           </TableCell>
                           <TableCell className="font-semibold">{bt.symbol}</TableCell>
                           <TableCell className="hidden md:table-cell">

@@ -1,17 +1,23 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import { adjustTrailingStop } from "@/lib/trade-execution-engine"
+import { adjustTrailingStop, type TrailingStopResult } from "@/lib/trade-execution-engine"
+import { getTradingPhase } from "@/lib/mt5-connection"
 import logger from "@/lib/trading-logger"
 
 /**
  * POST /api/execution/trailing-stop
  * Manually trigger trailing stop evaluation for a specific trade.
- * Body: { tradeId: string, currentPrice: number }
+ *
+ * Body:
+ *   tradeId: string       - Required. The trade to evaluate.
+ *   currentPrice: number  - Required. The current market price.
+ *   trailingSteps?: TrailingStep[] - Optional. Tiered trailing steps to apply.
+ *   trailingCooldownSec?: number - Optional. Cooldown between adjustments.
  */
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { tradeId, currentPrice } = body
+    const { tradeId, currentPrice, trailingSteps, trailingCooldownSec } = body
 
     if (!tradeId || currentPrice == null) {
       return NextResponse.json(
@@ -28,9 +34,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const result = adjustTrailingStop(
+    // Get current trading phase for phase-aware trailing (Fix 4)
+    const currentPhase = getTradingPhase()
+    const now = new Date()
+
+    // Allow the API caller to set/override trailing steps and cooldown
+    const effectiveTrailingSteps = trailingSteps
+      ? JSON.stringify(trailingSteps)
+      : trade.trailingSteps
+    const effectiveCooldownSec = trailingCooldownSec ?? trade.trailingCooldownSec
+
+    const result: TrailingStopResult = adjustTrailingStop(
       {
         id: trade.id,
+        symbol: trade.symbol,
         direction: trade.direction,
         entryPrice: trade.entryPrice,
         currentPrice: trade.currentPrice,
@@ -39,29 +56,48 @@ export async function POST(request: NextRequest) {
         sl: trade.sl,
         highestPrice: trade.highestPrice,
         lowestPrice: trade.lowestPrice,
+        lastSlAdjust: trade.lastSlAdjust,
+        trailingSteps: effectiveTrailingSteps,
+        trailingAdjustments: trade.trailingAdjustments,
+        trailingCooldownSec: effectiveCooldownSec,
       },
       currentPrice,
+      { currentPhase, now },
     )
 
     if (result.adjusted && result.newSl) {
+      const newHighestPrice = trade.direction === 'BUY'
+        ? Math.max(trade.highestPrice ?? trade.currentPrice, currentPrice)
+        : trade.highestPrice
+      const newLowestPrice = trade.direction === 'SELL'
+        ? Math.min(trade.lowestPrice ?? trade.currentPrice, currentPrice)
+        : trade.lowestPrice
+
       await db.trade.update({
         where: { id: tradeId },
         data: {
           sl: result.newSl,
-          lastSlAdjust: new Date(),
-          highestPrice: trade.direction === 'BUY'
-            ? Math.max(trade.highestPrice ?? trade.currentPrice, currentPrice)
-            : trade.highestPrice,
-          lowestPrice: trade.direction === 'SELL'
-            ? Math.min(trade.lowestPrice ?? trade.currentPrice, currentPrice)
-            : trade.lowestPrice,
+          highestPrice: newHighestPrice,
+          lowestPrice: newLowestPrice,
+          lastSlAdjust: now,
+          trailingAdjustments: (trade.trailingAdjustments ?? 0) + 1,
+          trailingActivatedAt: trade.trailingActivatedAt ?? now,
+          breakEvenApplied: result.breakEvenApplied ? true : trade.breakEvenApplied,
         },
       })
 
       logger.info('TRADE_EXECUTION', `Trailing stop adjusted for ${trade.symbol}`, {
         tradeId,
         symbol: trade.symbol,
-        metadata: { oldSl: trade.sl, newSl: result.newSl, reason: result.reason },
+        metadata: {
+          oldSl: trade.sl,
+          newSl: result.newSl,
+          reason: result.reason,
+          activeStep: result.activeStep,
+          effectiveTrailDist: result.effectiveTrailDist,
+          breakEvenApplied: result.breakEvenApplied,
+          phase: currentPhase,
+        },
       })
     }
 

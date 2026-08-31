@@ -170,14 +170,6 @@ const MATCHING_WINDOW_MS = 5 * 60 * 1000 // 5 minutes to match decision to trade
 const ESTIMATED_ACCOUNT_VALUE = 100_000_000 // 100M IDR estimate
 const RISK_PER_TRADE_PCT = 0.01 // 1% risk per trade
 
-/** Module-level flag: when true, makeDecision() uses adaptive weights + calibration */
-let _useAdaptiveLearning = false
-
-/** Enable adaptive learning for subsequent makeDecision() calls (thread-local within request) */
-export function enableAdaptiveLearning(): void { _useAdaptiveLearning = true }
-/** Disable adaptive learning (default) */
-export function disableAdaptiveLearning(): void { _useAdaptiveLearning = false }
-
 // ============================================================================
 // SECTION 3: HELPERS
 // ============================================================================
@@ -936,12 +928,14 @@ function generateReasoning(
  * @param symbol - Ticker symbol to decide on
  * @param timeframe - Chart timeframe (default 'H1')
  * @param precomputedRiskFactors - Optional pre-computed risk factors (Fix 5: for batch optimization)
+ * @param useAdaptiveLearning - When true, uses adaptive weights + confidence calibration (request-scoped)
  * @returns Complete AiDecision with all factors and recommendations
  */
 export async function makeDecision(
   symbol: string,
   timeframe: string = DEFAULT_TIMEFRAME,
   precomputedRiskFactors?: RiskFactors,
+  useAdaptiveLearning?: boolean,
 ): Promise<AiDecision> {
   const now = new Date()
 
@@ -1047,7 +1041,7 @@ export async function makeDecision(
     let effectiveSentWeight = config.sentimentWeight
     let learningState: SelfLearningState | null = null
 
-    if (_useAdaptiveLearning) {
+    if (useAdaptiveLearning) {
       try {
         const mc = classifyMarketCondition(technicalFactors, riskFactors.volatilityRegime)
         const adaptiveW = await getAdaptiveWeights(mc, config)
@@ -1219,7 +1213,7 @@ export async function makeDecision(
 
     // --- Step 10.5: Confidence calibration (self-learning) ---
     // Apply calibration feedback if adaptive learning is enabled and data exists
-    if (_useAdaptiveLearning && learningState) {
+    if (useAdaptiveLearning && learningState) {
       confidence = calibrateConfidence(confidence, learningState)
     }
 
@@ -1257,8 +1251,8 @@ export async function makeDecision(
         riskScore: riskFactors.riskScore,
         signalSources,
         volatilityMultiplier,
-        adaptiveLearning: _useAdaptiveLearning,
-        effectiveWeights: _useAdaptiveLearning
+        adaptiveLearning: useAdaptiveLearning ?? false,
+        effectiveWeights: useAdaptiveLearning
           ? { technical: effectiveTechWeight, news: effectiveNewsWeight, sentiment: effectiveSentWeight }
           : undefined,
       },
@@ -1350,11 +1344,13 @@ async function logDecisionToDb(
  *
  * @param symbols - Array of ticker symbols to analyze
  * @param timeframe - Chart timeframe (default 'H1')
+ * @param useAdaptiveLearning - When true, uses adaptive weights + calibration for each decision
  * @returns Array of AiDecision sorted by confidence descending
  */
 export async function makeBatchDecision(
   symbols: string[],
   timeframe: string = DEFAULT_TIMEFRAME,
+  useAdaptiveLearning?: boolean,
 ): Promise<AiDecision[]> {
   try {
     const config = await getDecisionConfig()
@@ -1366,7 +1362,7 @@ export async function makeBatchDecision(
     const decisions: AiDecision[] = []
     for (const symbol of symbols) {
       try {
-        const decision = await makeDecision(symbol, timeframe, sharedRiskFactors)
+        const decision = await makeDecision(symbol, timeframe, sharedRiskFactors, useAdaptiveLearning)
         decisions.push(decision)
       } catch (err) {
         logger.error('AI_ENGINE', `Batch decision failed for ${symbol}`, {
@@ -1461,7 +1457,10 @@ export async function getDecisionAccuracy(days: number = 30): Promise<DecisionAc
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
 
     const decisions = await db.decisionLog.findMany({
-      where: { createdAt: { gte: since } },
+      where: {
+        createdAt: { gte: since },
+        id: { not: '__self_learning_state__' }, // Exclude system records
+      },
       orderBy: { createdAt: 'desc' },
     })
 
@@ -1972,6 +1971,18 @@ export async function seedDecisionConfig() {
 // SECTION 16: SELF-LEARNING MODULE
 // ============================================================================
 
+/** Half-life for exponential time-decay weighting (168 hours = 1 week) */
+const DECAY_HALF_LIFE_HOURS = 168
+
+/** EMA smoothing alpha for adaptive multipliers (0.7 = 70% old, 30% new) */
+const ADAPTIVE_SMOOTHING_ALPHA = 0.7
+
+/** Minimum decisions required before computing adaptive multipliers */
+const MIN_DECISIONS_FOR_ADAPTIVE = 30
+
+/** Minimum decisions per market condition before computing weight hints */
+const MIN_DECISIONS_PER_MC = 15
+
 /** Per-strategy performance entry for self-learning */
 export interface StrategyPerformanceEntry {
   strategy: string
@@ -2004,7 +2015,7 @@ export interface SelfLearningState {
   strategyStats: Record<string, { wins: number; total: number; pnlSum: number }>
   /** Per (strategy, marketCondition) stats */
   strategyMarketStats: Record<string, { wins: number; total: number; pnlSum: number }>
-  /** Confidence calibration: 10-point buckets from 0-100 */
+  /** Confidence calibration: 10-point buckets from 0-100 (last bucket 90+ with rangeEnd=101) */
   calibrationBuckets: CalibrationBucket[]
   /** Per-market-condition weight hints */
   marketConditionWeights: Partial<Record<string, MarketConditionWeightHint>>
@@ -2031,7 +2042,9 @@ const SELF_LEARNING_CACHE_TTL_MS = 30 * 60 * 1000 // 30 minutes
 function getDefaultSelfLearningState(): SelfLearningState {
   const buckets: CalibrationBucket[] = []
   for (let i = 0; i < 100; i += 10) {
-    buckets.push({ rangeStart: i, rangeEnd: i + 10, count: 0, winRate: 0, calibrationFactor: 1.0 })
+    // Last bucket uses rangeEnd=101 so that confidence=100 is included (100 < 101)
+    const rangeEnd = i === 90 ? 101 : i + 10
+    buckets.push({ rangeStart: i, rangeEnd, count: 0, winRate: 0, calibrationFactor: 1.0 })
   }
   return {
     strategyStats: {},
@@ -2234,12 +2247,16 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
   const state = getDefaultSelfLearningState()
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
 
+  // Improvement 4: Load previous state for EMA smoothing of adaptive multipliers
+  const previousState = await loadSelfLearningState()
+
   try {
     // --- Step 1: Load decisions and trades in batch ---
     const decisions = await db.decisionLog.findMany({
       where: {
         createdAt: { gte: since },
         decision: { in: ['BUY', 'SELL'] },
+        id: { not: '__self_learning_state__' }, // Exclude system records
       },
       orderBy: { createdAt: 'desc' },
     })
@@ -2268,24 +2285,30 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
     })
 
     // --- Step 2: Match decisions to trades and build stats ---
+    // Improvement 3: Use weighted accumulators for time-decay
     const strategyStats: Record<string, { wins: number; total: number; pnlSum: number }> = {}
     const strategyMarketStats: Record<string, { wins: number; total: number; pnlSum: number }> = {}
     const calBuckets: Array<{ wins: number; total: number; rangeStart: number; rangeEnd: number }> = []
     for (let i = 0; i < 100; i += 10) {
-      calBuckets.push({ rangeStart: i, rangeEnd: i + 10, wins: 0, total: 0 })
+      // Last bucket uses rangeEnd=101 so that confidence=100 is included (100 < 101)
+      const rangeEnd = i === 90 ? 101 : i + 10
+      calBuckets.push({ rangeStart: i, rangeEnd, wins: 0, total: 0 })
     }
 
-    // Track which factor source was "correct"
+    // Improvement 3: Weighted accumulators for factor correctness
     let techCorrect = 0; let techTotal = 0
     let newsCorrect = 0; let newsTotal = 0
     let sentCorrect = 0; let sentTotal = 0
 
-    // Per-market-condition factor performance
+    // Per-market-condition factor performance (weighted)
     const mcFactorPerf: Record<string, {
       techWins: number; techTotal: number
       newsWins: number; newsTotal: number
       sentWins: number; sentTotal: number
     }> = {}
+
+    // Track per-market-condition decision count for Improvement 7
+    const mcDecisionCounts: Record<string, number> = {}
 
     let totalMatched = 0
 
@@ -2322,61 +2345,67 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
       totalMatched++
       const isWin = pnl > 0
 
-      // Update confidence calibration bucket
+      // Improvement 3: Compute time-decay weight based on decision age
+      const decisionAgeHours = (Date.now() - d.createdAt.getTime()) / (1000 * 60 * 60)
+      const weight = Math.exp(-decisionAgeHours / DECAY_HALF_LIFE_HOURS)
+
+      // Update confidence calibration bucket (weighted)
       const bucketIdx = Math.min(Math.floor(confidence / 10), 9)
       if (calBuckets[bucketIdx]) {
-        calBuckets[bucketIdx].total++
-        if (isWin) calBuckets[bucketIdx].wins++
+        calBuckets[bucketIdx].total += weight
+        if (isWin) calBuckets[bucketIdx].wins += weight
       }
 
-      // Update strategy stats
+      // Update strategy stats (weighted)
       if (!strategyStats[strategy]) {
         strategyStats[strategy] = { wins: 0, total: 0, pnlSum: 0 }
       }
-      strategyStats[strategy].total++
-      strategyStats[strategy].pnlSum += pnl
-      if (isWin) strategyStats[strategy].wins++
+      strategyStats[strategy].total += weight
+      strategyStats[strategy].pnlSum += pnl * weight
+      if (isWin) strategyStats[strategy].wins += weight
 
-      // Per (strategy, marketCondition)
+      // Per (strategy, marketCondition) (weighted)
       const smKey = `${strategy}|${marketCondition}`
       if (!strategyMarketStats[smKey]) {
         strategyMarketStats[smKey] = { wins: 0, total: 0, pnlSum: 0 }
       }
-      strategyMarketStats[smKey].total++
-      strategyMarketStats[smKey].pnlSum += pnl
-      if (isWin) strategyMarketStats[smKey].wins++
+      strategyMarketStats[smKey].total += weight
+      strategyMarketStats[smKey].pnlSum += pnl * weight
+      if (isWin) strategyMarketStats[smKey].wins += weight
 
-      // Evaluate which factors were "correct" (aligned with outcome)
+      // Track per-MC decision count for minimum sample guard
+      mcDecisionCounts[marketCondition] = (mcDecisionCounts[marketCondition] || 0) + 1
+
+      // --- Improvement 6: Evaluate factors against OUTCOME direction, not decision agreement ---
       const decisionDir = d.decision === 'BUY' ? 1 : -1
+      // The correct direction was the decision direction if trade won, opposite if lost
+      const outcomeDir = isWin ? decisionDir : (decisionDir === 1 ? -1 : 1)
 
       // Technical score direction
       const techScore = (techF.overallScore as number) || 0
       const techDir = techScore > 0 ? 1 : techScore < 0 ? -1 : 0
       if (techDir !== 0) {
-        techTotal++
-        if (techDir === decisionDir && isWin) techCorrect++
-        else if (techDir !== decisionDir && !isWin) techCorrect++
+        techTotal += weight
+        if (techDir === outcomeDir) techCorrect += weight
       }
 
       // News impact direction
       const newsScore = (newsF.impactScore as number) || 0
       const newsDir = newsScore > 0 ? 1 : newsScore < 0 ? -1 : 0
       if (newsDir !== 0) {
-        newsTotal++
-        if (newsDir === decisionDir && isWin) newsCorrect++
-        else if (newsDir !== decisionDir && !isWin) newsCorrect++
+        newsTotal += weight
+        if (newsDir === outcomeDir) newsCorrect += weight
       }
 
       // Sentiment direction
       const sentScore = (sentF.symbolScore as number) || 0
       const sentDir = sentScore > 0 ? 1 : sentScore < 0 ? -1 : 0
       if (sentDir !== 0) {
-        sentTotal++
-        if (sentDir === decisionDir && isWin) sentCorrect++
-        else if (sentDir !== decisionDir && !isWin) sentCorrect++
+        sentTotal += weight
+        if (sentDir === outcomeDir) sentCorrect += weight
       }
 
-      // Per-market-condition factor performance
+      // Per-market-condition factor performance (weighted, outcome-based)
       if (!mcFactorPerf[marketCondition]) {
         mcFactorPerf[marketCondition] = {
           techWins: 0, techTotal: 0,
@@ -2385,19 +2414,16 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
         }
       }
       if (techDir !== 0) {
-        mcFactorPerf[marketCondition].techTotal++
-        if (techDir === decisionDir && isWin) mcFactorPerf[marketCondition].techWins++
-        else if (techDir !== decisionDir && !isWin) mcFactorPerf[marketCondition].techWins++
+        mcFactorPerf[marketCondition].techTotal += weight
+        if (techDir === outcomeDir) mcFactorPerf[marketCondition].techWins += weight
       }
       if (newsDir !== 0) {
-        mcFactorPerf[marketCondition].newsTotal++
-        if (newsDir === decisionDir && isWin) mcFactorPerf[marketCondition].newsWins++
-        else if (newsDir !== decisionDir && !isWin) mcFactorPerf[marketCondition].newsWins++
+        mcFactorPerf[marketCondition].newsTotal += weight
+        if (newsDir === outcomeDir) mcFactorPerf[marketCondition].newsWins += weight
       }
       if (sentDir !== 0) {
-        mcFactorPerf[marketCondition].sentTotal++
-        if (sentDir === decisionDir && isWin) mcFactorPerf[marketCondition].sentWins++
-        else if (sentDir !== decisionDir && !isWin) mcFactorPerf[marketCondition].sentWins++
+        mcFactorPerf[marketCondition].sentTotal += weight
+        if (sentDir === outcomeDir) mcFactorPerf[marketCondition].sentWins += weight
       }
     }
 
@@ -2420,20 +2446,50 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
     })
 
     // --- Step 4: Compute adaptive multipliers based on factor correctness ---
-    const baseTechRate = techTotal > 0 ? techCorrect / techTotal : 0.5
-    const baseNewsRate = newsTotal > 0 ? newsCorrect / newsTotal : 0.5
-    const baseSentRate = sentTotal > 0 ? sentCorrect / sentTotal : 0.5
-    const avgRate = (baseTechRate + baseNewsRate + baseSentRate) / 3
+    // Improvement 7: Only compute adaptive multipliers if minimum sample size is met
+    if (totalMatched >= MIN_DECISIONS_FOR_ADAPTIVE) {
+      const baseTechRate = techTotal > 0 ? techCorrect / techTotal : 0.5
+      const baseNewsRate = newsTotal > 0 ? newsCorrect / newsTotal : 0.5
+      const baseSentRate = sentTotal > 0 ? sentCorrect / sentTotal : 0.5
+      const avgRate = (baseTechRate + baseNewsRate + baseSentRate) / 3
 
-    state.adaptiveMultipliers = {
-      technical: Math.round(clamp(baseTechRate / (avgRate || 0.5), 0.7, 1.3) * 100) / 100,
-      news: Math.round(clamp(baseNewsRate / (avgRate || 0.5), 0.7, 1.3) * 100) / 100,
-      sentiment: Math.round(clamp(baseSentRate / (avgRate || 0.5), 0.7, 1.3) * 100) / 100,
+      const newMultipliers = {
+        technical: Math.round(clamp(baseTechRate / (avgRate || 0.5), 0.7, 1.3) * 100) / 100,
+        news: Math.round(clamp(baseNewsRate / (avgRate || 0.5), 0.7, 1.3) * 100) / 100,
+        sentiment: Math.round(clamp(baseSentRate / (avgRate || 0.5), 0.7, 1.3) * 100) / 100,
+      }
+
+      // Improvement 4: EMA smoothing between old and new multipliers
+      const old = previousState.adaptiveMultipliers
+      state.adaptiveMultipliers = {
+        technical: Math.round((old.technical * ADAPTIVE_SMOOTHING_ALPHA + newMultipliers.technical * (1 - ADAPTIVE_SMOOTHING_ALPHA)) * 100) / 100,
+        news: Math.round((old.news * ADAPTIVE_SMOOTHING_ALPHA + newMultipliers.news * (1 - ADAPTIVE_SMOOTHING_ALPHA)) * 100) / 100,
+        sentiment: Math.round((old.sentiment * ADAPTIVE_SMOOTHING_ALPHA + newMultipliers.sentiment * (1 - ADAPTIVE_SMOOTHING_ALPHA)) * 100) / 100,
+      }
+    } else {
+      // Improvement 7: Not enough data — keep previous adaptive multipliers
+      logger.warn('AI_ENGINE', `Insufficient decisions for adaptive multipliers: ${totalMatched} < ${MIN_DECISIONS_FOR_ADAPTIVE}`, {
+        metadata: { totalMatched, required: MIN_DECISIONS_FOR_ADAPTIVE },
+      })
+      state.adaptiveMultipliers = { ...previousState.adaptiveMultipliers }
     }
 
     // --- Step 5: Compute market-condition weight hints ---
+    // Improvement 7: Only compute weight hints for MCs with minimum sample size
     const mcWeights: Partial<Record<string, MarketConditionWeightHint>> = {}
     for (const [mc, perf] of Object.entries(mcFactorPerf)) {
+      const mcTotal = (mcDecisionCounts[mc] || 0)
+      if (mcTotal < MIN_DECISIONS_PER_MC) {
+        logger.warn('AI_ENGINE', `Insufficient decisions for MC weight hints: ${mc} has ${mcTotal} < ${MIN_DECISIONS_PER_MC}`, {
+          metadata: { marketCondition: mc, total: mcTotal, required: MIN_DECISIONS_PER_MC },
+        })
+        // Keep previous weight hint for this MC if it existed
+        if (previousState.marketConditionWeights[mc]) {
+          mcWeights[mc] = previousState.marketConditionWeights[mc]
+        }
+        continue
+      }
+
       const mcTechRate = perf.techTotal > 0 ? perf.techWins / perf.techTotal : 0.5
       const mcNewsRate = perf.newsTotal > 0 ? perf.newsWins / perf.newsTotal : 0.5
       const mcSentRate = perf.sentTotal > 0 ? perf.sentWins / perf.sentTotal : 0.5
@@ -2527,6 +2583,7 @@ export async function getStrategyPerformance(days: number = 30): Promise<Strateg
       where: {
         createdAt: { gte: since },
         decision: { in: ['BUY', 'SELL'] },
+        id: { not: '__self_learning_state__' }, // Exclude system records
       },
     })
 

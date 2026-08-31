@@ -69,6 +69,7 @@ function validatePayload(body: Record<string, unknown>): { ok: true; data: Backt
 
 // ---------- Technical helpers ----------
 
+/** O(n) SMA for initial computation — kept for seeding running sums */
 function sma(closes: number[], period: number): number {
   if (closes.length < period) return 0
   let sum = 0
@@ -90,7 +91,31 @@ function atr(bars: { high: number; low: number; close: number }[], period: numbe
   return slice.reduce((a, b) => a + b, 0) / slice.length
 }
 
-// ---------- Backtest engine (SMA Crossover) ----------
+// ---------- Timeframe helpers ----------
+
+/** Check if a timeframe is intraday (M1, M5, M15, M30, H1, H4) */
+function isIntradayTf(tf: string): boolean {
+  const t = tf.toUpperCase()
+  return t === "M1" || t === "M5" || t === "M15" || t === "M30" || t === "H1" || t === "H4"
+}
+
+/** Approximate number of bars per year for Sharpe annualisation */
+function getBarsPerYear(timeframe: string): number {
+  const t = timeframe.toUpperCase()
+  switch (t) {
+    case "M1":  return 390 * 250       // ~97,500 (6.5h * 60min * 250 days)
+    case "M5":  return 78 * 250         // ~19,500
+    case "M15": return 26 * 250         // ~6,500
+    case "M30": return 13 * 250         // ~3,250
+    case "H1":  return 8 * 250          // ~2,000
+    case "H4":  return 2 * 250          // ~500
+    case "D1":  return 252              // trading days
+    case "W1":  return 52
+    default:    return 252
+  }
+}
+
+// ---------- SimTrade interface ----------
 
 interface SimTrade {
   entryBar: number
@@ -104,6 +129,17 @@ interface SimTrade {
   tp: number
 }
 
+// ---------- Pip value for slippage ----------
+
+/** For IDX stocks, 1 tick = Rp1 = 0.01 */
+function getPipValue(): number {
+  return 0.01
+}
+
+// =============================================
+// SMA CROSSOVER ENGINE (with O(1) running SMA, slippage, intraday equity)
+// =============================================
+
 function runSmaCrossover(
   candles: { openTime: Date; high: number; low: number; close: number }[],
   capital: number,
@@ -111,12 +147,16 @@ function runSmaCrossover(
   slAtrMult: number,
   tpAtrMult: number,
   commissionPerLot: number,
+  slippagePips: number,
+  isIntraday: boolean,
 ): { trades: SimTrade[]; equityCurve: { date: string; equity: number }[] } {
   const FAST = 10
   const SLOW = 20
   const ATR_PERIOD = 14
-  const POSITION_PCT = 0.10 // use 10% of equity per trade
+  const POSITION_PCT = 0.10
   const LOT_SIZE = 100
+  const pipValue = getPipValue()
+  const MAX_EQUITY_POINTS = 2000
 
   const trades: SimTrade[] = []
   const equityCurve: { date: string; equity: number }[] = []
@@ -130,12 +170,44 @@ function runSmaCrossover(
   let posShares = 0
   let posCommission = 0
 
+  if (candles.length < SLOW + 1) {
+    return { trades, equityCurve }
+  }
+
+  // ---- Improvement 6: O(1) SMA using running sums ----
+  // Initialize running sums for fast and slow SMAs
+  let fastSum = 0
+  for (let i = 0; i < FAST; i++) fastSum += candles[i].close
+  let slowSum = 0
+  for (let i = 0; i < SLOW; i++) slowSum += candles[i].close
+
   for (let i = SLOW; i < candles.length; i++) {
-    const closes = candles.slice(0, i + 1).map((c) => c.close)
-    const fastNow = sma(closes, FAST)
-    const slowNow = sma(closes, SLOW)
-    const prevFast = sma(closes.slice(0, -1), FAST)
-    const prevSlow = sma(closes.slice(0, -1), SLOW)
+    // Update running sums: add new close, subtract old close
+    const newClose = candles[i].close
+    const oldFastClose = candles[i - FAST].close
+    const oldSlowClose = candles[i - SLOW].close
+    fastSum += newClose - oldFastClose
+    slowSum += newClose - oldSlowClose
+
+    const fastNow = fastSum / FAST
+    const slowNow = slowSum / SLOW
+
+    // For previous values, we need to look back one bar
+    // Compute previous fast/slow from the bar before
+    let prevFast: number
+    let prevSlow: number
+    if (i === SLOW) {
+      // For the first iteration at i=SLOW, compute from the slice ending at i-1
+      const prevCloses = candles.slice(0, i).map((c) => c.close)
+      prevFast = sma(prevCloses, FAST)
+      prevSlow = sma(prevCloses, SLOW)
+    } else {
+      // Previous fast/slow are the running sums from bar i-1
+      const prevFastSum = fastSum - newClose + oldFastClose  // undo current, go back
+      const prevSlowSum = slowSum - newClose + oldSlowClose
+      prevFast = prevFastSum / FAST
+      prevSlow = prevSlowSum / SLOW
+    }
 
     const currentAtr = atr(
       candles.slice(0, i + 1).map((c) => ({ high: c.high, low: c.low, close: c.close })),
@@ -155,10 +227,18 @@ function runSmaCrossover(
       }
 
       if (exitPrice !== null) {
+        // Improvement 5: Slippage on exit — worsen price in unfavorable direction
+        if (posDirection === "LONG") {
+          exitPrice -= slippagePips * pipValue  // sell lower
+        } else {
+          exitPrice += slippagePips * pipValue  // buy higher
+        }
+
         const rawPnl = posDirection === "LONG"
           ? (exitPrice - posEntryPrice) * posShares
           : (posEntryPrice - exitPrice) * posShares
-        const roundTripCommission = posCommission + (commissionPerLot * Math.ceil(posShares / LOT_SIZE))
+        const closeCommission = commissionPerLot * Math.ceil(posShares / LOT_SIZE)
+        const roundTripCommission = posCommission + closeCommission
         const netPnl = rawPnl - roundTripCommission
         equity += netPnl
 
@@ -166,12 +246,12 @@ function runSmaCrossover(
           entryBar: posEntryBar,
           exitBar: i,
           direction: posDirection,
-          entryPrice: posEntryPrice,
-          exitPrice,
-          pnl: netPnl,
-          commission: roundTripCommission,
-          sl: posSl,
-          tp: posTp,
+          entryPrice: Math.round(posEntryPrice * 10000) / 10000,
+          exitPrice: Math.round(exitPrice * 10000) / 10000,
+          pnl: Math.round(netPnl * 100) / 100,
+          commission: Math.round(roundTripCommission * 100) / 100,
+          sl: Math.round(posSl * 10000) / 10000,
+          tp: Math.round(posTp * 10000) / 10000,
         })
 
         inPosition = false
@@ -185,7 +265,15 @@ function runSmaCrossover(
 
       if (buySignal || sellSignal) {
         const dir = buySignal ? "LONG" : "SHORT"
-        const entryPrice = candles[i].close
+        let entryPrice = candles[i].close
+
+        // Improvement 5: Slippage on entry — worsen price in unfavorable direction
+        if (dir === "LONG") {
+          entryPrice += slippagePips * pipValue  // buy higher
+        } else {
+          entryPrice -= slippagePips * pipValue  // sell lower
+        }
+
         const slDist = currentAtr * slAtrMult
         const tpDist = currentAtr * tpAtrMult
 
@@ -207,13 +295,235 @@ function runSmaCrossover(
       }
     }
 
-    // Record equity curve point
+    // ---- Improvement 7: Equity curve recording ----
+    // For intraday: record every bar; for D1/W1: record once per day (dedup by date)
     const dateStr = candles[i].openTime.toISOString().split("T")[0]
-    // Avoid duplicate dates (intraday candles share the same date)
-    const lastDate = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].date : ""
-    if (dateStr !== lastDate) {
-      equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+    if (isIntraday) {
+      // Record every bar, but cap at MAX_EQUITY_POINTS
+      if (equityCurve.length < MAX_EQUITY_POINTS) {
+        // Subsample: if we'd exceed, take every Nth point
+        const remaining = candles.length - SLOW
+        const remainingBars = remaining - i
+        const slotsLeft = MAX_EQUITY_POINTS - equityCurve.length
+        // Simple approach: always push, trim later if needed
+        equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+      }
+    } else {
+      // Daily/weekly: deduplicate by date
+      const lastDate = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].date : ""
+      if (dateStr !== lastDate) {
+        equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+      }
     }
+  }
+
+  // Cap equity curve at MAX_EQUITY_POINTS by subsampling evenly
+  if (equityCurve.length > MAX_EQUITY_POINTS) {
+    const step = equityCurve.length / MAX_EQUITY_POINTS
+    const sampled: { date: string; equity: number }[] = []
+    for (let i = 0; i < MAX_EQUITY_POINTS; i++) {
+      const idx = Math.min(Math.floor(i * step), equityCurve.length - 1)
+      sampled.push(equityCurve[idx])
+    }
+    // Always include the last point
+    if (sampled[sampled.length - 1] !== equityCurve[equityCurve.length - 1]) {
+      sampled[sampled.length - 1] = equityCurve[equityCurve.length - 1]
+    }
+    return { trades, equityCurve: sampled }
+  }
+
+  return { trades, equityCurve }
+}
+
+// =============================================
+// EMA CROSSOVER ENGINE (Improvement 1)
+// =============================================
+
+function runEmaCrossover(
+  candles: { openTime: Date; high: number; low: number; close: number }[],
+  capital: number,
+  _riskPerTradePct: number,
+  slAtrMult: number,
+  tpAtrMult: number,
+  commissionPerLot: number,
+  slippagePips: number,
+  isIntraday: boolean,
+): { trades: SimTrade[]; equityCurve: { date: string; equity: number }[] } {
+  const FAST_PERIOD = 12
+  const SLOW_PERIOD = 26
+  const ATR_PERIOD = 14
+  const POSITION_PCT = 0.10
+  const LOT_SIZE = 100
+  const pipValue = getPipValue()
+  const MAX_EQUITY_POINTS = 2000
+
+  const trades: SimTrade[] = []
+  const equityCurve: { date: string; equity: number }[] = []
+  let equity = capital
+  let inPosition = false
+  let posDirection: "LONG" | "SHORT" = "LONG"
+  let posEntryBar = 0
+   let posEntryPrice = 0
+  let posSl = 0
+  let posTp = 0
+  let posShares = 0
+  let posCommission = 0
+
+  if (candles.length < SLOW_PERIOD + 1) {
+    return { trades, equityCurve }
+  }
+
+  // EMA calculation: EMA_today = close * k + EMA_yesterday * (1 - k), where k = 2 / (period + 1)
+  const fastK = 2 / (FAST_PERIOD + 1)
+  const slowK = 2 / (SLOW_PERIOD + 1)
+
+  // Seed EMA with SMA of the first `period` closes
+  let fastEma = 0
+  for (let i = 0; i < FAST_PERIOD; i++) fastEma += candles[i].close
+  fastEma /= FAST_PERIOD
+
+  let slowEma = 0
+  for (let i = 0; i < SLOW_PERIOD; i++) slowEma += candles[i].close
+  slowEma /= SLOW_PERIOD
+
+  // Track previous EMA values for crossover detection
+  let prevFastEma = fastEma
+  let prevSlowEma = slowEma
+
+  // We start generating signals from SLOW_PERIOD onwards (need both EMAs seeded)
+  // First, advance EMAs from FAST_PERIOD to SLOW_PERIOD to get proper slowEma
+  for (let i = FAST_PERIOD; i < SLOW_PERIOD; i++) {
+    fastEma = candles[i].close * fastK + fastEma * (1 - fastK)
+  }
+  // At i = SLOW_PERIOD, slowEma is already seeded from SMA, but we need to advance it too
+  // Actually, let's recompute: seed both from SMA, then iterate from SLOW_PERIOD
+  fastEma = 0
+  for (let i = 0; i < FAST_PERIOD; i++) fastEma += candles[i].close
+  fastEma /= FAST_PERIOD
+
+  slowEma = 0
+  for (let i = 0; i < SLOW_PERIOD; i++) slowEma += candles[i].close
+  slowEma /= SLOW_PERIOD
+
+  // Now iterate: at bar i, compute EMA, then check signal
+  for (let i = SLOW_PERIOD; i < candles.length; i++) {
+    prevFastEma = fastEma
+    prevSlowEma = slowEma
+
+    // Update EMAs with current close
+    fastEma = candles[i].close * fastK + fastEma * (1 - fastK)
+    slowEma = candles[i].close * slowK + slowEma * (1 - slowK)
+
+    const currentAtr = atr(
+      candles.slice(0, i + 1).map((c) => ({ high: c.high, low: c.low, close: c.close })),
+      ATR_PERIOD,
+    )
+
+    // Check exit for open position
+    if (inPosition) {
+      const bar = candles[i]
+      let exitPrice: number | null = null
+      if (posDirection === "LONG") {
+        if (bar.low <= posSl) exitPrice = posSl
+        else if (bar.high >= posTp) exitPrice = posTp
+      } else {
+        if (bar.high >= posSl) exitPrice = posSl
+        else if (bar.low <= posTp) exitPrice = posTp
+      }
+
+      if (exitPrice !== null) {
+        // Slippage on exit
+        if (posDirection === "LONG") {
+          exitPrice -= slippagePips * pipValue
+        } else {
+          exitPrice += slippagePips * pipValue
+        }
+
+        const rawPnl = posDirection === "LONG"
+          ? (exitPrice - posEntryPrice) * posShares
+          : (posEntryPrice - exitPrice) * posShares
+        const closeCommission = commissionPerLot * Math.ceil(posShares / LOT_SIZE)
+        const roundTripCommission = posCommission + closeCommission
+        const netPnl = rawPnl - roundTripCommission
+        equity += netPnl
+
+        trades.push({
+          entryBar: posEntryBar,
+          exitBar: i,
+          direction: posDirection,
+          entryPrice: Math.round(posEntryPrice * 10000) / 10000,
+          exitPrice: Math.round(exitPrice * 10000) / 10000,
+          pnl: Math.round(netPnl * 100) / 100,
+          commission: Math.round(roundTripCommission * 100) / 100,
+          sl: Math.round(posSl * 10000) / 10000,
+          tp: Math.round(posTp * 10000) / 10000,
+        })
+
+        inPosition = false
+      }
+    }
+
+    // Check entry signal
+    if (!inPosition && currentAtr > 0) {
+      const buySignal = prevFastEma <= prevSlowEma && fastEma > slowEma
+      const sellSignal = prevFastEma >= prevSlowEma && fastEma < slowEma
+
+      if (buySignal || sellSignal) {
+        const dir = buySignal ? "LONG" : "SHORT"
+        let entryPrice = candles[i].close
+
+        // Slippage on entry
+        if (dir === "LONG") {
+          entryPrice += slippagePips * pipValue
+        } else {
+          entryPrice -= slippagePips * pipValue
+        }
+
+        const slDist = currentAtr * slAtrMult
+        const tpDist = currentAtr * tpAtrMult
+
+        const sl = dir === "LONG" ? entryPrice - slDist : entryPrice + slDist
+        const tp = dir === "LONG" ? entryPrice + tpDist : entryPrice - tpDist
+
+        const investAmount = equity * POSITION_PCT
+        const shares = Math.max(1, Math.floor(investAmount / entryPrice))
+        const openCommission = commissionPerLot * Math.ceil(shares / LOT_SIZE)
+
+        posDirection = dir
+        posEntryBar = i
+        posEntryPrice = entryPrice
+        posSl = sl
+        posTp = tp
+        posShares = shares
+        posCommission = openCommission
+        inPosition = true
+      }
+    }
+
+    // Equity curve recording
+    const dateStr = candles[i].openTime.toISOString().split("T")[0]
+    if (isIntraday) {
+      equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+    } else {
+      const lastDate = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].date : ""
+      if (dateStr !== lastDate) {
+        equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+      }
+    }
+  }
+
+  // Cap equity curve at MAX_EQUITY_POINTS
+  if (equityCurve.length > MAX_EQUITY_POINTS) {
+    const step = equityCurve.length / MAX_EQUITY_POINTS
+    const sampled: { date: string; equity: number }[] = []
+    for (let i = 0; i < MAX_EQUITY_POINTS; i++) {
+      const idx = Math.min(Math.floor(i * step), equityCurve.length - 1)
+      sampled.push(equityCurve[idx])
+    }
+    if (sampled[sampled.length - 1] !== equityCurve[equityCurve.length - 1]) {
+      sampled[sampled.length - 1] = equityCurve[equityCurve.length - 1]
+    }
+    return { trades, equityCurve: sampled }
   }
 
   return { trades, equityCurve }
@@ -221,7 +531,12 @@ function runSmaCrossover(
 
 // ---------- Metrics computation ----------
 
-function computeMetrics(trades: SimTrade[], capital: number) {
+function computeMetrics(
+  trades: SimTrade[],
+  capital: number,
+  equityCurve: { date: string; equity: number }[],
+  timeframe: string,
+) {
   const totalTrades = trades.length
   const wins = trades.filter((t) => t.pnl > 0)
   const losses = trades.filter((t) => t.pnl <= 0)
@@ -246,17 +561,15 @@ function computeMetrics(trades: SimTrade[], capital: number) {
   // Max drawdown from equity curve
   let peak = capital
   let maxDd = 0
-  let runningEquity = capital
-  for (const t of trades) {
-    runningEquity += t.pnl
-    if (runningEquity > peak) peak = runningEquity
-    const dd = peak > 0 ? ((peak - runningEquity) / peak) * 100 : 0
+  for (const pt of equityCurve) {
+    if (pt.equity > peak) peak = pt.equity
+    const dd = peak > 0 ? ((peak - pt.equity) / peak) * 100 : 0
     if (dd > maxDd) maxDd = dd
   }
   const maxDrawdown = Math.round(maxDd * 100) / 100
 
-  // Sharpe ratio (annualised, assuming daily bars)
-  if (trades.length < 2) {
+  // Improvement 4: Sharpe ratio from equity curve, annualized by timeframe
+  if (equityCurve.length < 2) {
     return {
       totalTrades, winTrades, lossTrades, winRate,
       avgWin, avgLoss, profitFactor, totalPnl,
@@ -264,15 +577,21 @@ function computeMetrics(trades: SimTrade[], capital: number) {
     }
   }
 
-  // Build daily returns array from equity curve
-  const dailyEquity = [capital]
-  for (const t of trades) {
-    dailyEquity.push(dailyEquity[dailyEquity.length - 1] + t.pnl)
-  }
+  // Build returns array from equity curve points
   const returns: number[] = []
-  for (let i = 1; i < dailyEquity.length; i++) {
-    if (dailyEquity[i - 1] !== 0) {
-      returns.push((dailyEquity[i] - dailyEquity[i - 1]) / dailyEquity[i - 1])
+  for (let i = 1; i < equityCurve.length; i++) {
+    const prev = equityCurve[i - 1].equity
+    const curr = equityCurve[i].equity
+    if (prev > 0) {
+      returns.push((curr - prev) / prev)
+    }
+  }
+
+  if (returns.length < 2) {
+    return {
+      totalTrades, winTrades, lossTrades, winRate,
+      avgWin, avgLoss, profitFactor, totalPnl,
+      finalCapital, maxDrawdown, sharpeRatio: 0,
     }
   }
 
@@ -280,8 +599,11 @@ function computeMetrics(trades: SimTrade[], capital: number) {
   const stdReturn = Math.sqrt(
     returns.reduce((s, r) => s + (r - avgReturn) ** 2, 0) / returns.length,
   )
+
+  // Annualize based on bars per year for this timeframe
+  const barsPerYear = getBarsPerYear(timeframe)
   const sharpeRatio = stdReturn > 0
-    ? Math.round((avgReturn / stdReturn) * Math.sqrt(252) * 100) / 100
+    ? Math.round((avgReturn / stdReturn) * Math.sqrt(barsPerYear) * 100) / 100
     : 0
 
   return {
@@ -293,7 +615,15 @@ function computeMetrics(trades: SimTrade[], capital: number) {
 
 // ---------- Mock fallback ----------
 
-function generateMockResult(symbol: string, strategy: string, timeframe: string, capital: number, start: Date, end: Date, config: Record<string, unknown>) {
+function generateMockResult(
+  symbol: string,
+  strategy: string,
+  timeframe: string,
+  capital: number,
+  start: Date,
+  end: Date,
+  config: Record<string, unknown>,
+) {
   const totalTrades = Math.floor(80 + Math.random() * 220)
   const winRate = Math.round((42 + Math.random() * 23) * 100) / 100
   const winTrades = Math.round(totalTrades * (winRate / 100))
@@ -324,7 +654,8 @@ function generateMockResult(symbol: string, strategy: string, timeframe: string,
     totalTrades, winTrades, lossTrades, winRate,
     avgWin, avgLoss, profitFactor, totalPnl: netProfit,
     finalCapital, maxDrawdown, sharpeRatio, equityCurve,
-    config: JSON.stringify(config ?? {}),
+    config: JSON.stringify({ ...config, engine: "MOCK", reason: `Insufficient candle data (mock generated)` }),
+    mockWarning: true,
   }
 }
 
@@ -368,6 +699,8 @@ export async function POST(request: NextRequest) {
     const slAtrMult = (config?.slAtrMult as number) ?? 2
     const tpAtrMult = (config?.tpAtrMult as number) ?? 3
     const commissionPerLot = 1 // $1/lot per side per FINEX specs
+    const slippagePips = (config?.slippagePips as number) ?? 0.5 // 0.5 pips per FINEX specs
+    const isIntraday = isIntradayTf(dbTimeframe)
 
     // ---------- Query real candle data ----------
     const candles = await db.candleData.findMany({
@@ -381,36 +714,64 @@ export async function POST(request: NextRequest) {
 
     let metrics: ReturnType<typeof computeMetrics>
     let equityCurve: { date: string; equity: number }[] = []
+    let simulatedTrades: SimTrade[] = []
     let usedMock = false
+    let mockWarning = false
     let configStr = JSON.stringify(config ?? {})
+    let engineName = ""
 
     if (candles.length >= 25) {
-      // Run real backtest engine
-      const { trades, equityCurve: ec } = runSmaCrossover(
-        candles,
-        capital,
-        riskPerTrade,
-        slAtrMult,
-        tpAtrMult,
-        commissionPerLot,
-      )
-      equityCurve = ec
-      metrics = computeMetrics(trades, capital)
-      configStr = JSON.stringify({
-        ...config,
-        engine: "SMA_CROSSOVER",
-        fastPeriod: 10,
-        slowPeriod: 20,
-        atrPeriod: 14,
-        slAtrMult,
-        tpAtrMult,
-        commissionPerLot,
-        candleCount: candles.length,
-        simulatedTrades: trades.length,
-      })
+      // ---- Improvement 2: Strategy dispatch ----
+      let engineResult: { trades: SimTrade[]; equityCurve: { date: string; equity: number }[] }
+
+      if (strategy === "EMA Crossover") {
+        // Improvement 1: EMA Crossover engine
+        engineResult = runEmaCrossover(
+          candles, capital, riskPerTrade, slAtrMult, tpAtrMult,
+          commissionPerLot, slippagePips, isIntraday,
+        )
+        engineName = "EMA_CROSSOVER"
+        configStr = JSON.stringify({
+          ...config, engine: engineName,
+          fastPeriod: 12, slowPeriod: 26, atrPeriod: 14,
+          slAtrMult, tpAtrMult, commissionPerLot, slippagePips,
+          candleCount: candles.length,
+        })
+      } else if (strategy === "SMA Crossover" || strategy === "Moving Average Ribbon") {
+        engineResult = runSmaCrossover(
+          candles, capital, riskPerTrade, slAtrMult, tpAtrMult,
+          commissionPerLot, slippagePips, isIntraday,
+        )
+        engineName = "SMA_CROSSOVER"
+        configStr = JSON.stringify({
+          ...config, engine: engineName,
+          fastPeriod: 10, slowPeriod: 20, atrPeriod: 14,
+          slAtrMult, tpAtrMult, commissionPerLot, slippagePips,
+          candleCount: candles.length,
+        })
+      } else {
+        // Fallback: run SMA Crossover but mark as fallback
+        engineResult = runSmaCrossover(
+          candles, capital, riskPerTrade, slAtrMult, tpAtrMult,
+          commissionPerLot, slippagePips, isIntraday,
+        )
+        engineName = "SMA_CROSSOVER_FALLBACK"
+        configStr = JSON.stringify({
+          ...config, engine: engineName,
+          requestedStrategy: strategy,
+          fastPeriod: 10, slowPeriod: 20, atrPeriod: 14,
+          slAtrMult, tpAtrMult, commissionPerLot, slippagePips,
+          candleCount: candles.length,
+        })
+      }
+
+      simulatedTrades = engineResult.trades
+      equityCurve = engineResult.equityCurve
+      metrics = computeMetrics(simulatedTrades, capital, equityCurve, dbTimeframe)
     } else {
       // Fallback to mock when insufficient data
       usedMock = true
+      mockWarning = true
       const mock = generateMockResult(symbol, strategy, timeframe, capital, start, end, config ?? {})
       metrics = {
         totalTrades: mock.totalTrades,
@@ -426,7 +787,7 @@ export async function POST(request: NextRequest) {
         sharpeRatio: mock.sharpeRatio,
       }
       equityCurve = mock.equityCurve
-      configStr = JSON.stringify({ ...config, engine: "MOCK", reason: `Insufficient candle data (${candles.length} bars)` })
+      configStr = JSON.stringify({ ...config, engine: "MOCK", reason: `Insufficient candle data (${candles.length} bars, need >= 25)` })
     }
 
     const totalReturn = capital > 0
@@ -457,8 +818,20 @@ export async function POST(request: NextRequest) {
       },
     })
 
+    // Improvement 3: Return simulated trades in API response
+    // Improvement: Mark mock results clearly
     return NextResponse.json(
-      { success: true, data: { ...result, equityCurve, totalReturn } },
+      {
+        success: true,
+        data: {
+          ...result,
+          equityCurve,
+          totalReturn,
+          simulatedTrades,
+          mockWarning,
+          engine: usedMock ? "MOCK" : engineName,
+        },
+      },
       { status: 201 },
     )
   } catch (error) {

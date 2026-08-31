@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { makeDecision, makeBatchDecision, getDecisionHistory, seedDecisionConfig, enableAdaptiveLearning, disableAdaptiveLearning } from '@/lib/ai-decision-engine'
+import { makeDecision, makeBatchDecision, getDecisionHistory, seedDecisionConfig } from '@/lib/ai-decision-engine'
 import logger from '@/lib/trading-logger'
 
 /**
@@ -14,20 +14,13 @@ export async function POST(request: Request) {
   try {
     await seedDecisionConfig()
 
-    // Enable/disable adaptive learning based on query param
-    if (useLearning) {
-      enableAdaptiveLearning()
-    } else {
-      disableAdaptiveLearning()
-    }
-
     const body = await request.json().catch(() => ({}))
     const { symbol, timeframe, symbols } = body
 
     try {
       if (symbols && Array.isArray(symbols) && symbols.length > 0) {
-        // Batch decision
-        const decisions = await makeBatchDecision(symbols, timeframe)
+        // Batch decision — pass useAdaptiveLearning through
+        const decisions = await makeBatchDecision(symbols, timeframe, useLearning)
         logger.info('AI_ENGINE', `Batch decision: ${decisions.length} symbols analyzed`, {
           metadata: {
             symbols: decisions.map(d => `${d.symbol}=${d.decision}(${d.confidence})`).join(', '),
@@ -41,7 +34,8 @@ export async function POST(request: Request) {
         return NextResponse.json({ success: false, error: 'symbol is required' }, { status: 400 })
       }
 
-      const decision = await makeDecision(symbol, timeframe)
+      // Single decision — pass useAdaptiveLearning through
+      const decision = await makeDecision(symbol, timeframe, undefined, useLearning)
       logger.info('AI_ENGINE', `Decision for ${symbol}: ${decision.decision} (confidence: ${decision.confidence})`, {
         symbol,
         metadata: {
@@ -54,12 +48,12 @@ export async function POST(request: Request) {
       })
 
       return NextResponse.json({ success: true, data: decision, meta: { adaptiveLearning: useLearning } })
-    } finally {
-      // Always reset the flag after the request to avoid leaking state
-      disableAdaptiveLearning()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Unknown error'
+      logger.error('AI_ENGINE', `AI decision failed: ${msg}`)
+      return NextResponse.json({ success: false, error: msg }, { status: 500 })
     }
   } catch (error) {
-    disableAdaptiveLearning()
     const msg = error instanceof Error ? error.message : 'Unknown error'
     logger.error('AI_ENGINE', `AI decision failed: ${msg}`)
     return NextResponse.json({ success: false, error: msg }, { status: 500 })

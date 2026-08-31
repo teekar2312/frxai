@@ -28,7 +28,8 @@ import {
 } from './sentiment-filter'
 import type { SentimentFilterResult, SentimentTrend } from './sentiment-filter'
 // Fix #17: Integrate with indicator-pool for real technical data
-import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic } from './indicator-pool'
+// Fix 1 (Task 7): Added missing OHLCVBar type import
+import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic, type OHLCVBar } from './indicator-pool'
 
 // ============================================================================
 // SECTION 1: TYPES & INTERFACES
@@ -64,6 +65,8 @@ export interface TechnicalFactors {
   stochasticSignal: 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL'
   overallScore: number
   signals: IndicatorSignal[]
+  /** Fix 3 (Task 7): Real ATR value from indicator-pool, used for SL/TP calculation */
+  atrValue: number | null
 }
 
 /** News impact factors for a symbol */
@@ -158,6 +161,8 @@ const SL_MULTIPLIER = 1.0
 const TP_MULTIPLIER = 1.5
 const DEFAULT_ATR_PCT = 0.015 // 1.5% estimated ATR for SL/TP calc
 const MATCHING_WINDOW_MS = 5 * 60 * 1000 // 5 minutes to match decision to trade
+const ESTIMATED_ACCOUNT_VALUE = 100_000_000 // 100M IDR estimate
+const RISK_PER_TRADE_PCT = 0.01 // 1% risk per trade
 
 // ============================================================================
 // SECTION 3: HELPERS
@@ -233,6 +238,7 @@ function defaultTechnicalFactors(): TechnicalFactors {
     stochasticSignal: 'NEUTRAL',
     overallScore: 0,
     signals: [],
+    atrValue: null, // Fix 3 (Task 7): default to null
   }
 }
 
@@ -366,10 +372,11 @@ function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: s
     factors.adxValue = Math.round(adx.adx)
   }
 
-  // --- ATR for support/resistance refinement ---
+  // --- ATR ---
+  // Fix 3 (Task 7): Store real ATR value for SL/TP calculation
   const atr = calculateATR(bars, 14)
-  if (atr && boll) {
-    // ATR is already set via bollinger support/resistance
+  if (atr !== null) {
+    factors.atrValue = atr
   }
 
   // --- Stochastic ---
@@ -843,6 +850,16 @@ function generateReasoning(
     } else {
       parts.push('Insufficient signal strength to generate actionable decision.')
     }
+  } else if (decision === 'REDUCE') {
+    // Fix 4 (Task 7): REDUCE reasoning
+    parts.push(
+      `REDUCE signal: risk score ${risk.riskScore}/10 with ${risk.openPositions} open positions and ${risk.consecutiveLosses} consecutive losses.`,
+    )
+  } else if (decision === 'CLOSE_ALL') {
+    // Fix 4 (Task 7): CLOSE_ALL reasoning
+    parts.push(
+      `CLOSE_ALL signal: extreme risk score of ${risk.riskScore}/10. All positions should be closed immediately.`,
+    )
   } else {
     parts.push(
       `HOLD signal with composite score ${compositeScore.toFixed(1)} — no decisive directional bias detected.`,
@@ -899,11 +916,13 @@ function generateReasoning(
  *
  * @param symbol - Ticker symbol to decide on
  * @param timeframe - Chart timeframe (default 'H1')
+ * @param precomputedRiskFactors - Optional pre-computed risk factors (Fix 5: for batch optimization)
  * @returns Complete AiDecision with all factors and recommendations
  */
 export async function makeDecision(
   symbol: string,
   timeframe: string = DEFAULT_TIMEFRAME,
+  precomputedRiskFactors?: RiskFactors,
 ): Promise<AiDecision> {
   const now = new Date()
 
@@ -965,11 +984,12 @@ export async function makeDecision(
 
     // --- Step 3: Run all analyzers in parallel ---
     // Fix #17: Use async technical analysis (real data from indicator-pool)
+    // Fix 5 (Task 7): Use pre-computed risk factors if provided (batch optimization)
     const [technicalFactors, newsFactors, sentimentFactors, riskFactors] = await Promise.all([
       analyzeTechnicalFactorsAsync(symbol, timeframe),
       analyzeNewsFactors(symbol),
       analyzeSentimentFactors(symbol),
-      analyzeRiskFactors(),
+      precomputedRiskFactors ?? analyzeRiskFactors(),
     ])
 
     // Fix #22: Check market hours before making decisions
@@ -1021,15 +1041,20 @@ export async function makeDecision(
     const agreementRatio = signalAgreement / totalSignals
     let confidence = Math.round(mapRange(Math.abs(compositeScore), 0, 100, 20, 90) * (0.5 + agreementRatio * 0.5))
 
-    // Fix #24: Adjust confidence based on sentiment trend direction
+    // Fix #24 / Fix 2 (Task 7): Adjust confidence based on sentiment trend direction
+    // Sentiment should SUPPORT the signal direction, not contradict it
     const sentTrendDir = (sentimentFactors as Record<string, unknown>).trendDirection as string | undefined
     if (sentTrendDir === 'DECLINING' && compositeScore > 0) {
+      // Declining sentiment contradicts bullish signal → reduce confidence
       confidence = Math.max(20, Math.round(confidence * 0.85))
     } else if (sentTrendDir === 'IMPROVING' && compositeScore > 0) {
+      // Improving sentiment supports bullish signal → boost confidence
       confidence = Math.min(95, Math.round(confidence * 1.1))
     } else if (sentTrendDir === 'IMPROVING' && compositeScore < 0) {
-      confidence = Math.min(95, Math.round(confidence * 1.1))
+      // Improving sentiment contradicts bearish signal → reduce confidence
+      confidence = Math.max(20, Math.round(confidence * 0.85))
     } else if (sentTrendDir === 'DECLINING' && compositeScore < 0) {
+      // Declining sentiment supports bearish signal → boost confidence
       confidence = Math.min(95, Math.round(confidence * 1.1))
     }
 
@@ -1087,17 +1112,35 @@ export async function makeDecision(
       decision = 'SKIP'
     }
 
+    // Fix 4 (Task 7): Override for extreme/elevated risk → REDUCE or CLOSE_ALL
+    // Override: extreme risk → CLOSE_ALL if there are open positions
+    if (riskFactors.riskScore >= 9 && riskFactors.openPositions > 0) {
+      decision = 'CLOSE_ALL'
+    }
+    // Override: elevated risk with open positions → REDUCE
+    else if (riskFactors.riskScore >= 7 && riskFactors.openPositions > 2) {
+      decision = 'REDUCE'
+    }
+    // Override: consecutive losses → REDUCE position sizing
+    else if (riskFactors.consecutiveLosses >= 4 && (decision === 'BUY' || decision === 'SELL')) {
+      decision = 'REDUCE'
+    }
+
     // --- Step 8: Calculate suggested SL/TP ---
-    const atrEstimate = DEFAULT_ATR_PCT // 1.5% estimated ATR
+    // Fix 3 (Task 7): Use real ATR if available, otherwise fall back to estimate
+    const midPrice = (technicalFactors.supportLevel + technicalFactors.resistanceLevel) / 2
+    const realAtr = technicalFactors.atrValue
+    const atrPct = realAtr && realAtr > 0
+      ? realAtr / (midPrice || 1)
+      : DEFAULT_ATR_PCT
+
     let suggestedSl = 0
     let suggestedTp = 0
     let suggestedLotSize = 0.01
 
     if (decision === 'BUY' || decision === 'SELL') {
-      // Estimate entry price from support/resistance midpoint
-      const midPrice = (technicalFactors.supportLevel + technicalFactors.resistanceLevel) / 2
-      const slDistance = midPrice * atrEstimate * SL_MULTIPLIER
-      const tpDistance = midPrice * atrEstimate * TP_MULTIPLIER
+      const slDistance = midPrice * atrPct * SL_MULTIPLIER
+      const tpDistance = midPrice * atrPct * TP_MULTIPLIER
 
       if (decision === 'BUY') {
         suggestedSl = Math.round((midPrice - slDistance) * 100) / 100
@@ -1107,9 +1150,22 @@ export async function makeDecision(
         suggestedTp = Math.round((midPrice - tpDistance) * 100) / 100
       }
 
-      // Lot size based on confidence (higher confidence → larger size)
-      suggestedLotSize = Math.round(confidence / 100 * 10) / 100 // 0.01 to 0.10
-      suggestedLotSize = Math.max(0.01, suggestedLotSize)
+      // Fix 6 (Task 7): Risk-based lot sizing: risk 1% of estimated account on this trade
+      const riskAmount = ESTIMATED_ACCOUNT_VALUE * RISK_PER_TRADE_PCT
+
+      if (suggestedSl > 0 && midPrice > 0) {
+        const slDistanceVal = Math.abs(midPrice - suggestedSl)
+        const slPct = slDistanceVal / midPrice
+        if (slPct > 0) {
+          // lotSize = riskAmount / (slDistance * 100)
+          const rawLotSize = riskAmount / (slDistanceVal * 100)
+          // Scale by confidence (0.5x to 1.0x)
+          const confidenceScale = 0.5 + (confidence / 100) * 0.5
+          suggestedLotSize = Math.round(rawLotSize * confidenceScale * 100) / 100
+        }
+      }
+      // Clamp to reasonable range
+      suggestedLotSize = clamp(suggestedLotSize, 0.01, 5.0)
     }
 
     // --- Step 9: Build signal sources ---
@@ -1238,6 +1294,9 @@ async function logDecisionToDb(
  * confidence (descending), and respects the maxPositionsPerDecision
  * configuration limit — only returning the top N actionable decisions.
  *
+ * Fix 5 (Task 7): Risk factors are computed ONCE and shared across all symbols,
+ * since risk factors are portfolio-level (same for all symbols).
+ *
  * @param symbols - Array of ticker symbols to analyze
  * @param timeframe - Chart timeframe (default 'H1')
  * @returns Array of AiDecision sorted by confidence descending
@@ -1249,11 +1308,14 @@ export async function makeBatchDecision(
   try {
     const config = await getDecisionConfig()
 
+    // Fix 5 (Task 7): Compute shared risk factors ONCE for the entire batch
+    const sharedRiskFactors = await analyzeRiskFactors()
+
     // Process all symbols (sequentially to avoid DB contention)
     const decisions: AiDecision[] = []
     for (const symbol of symbols) {
       try {
-        const decision = await makeDecision(symbol, timeframe)
+        const decision = await makeDecision(symbol, timeframe, sharedRiskFactors)
         decisions.push(decision)
       } catch (err) {
         logger.error('AI_ENGINE', `Batch decision failed for ${symbol}`, {

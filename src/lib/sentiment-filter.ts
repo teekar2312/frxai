@@ -297,8 +297,45 @@ const MULTI_WORD_PHRASES = Object.keys(SENTIMENT_LEXICON)
   .sort((a, b) => b.length - a.length)
 
 // ============================================================================
+// CONSTANTS
+// ============================================================================
+
+/** Articles lose half their weight every 6 hours (exponential decay) */
+const RECENCY_HALF_LIFE_HOURS = 6
+
+// In-memory cache for recent sentiment snapshots (avoids repeated DB scans)
+const sentimentCache = new Map<string, { data: Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>; cachedAt: number }>()
+const SENTIMENT_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes (shorter than DB stale threshold of 30 min)
+
+// ============================================================================
 // HELPERS
 // ============================================================================
+
+/**
+ * Get cached sentiment snapshot for a symbol (in-memory, avoids repeated DB scans).
+ */
+function getCachedSentiment(symbol: string) {
+  const cached = sentimentCache.get(symbol)
+  if (!cached) return null
+  if (Date.now() - cached.cachedAt > SENTIMENT_CACHE_TTL_MS) {
+    sentimentCache.delete(symbol)
+    return null
+  }
+  return cached.data
+}
+
+/**
+ * Store a sentiment snapshot in the in-memory cache.
+ * Evicts the oldest entry if cache grows beyond 50 entries.
+ */
+function setCachedSentiment(symbol: string, data: NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>) {
+  sentimentCache.set(symbol, { data, cachedAt: Date.now() })
+  // Evict oldest if cache grows too large
+  if (sentimentCache.size > 50) {
+    const oldestKey = sentimentCache.keys().next().value
+    if (oldestKey) sentimentCache.delete(oldestKey)
+  }
+}
 
 /**
  * Tokenize text into lowercase words, filtering stop words.
@@ -663,8 +700,6 @@ export async function computeSymbolSentiment(symbol: string) {
   let neutralCount = 0
   let totalScore = 0
   let totalWeight = 0
-  const allTopPositive: Array<{ word: string; count: number }> = []
-  const allTopNegative: Array<{ word: string; count: number }> = []
   const positiveWordCount = new Map<string, number>()
   const negativeWordCount = new Map<string, number>()
 
@@ -672,19 +707,19 @@ export async function computeSymbolSentiment(symbol: string) {
     let sentimentScore = article.sentimentScore as number
     let sentimentLabel: string = article.sentiment as string
 
+    // Always extract top words (even for already-scored articles)
+    const wordResult = scoreArticle({ title: article.title, content: article.content as string | null })
+    for (const w of wordResult.topPositive) {
+      positiveWordCount.set(w, (positiveWordCount.get(w) ?? 0) + 1)
+    }
+    for (const w of wordResult.topNegative) {
+      negativeWordCount.set(w, (negativeWordCount.get(w) ?? 0) + 1)
+    }
+
     // Score if not already scored (sentimentScore === 0)
     if (sentimentScore === 0 || !sentimentScore) {
-      const result = scoreArticle({ title: article.title, content: article.content as string | null })
-      sentimentScore = result.score
-      sentimentLabel = result.label
-
-      // Collect top words from scoring (Fix #9: populate word tracking)
-      for (const w of result.topPositive) {
-        positiveWordCount.set(w, (positiveWordCount.get(w) ?? 0) + 1)
-      }
-      for (const w of result.topNegative) {
-        negativeWordCount.set(w, (negativeWordCount.get(w) ?? 0) + 1)
-      }
+      sentimentScore = wordResult.score
+      sentimentLabel = wordResult.label
 
       // Persist score to article
       try {
@@ -703,10 +738,10 @@ export async function computeSymbolSentiment(symbol: string) {
       }
     }
 
-    // Weight: more recent articles get higher weight
+    // Weight: more recent articles get higher weight (exponential decay)
     const pubTime = article.publishedAt ?? article.createdAt
     const ageHours = Math.max((Date.now() - pubTime.getTime()) / (1000 * 60 * 60), 0.5)
-    const recencyWeight = 1 / ageHours
+    const recencyWeight = Math.pow(0.5, ageHours / RECENCY_HALF_LIFE_HOURS)
 
     totalScore += sentimentScore * recencyWeight
     totalWeight += recencyWeight
@@ -791,6 +826,9 @@ export async function computeSymbolSentiment(symbol: string) {
       metadata: { overallScore: clampedScore, regime, confidence, articleCount: articles.length },
     })
 
+    // Populate in-memory cache after successful DB save
+    setCachedSentiment(symbol, snapshot)
+
     return snapshot
   } catch (err) {
     logger.error("AI_ENGINE", `Failed to save sentiment snapshot for ${symbol}`, {
@@ -798,7 +836,7 @@ export async function computeSymbolSentiment(symbol: string) {
       symbol,
     })
     // Return in-memory snapshot on DB failure
-    return {
+    const fallbackSnapshot = {
       id: "",
       symbol,
       overallScore: clampedScore,
@@ -815,6 +853,9 @@ export async function computeSymbolSentiment(symbol: string) {
       timestamp: new Date(),
       createdAt: new Date(),
     }
+    // Still cache the fallback so we don't recompute immediately
+    setCachedSentiment(symbol, fallbackSnapshot as NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>)
+    return fallbackSnapshot
   }
 }
 
@@ -872,19 +913,19 @@ export async function computeMarketSentiment() {
     let sentimentScore = article.sentimentScore as number
     let sentimentLabel: string = article.sentiment as string
 
+    // Always extract top words (even for already-scored articles)
+    const wordResult = scoreArticle({ title: article.title, content: article.content as string | null })
+    for (const w of wordResult.topPositive) {
+      marketPositiveWords.set(w, (marketPositiveWords.get(w) ?? 0) + 1)
+    }
+    for (const w of wordResult.topNegative) {
+      marketNegativeWords.set(w, (marketNegativeWords.get(w) ?? 0) + 1)
+    }
+
     // Score if not already scored
     if (sentimentScore === 0 || !sentimentScore) {
-      const result = scoreArticle({ title: article.title, content: article.content as string | null })
-      sentimentScore = result.score
-      sentimentLabel = result.label
-
-      // Track top words for market sentiment (Fix #9)
-      for (const w of result.topPositive) {
-        marketPositiveWords.set(w, (marketPositiveWords.get(w) ?? 0) + 1)
-      }
-      for (const w of result.topNegative) {
-        marketNegativeWords.set(w, (marketNegativeWords.get(w) ?? 0) + 1)
-      }
+      sentimentScore = wordResult.score
+      sentimentLabel = wordResult.label
 
       try {
         await db.newsArticle.update({
@@ -901,10 +942,10 @@ export async function computeMarketSentiment() {
       }
     }
 
-    // Recency weight
+    // Recency weight (exponential decay)
     const pubTime = article.publishedAt ?? article.createdAt
     const ageHours = Math.max((Date.now() - pubTime.getTime()) / (1000 * 60 * 60), 0.5)
-    const recencyWeight = 1 / ageHours
+    const recencyWeight = Math.pow(0.5, ageHours / RECENCY_HALF_LIFE_HOURS)
 
     totalScore += sentimentScore * recencyWeight
     totalWeight += recencyWeight
@@ -940,38 +981,39 @@ export async function computeMarketSentiment() {
     sectorBreakdown[sector] = Math.round(data.totalScore / data.count)
   }
 
+  // Build top words from accumulated counts (Fix #9: was always empty)
+  const marketTopPositive = Array.from(marketPositiveWords.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([word]) => word)
+  const marketTopNegative = Array.from(marketNegativeWords.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([word]) => word)
+
+  // Fix #11: Prune old MARKET snapshots
   try {
-    // Fix #9: Build top words from accumulated counts
-    const marketTopPositive = Array.from(marketPositiveWords.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([word]) => word)
-    const marketTopNegative = Array.from(marketNegativeWords.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([word]) => word)
-
-    // Fix #11: Prune old MARKET snapshots
-    try {
-      const maxSnapshots = 50
-      const existingCount = await db.sentimentSnapshot.count({ where: { symbol: "MARKET" } })
-      if (existingCount >= maxSnapshots) {
-        const toDelete = existingCount - maxSnapshots + 1
-        const oldest = await db.sentimentSnapshot.findMany({
-          where: { symbol: "MARKET" },
-          orderBy: { timestamp: "asc" },
-          take: toDelete,
+    const maxSnapshots = 50
+    const existingCount = await db.sentimentSnapshot.count({ where: { symbol: "MARKET" } })
+    if (existingCount >= maxSnapshots) {
+      const toDelete = existingCount - maxSnapshots + 1
+      const oldest = await db.sentimentSnapshot.findMany({
+        where: { symbol: "MARKET" },
+        orderBy: { timestamp: "asc" },
+        take: toDelete,
+      })
+      if (oldest.length > 0) {
+        await db.sentimentSnapshot.deleteMany({
+          where: { id: { in: oldest.map((s) => s.id) } },
         })
-        if (oldest.length > 0) {
-          await db.sentimentSnapshot.deleteMany({
-            where: { id: { in: oldest.map((s) => s.id) } },
-          })
-        }
       }
-    } catch {
-      // Non-critical cleanup
     }
+  } catch {
+    // Non-critical cleanup
+  }
 
+  // Save snapshot
+  try {
     const snapshot = await db.sentimentSnapshot.create({
       data: {
         symbol: "MARKET",
@@ -994,12 +1036,15 @@ export async function computeMarketSentiment() {
       metadata: { overallScore: clampedScore, regime, confidence, articleCount: articles.length, sectors: Object.keys(sectorBreakdown).length },
     })
 
+    // Populate in-memory cache after successful DB save
+    setCachedSentiment("MARKET", snapshot)
+
     return snapshot
   } catch (err) {
     logger.error("AI_ENGINE", "Failed to save market sentiment snapshot", {
       details: err instanceof Error ? err.message : String(err),
     })
-    return {
+    const fallbackSnapshot = {
       id: "",
       symbol: "MARKET",
       overallScore: clampedScore,
@@ -1016,6 +1061,9 @@ export async function computeMarketSentiment() {
       timestamp: new Date(),
       createdAt: new Date(),
     }
+    // Still cache the fallback so we don't recompute immediately
+    setCachedSentiment("MARKET", fallbackSnapshot as NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>)
+    return fallbackSnapshot
   }
 }
 
@@ -1024,7 +1072,10 @@ export async function computeMarketSentiment() {
 // ============================================================================
 
 /**
- * Get the sentiment trend for a symbol by comparing the last two snapshots.
+ * Get the sentiment trend for a symbol using up to 10 snapshots with weighted slope.
+ *
+ * Uses weighted linear regression slope across recent snapshots for smoother
+ * trend detection compared to simple 2-point comparison.
  *
  * @param symbol - Ticker symbol or "MARKET"
  * @param hours - Lookback period in hours (default 24)
@@ -1036,8 +1087,8 @@ export async function getSentimentTrend(symbol: string, hours: number = 24): Pro
   try {
     const snapshots = await db.sentimentSnapshot.findMany({
       where: { symbol, timestamp: { gte: since } },
-      orderBy: { timestamp: "desc" },
-      take: 2,
+      orderBy: { timestamp: "asc" }, // asc for time-series ordering
+      take: 10, // Use up to 10 snapshots for smoother trend
     })
 
     if (snapshots.length === 0) {
@@ -1050,23 +1101,34 @@ export async function getSentimentTrend(symbol: string, hours: number = 24): Pro
       }
     }
 
-    const current = snapshots[0].overallScore as number
-    const previous = snapshots.length > 1 ? (snapshots[1].overallScore as number) : current
+    const current = snapshots[snapshots.length - 1].overallScore as number
+    const previous = snapshots.length > 1 ? (snapshots[0].overallScore as number) : current
 
-    const diff = current - previous
-    const absPrevious = Math.abs(previous) || 1
-    const changeRate = Math.round((diff / absPrevious) * 100)
+    // Weighted slope: more recent snapshots get higher weight
+    let weightedSlope = 0
+    let totalWeight = 0
+    for (let i = 1; i < snapshots.length; i++) {
+      const scoreDiff = (snapshots[i].overallScore as number) - (snapshots[i - 1].overallScore as number)
+      const timeWeight = i / snapshots.length // More recent = higher weight
+      weightedSlope += scoreDiff * timeWeight
+      totalWeight += timeWeight
+    }
+    const avgSlope = totalWeight > 0 ? weightedSlope / totalWeight : 0
 
+    // Use the weighted average slope for direction determination
     let direction: SentimentTrend["direction"]
-    if (diff > 5) {
+    if (avgSlope > 3) {
       direction = "IMPROVING"
-    } else if (diff < -5) {
+    } else if (avgSlope < -3) {
       direction = "DECLINING"
     } else {
       direction = "STABLE"
     }
 
-    const regime = detectRegime(current, snapshots[0].confidence as number)
+    const absPrevious = Math.abs(previous) || 1
+    const changeRate = Math.round((avgSlope / absPrevious) * 100)
+
+    const regime = detectRegime(current, snapshots[snapshots.length - 1].confidence as number)
 
     return { current, previous, direction, changeRate, regime }
   } catch (err) {
@@ -1124,32 +1186,45 @@ export async function filterTrade(
   try {
     // 1. Get latest sentiment snapshot for symbol (or compute if missing/stale >30min)
     const staleThreshold = new Date(Date.now() - 30 * 60 * 1000)
-    let symbolSnapshot = await db.sentimentSnapshot.findFirst({
-      where: { symbol, timestamp: { gte: staleThreshold } },
-      orderBy: { timestamp: "desc" },
-    })
+
+    // Check in-memory cache first
+    let symbolSnapshot = getCachedSentiment(symbol)
+    if (!symbolSnapshot) {
+      symbolSnapshot = await db.sentimentSnapshot.findFirst({
+        where: { symbol, timestamp: { gte: staleThreshold } },
+        orderBy: { timestamp: "desc" },
+      })
+      if (symbolSnapshot) setCachedSentiment(symbol, symbolSnapshot)
+    }
 
     if (!symbolSnapshot) {
       logger.info("AI_ENGINE", `No recent sentiment snapshot for ${symbol}, computing fresh`, { symbol })
       symbolSnapshot = await computeSymbolSentiment(symbol)
+      if (symbolSnapshot) setCachedSentiment(symbol, symbolSnapshot)
     }
 
     // 2. Get market sentiment snapshot
-    let marketSnapshot = await db.sentimentSnapshot.findFirst({
-      where: { symbol: "MARKET", timestamp: { gte: staleThreshold } },
-      orderBy: { timestamp: "desc" },
-    })
+    // Check in-memory cache first
+    let marketSnapshot = getCachedSentiment("MARKET")
+    if (!marketSnapshot) {
+      marketSnapshot = await db.sentimentSnapshot.findFirst({
+        where: { symbol: "MARKET", timestamp: { gte: staleThreshold } },
+        orderBy: { timestamp: "desc" },
+      })
+      if (marketSnapshot) setCachedSentiment("MARKET", marketSnapshot)
+    }
 
     if (!marketSnapshot) {
       logger.info("AI_ENGINE", "No recent market sentiment snapshot, computing fresh", {})
       marketSnapshot = await computeMarketSentiment()
+      if (marketSnapshot) setCachedSentiment("MARKET", marketSnapshot)
     }
 
-    const symbolScore = symbolSnapshot.overallScore as number
-    const marketScore = marketSnapshot.overallScore as number
-    const symbolConfidence = symbolSnapshot.confidence as number
-    const symbolRegime = symbolSnapshot.sentimentRegime as SentimentRegime
-    const marketRegime = marketSnapshot.sentimentRegime as SentimentRegime
+    const symbolScore = symbolSnapshot!.overallScore as number
+    const marketScore = marketSnapshot!.overallScore as number
+    const symbolConfidence = symbolSnapshot!.confidence as number
+    const symbolRegime = symbolSnapshot!.sentimentRegime as SentimentRegime
+    const marketRegime = marketSnapshot!.sentimentRegime as SentimentRegime
 
     result.symbolScore = symbolScore
     result.marketScore = marketScore
@@ -1306,7 +1381,7 @@ export async function getSentimentStats(): Promise<SentimentStats> {
           where: { symbol: "MARKET" },
           orderBy: { timestamp: "desc" },
         }),
-        db.sentimentSnapshot.findMany({ orderBy: { timestamp: "desc" } }),
+        db.sentimentSnapshot.findMany({ orderBy: { timestamp: "desc" }, take: 200 }),
         // Top 5 bullish symbols (excluding MARKET)
         db.sentimentSnapshot.findMany({
           where: { symbol: { not: "MARKET" } },

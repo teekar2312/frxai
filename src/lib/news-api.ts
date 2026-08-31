@@ -11,7 +11,7 @@
  *
  * Features:
  *   1. LRU in-memory cache (max 100 entries, configurable TTL)
- *   2. Per-provider rate limiting backed by DB (NewsSourceConfig)
+ *   2. Per-provider rate limiting backed by DB (NewsSourceConfig) with in-memory fast path
  *   3. Circuit breaker per provider (CLOSED → OPEN → HALF_OPEN)
  *   4. Title-hash deduplication across providers
  *   5. Breaking news keyword detection (last 15 min)
@@ -180,6 +180,15 @@ const BREAKING_KEYWORDS = [
   'war', 'terror', 'pandemic', 'lockdown', 'crisis',
   'bank run', 'margin call', 'circuit breaker', 'trading halt',
   'rate hike', 'rate cut', 'bijak', 'darurat', 'skandal',
+  // FIX 4: Expanded Indonesian breaking news keywords
+  'suspensi', 'pembekuan', 'penghentian', 'pelarangan',
+  'kenaikan suku bunga', 'penurunan suku bunga', 'gunung meletus',
+  'gempa bumi', 'tsunami', 'banjir', 'kerusuhan', 'demo', 'unjuk rasa',
+  'revaluasi', 'devaluasi', 'korupsi', 'pidana', 'tipikor',
+  'ott', 'kpk', 'bialngkpinjam paksa', 'bailout', 'negara bangkrut',
+  'kelangkaan', 'defisit transaksi berjalan', 'rupiah anjlok', 'rupiah melemah',
+  'ijt', 'bank indonesia', 'bi rate', 'inflasi tinggi',
+  'pemilu', 'politik', 'kabinet', 'reshuffle',
 ]
 
 // ============================================================================
@@ -231,7 +240,7 @@ export function setCache(key: string, articles: NormalizedArticle[], ttlMs: numb
   }
 
   // Remove old entry if it exists (will be re-added at end = MRU)
- newsCache.delete(key)
+  newsCache.delete(key)
 
   // Evict LRU (first key) if at capacity
   if (newsCache.size >= MAX_CACHE_ENTRIES) {
@@ -278,81 +287,162 @@ function buildCacheKey(options: NewsFetchOptions, provider: NewsProvider): strin
 // SECTION 4: Rate Limiter
 // ============================================================================
 
+// FIX 3: In-memory rate limit tracker to avoid 3 DB queries per call
+interface InMemoryRateLimitEntry {
+  minuteCount: number
+  dayCount: number
+  minuteStartAt: number // timestamp of the start of the current minute window
+  dayStartAt: number   // timestamp of the start of the current day window
+  lastCallAt: number
+  lastDbSyncAt: number
+  rateLimitPerMin: number
+  rateLimitPerDay: number
+  enabled: boolean
+}
+
+const inMemoryRateLimits: Map<NewsProvider, InMemoryRateLimitEntry> = new Map()
+const IN_MEMORY_STALE_MS = 60_000      // Re-sync from DB if no call for 60s
+const DB_SYNC_INTERVAL_MS = 30_000    // Sync to DB every 30s
+
+/**
+ * Load rate limit state from DB into memory for a provider.
+ * Returns the in-memory entry or null if provider not configured.
+ */
+async function syncRateLimitFromDb(provider: NewsProvider): Promise<InMemoryRateLimitEntry | null> {
+  try {
+    const config = await db.newsSourceConfig.findUnique({
+      where: { provider },
+    })
+    if (!config || !config.enabled) return null
+
+    const now = Date.now()
+    const lastCall = config.lastCallAt ? new Date(config.lastCallAt).getTime() : 0
+
+    // Determine if minute/day counters need reset
+    let minuteCount = config.callsThisMinute
+    let dayCount = config.callsThisDay
+
+    if (lastCall && (now - lastCall) > 60_000) {
+      minuteCount = 0
+    }
+    if (lastCall && (now - lastCall) > 86_400_000) {
+      dayCount = 0
+    }
+
+    const entry: InMemoryRateLimitEntry = {
+      minuteCount,
+      dayCount,
+      minuteStartAt: minuteCount === 0 ? now : lastCall,
+      dayStartAt: dayCount === 0 ? now : lastCall,
+      lastCallAt: lastCall,
+      lastDbSyncAt: now,
+      rateLimitPerMin: config.rateLimitPerMin,
+      rateLimitPerDay: config.rateLimitPerDay,
+      enabled: config.enabled,
+    }
+    inMemoryRateLimits.set(provider, entry)
+    return entry
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error('SYSTEM', `Failed to sync rate limit from DB for ${provider}`, {
+      source: provider,
+      stackTrace: message,
+    })
+    return null
+  }
+}
+
+/**
+ * Persist current in-memory rate limit state to DB.
+ */
+async function syncRateLimitToDb(provider: NewsProvider): Promise<void> {
+  const entry = inMemoryRateLimits.get(provider)
+  if (!entry) return
+
+  try {
+    await db.newsSourceConfig.update({
+      where: { provider },
+      data: {
+        callsThisMinute: entry.minuteCount,
+        callsThisDay: entry.dayCount,
+        lastCallAt: new Date(entry.lastCallAt),
+      },
+    })
+    entry.lastDbSyncAt = Date.now()
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error('SYSTEM', `Failed to sync rate limit to DB for ${provider}`, {
+      source: provider,
+      stackTrace: message,
+    })
+  }
+}
+
 /**
  * Check if an API call is allowed under the provider's rate limit.
- * Resets per-minute counter if >60s since last call.
- * Resets per-day counter if >24h since last call.
+ * Uses in-memory tracker for fast path (0 DB queries for normal case).
+ * Falls back to DB on first call or when in-memory is stale (>60s).
+ * Periodically syncs to DB (every 30s).
  *
  * @returns {RateLimitCheck} - allowed, waitMs until next slot, and optional reason
  */
 export async function checkRateLimit(provider: NewsProvider): Promise<RateLimitCheck> {
   try {
-    const config = await db.newsSourceConfig.findUnique({
-      where: { provider },
-    })
+    const now = Date.now()
+    let entry = inMemoryRateLimits.get(provider)
 
-    if (!config || !config.enabled) {
-      return { allowed: false, waitMs: 0, reason: `Provider ${provider} not configured or disabled` }
+    // If no in-memory entry or stale (>60s), sync from DB
+    if (!entry || (now - entry.lastCallAt) > IN_MEMORY_STALE_MS) {
+      entry = await syncRateLimitFromDb(provider)
+      if (!entry || !entry.enabled) {
+        return { allowed: false, waitMs: 0, reason: `Provider ${provider} not configured or disabled` }
+      }
     }
 
-    const now = new Date()
-    const lastCall = config.lastCallAt ? new Date(config.lastCallAt) : null
-
-    // Reset minute counter if >60s since last call
-    if (lastCall && (now.getTime() - lastCall.getTime()) > 60_000) {
-      await db.newsSourceConfig.update({
-        where: { provider },
-        data: { callsThisMinute: 0 },
-      })
+    // Reset minute counter if window expired
+    if ((now - entry.minuteStartAt) > 60_000) {
+      entry.minuteCount = 0
+      entry.minuteStartAt = now
     }
 
-    // Reset day counter if >24h since last call
-    if (lastCall && (now.getTime() - lastCall.getTime()) > 86_400_000) {
-      await db.newsSourceConfig.update({
-        where: { provider },
-        data: { callsThisDay: 0 },
-      })
-    }
-
-    // Re-fetch after potential resets
-    const freshConfig = await db.newsSourceConfig.findUnique({
-      where: { provider },
-    })
-    if (!freshConfig) {
-      return { allowed: false, waitMs: 0, reason: `Provider ${provider} config disappeared` }
+    // Reset day counter if window expired
+    if ((now - entry.dayStartAt) > 86_400_000) {
+      entry.dayCount = 0
+      entry.dayStartAt = now
     }
 
     // Check minute limit
-    if (freshConfig.callsThisMinute >= freshConfig.rateLimitPerMin) {
-      const waitMs = 60_000 - (now.getTime() - (freshConfig.lastCallAt ? new Date(freshConfig.lastCallAt).getTime() : 0))
+    if (entry.minuteCount >= entry.rateLimitPerMin) {
+      const waitMs = 60_000 - (now - entry.minuteStartAt)
       const clampedWait = Math.max(waitMs, 0)
-      logger.info('API_RATE_LIMIT', `${provider} minute rate limit reached (${freshConfig.callsThisMinute}/${freshConfig.rateLimitPerMin})`, {
+      logger.info('API_RATE_LIMIT', `${provider} minute rate limit reached (${entry.minuteCount}/${entry.rateLimitPerMin})`, {
         source: provider,
         details: `Wait ${clampedWait}ms`,
       })
-      return { allowed: false, waitMs: clampedWait, reason: `Minute rate limit reached (${freshConfig.callsThisMinute}/${freshConfig.rateLimitPerMin})` }
+      return { allowed: false, waitMs: clampedWait, reason: `Minute rate limit reached (${entry.minuteCount}/${entry.rateLimitPerMin})` }
     }
 
     // Check day limit
-    if (freshConfig.callsThisDay >= freshConfig.rateLimitPerDay) {
-      const waitMs = 86_400_000 - (now.getTime() - (freshConfig.lastCallAt ? new Date(freshConfig.lastCallAt).getTime() : 0))
+    if (entry.dayCount >= entry.rateLimitPerDay) {
+      const waitMs = 86_400_000 - (now - entry.dayStartAt)
       const clampedWait = Math.max(waitMs, 0)
-      logger.info('API_RATE_LIMIT', `${provider} daily rate limit reached (${freshConfig.callsThisDay}/${freshConfig.rateLimitPerDay})`, {
+      logger.info('API_RATE_LIMIT', `${provider} daily rate limit reached (${entry.dayCount}/${entry.rateLimitPerDay})`, {
         source: provider,
         details: `Wait ${clampedWait}ms`,
       })
-      return { allowed: false, waitMs: clampedWait, reason: `Daily rate limit reached (${freshConfig.callsThisDay}/${freshConfig.rateLimitPerDay})` }
+      return { allowed: false, waitMs: clampedWait, reason: `Daily rate limit reached (${entry.dayCount}/${entry.rateLimitPerDay})` }
     }
 
-    // Increment counters
-    await db.newsSourceConfig.update({
-      where: { provider },
-      data: {
-        callsThisMinute: { increment: 1 },
-        callsThisDay: { increment: 1 },
-        lastCallAt: now,
-      },
-    })
+    // Increment in-memory counters
+    entry.minuteCount++
+    entry.dayCount++
+    entry.lastCallAt = now
+
+    // Sync to DB periodically (every 30s) or on significant changes
+    if ((now - entry.lastDbSyncAt) > DB_SYNC_INTERVAL_MS) {
+      // Fire-and-forget sync (don't await to keep response fast)
+      syncRateLimitToDb(provider).catch(() => { /* already logged inside */ })
+    }
 
     return { allowed: true, waitMs: 0 }
   } catch (error) {
@@ -612,7 +702,8 @@ export async function recordApiCall(
 /**
  * Save a batch of new articles to the NewsArticle table.
  * Uses title-based dedup: collects all existing titles first (1 query),
- * then creates only truly new articles. (Fix #1: eliminates N+1 queries)
+ * then creates only truly new articles using createMany for efficiency.
+ * Falls back to individual creates if createMany fails.
  */
 async function saveArticles(articles: NormalizedArticle[]): Promise<number> {
   if (articles.length === 0) return 0
@@ -636,34 +727,56 @@ async function saveArticles(articles: NormalizedArticle[]): Promise<number> {
     const newArticles = articles.filter(a => !existingTitles.has(a.title))
     if (newArticles.length === 0) return 0
 
+    // FIX 2: Use createMany for batch insert, fall back to individual on failure
     let savedCount = 0
-    // Create in small batches to avoid overwhelming SQLite
-    const createBatchSize = 20
+    const createBatchSize = 50
     for (let i = 0; i < newArticles.length; i += createBatchSize) {
       const batch = newArticles.slice(i, i + createBatchSize)
-      for (const article of batch) {
-        try {
-          await db.newsArticle.create({
-            data: {
-              title: article.title,
-              content: article.content || null,
-              source: article.source || null,
-              url: article.url || null,
-              imageUrl: article.imageUrl || null,
-              sentiment: 'NEUTRAL',
-              sentimentScore: 0,
-              symbols: JSON.stringify(article.symbols),
-              publishedAt: article.publishedAt,
-              fetchedAt: new Date(),
-              category: article.category || null,
-            },
-          })
-          savedCount++
-        } catch (saveError) {
-          const message = saveError instanceof Error ? saveError.message : String(saveError)
-          logger.error('SYSTEM', `Failed to save article: ${article.title.slice(0, 60)}`, {
-            details: message,
-          })
+      try {
+        await db.newsArticle.createMany({
+          data: batch.map(article => ({
+            title: article.title,
+            content: article.content || null,
+            source: article.source || null,
+            url: article.url || null,
+            imageUrl: article.imageUrl || null,
+            sentiment: 'NEUTRAL' as const,
+            sentimentScore: 0,
+            symbols: JSON.stringify(article.symbols),
+            publishedAt: article.publishedAt,
+            fetchedAt: new Date(),
+            category: article.category || null,
+          })),
+        })
+        savedCount += batch.length
+      } catch (createManyError) {
+        // Fallback to individual creates if createMany fails
+        const message = createManyError instanceof Error ? createManyError.message : String(createManyError)
+        logger.warn('SYSTEM', `createMany failed, falling back to individual creates: ${message}`)
+        for (const article of batch) {
+          try {
+            await db.newsArticle.create({
+              data: {
+                title: article.title,
+                content: article.content || null,
+                source: article.source || null,
+                url: article.url || null,
+                imageUrl: article.imageUrl || null,
+                sentiment: 'NEUTRAL',
+                sentimentScore: 0,
+                symbols: JSON.stringify(article.symbols),
+                publishedAt: article.publishedAt,
+                fetchedAt: new Date(),
+                category: article.category || null,
+              },
+            })
+            savedCount++
+          } catch (saveError) {
+            const saveMessage = saveError instanceof Error ? saveError.message : String(saveError)
+            logger.error('SYSTEM', `Failed to save article: ${article.title.slice(0, 60)}`, {
+              details: saveMessage,
+            })
+          }
         }
       }
     }
@@ -782,7 +895,7 @@ export function normalizeMarketauxArticle(raw: MarketauxArticle): NormalizedArti
  * Process:
  *   1. Check rate limit
  *   2. Check circuit breaker
- *   3. For each symbol, fetch articles from the past 7 days
+ *   3. For each symbol, fetch articles from the past 7 days (concurrently)
  *   4. Normalize and deduplicate
  *   5. Record API call metrics
  *
@@ -853,7 +966,8 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
   let lastError: string | undefined
   let anySuccess = false
 
-  for (const symbol of symbols) {
+  // FIX 1: Concurrent fetching with Promise.allSettled
+  const fetchPromises = symbols.map(async (symbol) => {
     try {
       const url = new URL('https://finnhub.io/api/v1/company-news')
       url.searchParams.set('symbol', symbol)
@@ -873,24 +987,25 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
           symbol,
           details: errorText,
         })
-        lastError = errorText
-        continue
+        return { symbol, error: errorText, articles: [] as NormalizedArticle[], rawCount: 0 }
       }
 
       const data: unknown = await response.json()
       if (!Array.isArray(data)) {
-        lastError = 'Response is not an array'
-        continue
+        return { symbol, error: 'Response is not an array', articles: [] as NormalizedArticle[], rawCount: 0 }
       }
 
       const rawArticles = data as FinnhubArticle[]
-      totalRawFetched += rawArticles.length
 
-      for (const raw of rawArticles) {
-        allArticles.push(normalizeFinnhubArticle(raw, symbol))
-      }
+      // FIX 6: Validate response fields before normalizing
+      const validArticles = rawArticles.filter((raw: FinnhubArticle) => {
+        if (!raw.headline || typeof raw.headline !== 'string') return false
+        if (!raw.datetime || typeof raw.datetime !== 'number') return false
+        return true
+      })
 
-      anySuccess = true
+      const normalized = validArticles.map(raw => normalizeFinnhubArticle(raw, symbol))
+      return { symbol, error: undefined, articles: normalized, rawCount: rawArticles.length }
     } catch (fetchError) {
       const message = fetchError instanceof Error ? fetchError.message : String(fetchError)
       logger.error('SYSTEM', `Finnhub fetch failed for ${symbol}`, {
@@ -898,8 +1013,24 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
         symbol,
         stackTrace: message,
       })
-      lastError = message
+      return { symbol, error: message, articles: [] as NormalizedArticle[], rawCount: 0 }
     }
+  })
+
+  const results = await Promise.allSettled(fetchPromises)
+
+  for (const result of results) {
+    if (result.status === 'fulfilled') {
+      const { articles, rawCount, error } = result.value
+      if (error) {
+        lastError = error
+      } else {
+        allArticles.push(...articles)
+        totalRawFetched += rawCount
+        anySuccess = true
+      }
+    }
+    // Rejected promises are already caught inside the individual fetch, so 'rejected' shouldn't happen
   }
 
   const responseTimeMs = Date.now() - startTime
@@ -1320,7 +1451,7 @@ export async function fetchNews(options?: NewsFetchOptions): Promise<NewsFetchRe
  * default, bankruptcy, scandal, fraud, investigation, sanction,
  * war, terror, pandemic, lockdown, crisis, bank run, margin call,
  * circuit breaker, trading halt, rate hike, rate cut, plus
- * Indonesian equivalents (bijak, darurat, skandal).
+ * Indonesian equivalents (bijak, darurat, skandal, and many more).
  *
  * @returns Array of BreakingNewsItem with matched article and keywords
  */
@@ -1509,7 +1640,32 @@ export async function getNewsStats(): Promise<NewsStats> {
 }
 
 // ============================================================================
-// SECTION 13: Seed / Initialization
+// SECTION 13: Fetch Log Cleanup
+// ============================================================================
+
+/**
+ * Cleanup old NewsFetchLog entries to prevent unbounded growth.
+ * Keeps the last `keepLastDays` days of logs.
+ */
+export async function cleanupFetchLogs(keepLastDays: number = 30): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - keepLastDays * 24 * 60 * 60 * 1000)
+    const result = await db.newsFetchLog.deleteMany({
+      where: { createdAt: { lt: cutoff } },
+    })
+    if (result.count > 0) {
+      logger.info('SYSTEM', `Cleaned up ${result.count} old fetch logs (older than ${keepLastDays} days)`)
+    }
+    return result.count
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    logger.error('SYSTEM', 'Fetch log cleanup failed', { stackTrace: message })
+    return 0
+  }
+}
+
+// ============================================================================
+// SECTION 14: Seed / Initialization
 // ============================================================================
 
 /**

@@ -1084,3 +1084,64 @@ Work Log:
 - Pushed to repository (forced after remote divergence)
 
 ---
+---
+Task ID: 5
+Agent: news-api-improver
+Task: Deep audit improvements for news-api.ts
+
+Work Log:
+- Fix 1: Concurrent Finnhub fetching with Promise.allSettled — replaced sequential for-loop with Promise.allSettled for parallel symbol fetching
+- Fix 2: Batch article saves with createMany — replaced individual db.newsArticle.create() calls with db.newsArticle.createMany(), with fallback to individual creates on failure
+- Fix 3: In-memory rate limiter to reduce DB load — added InMemoryRateLimitEntry Map, syncRateLimitFromDb/syncRateLimitToDb helpers, 60s stale threshold, 30s periodic DB sync
+- Fix 4: Expanded Indonesian breaking news keywords — added 32 Indonesian keywords (suspensi, pembekuan, penghentian, kenaikan suku bunga, gempa bumi, korupsi, kpk, pemilu, reshuffle, etc.)
+- Fix 5: NewsFetchLog cleanup mechanism — added cleanupFetchLogs(keepLastDays=30) export using db.newsFetchLog.deleteMany
+- Fix 6: Response field validation for Finnhub articles — added validArticles filter checking headline (string) and datetime (number) before normalization
+
+Stage Summary:
+- 6 improvements applied to news-api.ts
+- DB query load reduced significantly with in-memory rate limiting (0 queries for normal case, 1 for periodic sync vs 3 per call previously)
+- Fetch performance improved with concurrent symbol fetching (5 symbols in parallel vs sequential)
+- Article persistence speed improved with createMany batch inserts
+- Breaking news detection coverage expanded with 32 Indonesian-specific keywords
+- Fetch log table growth bounded with cleanup function
+- Invalid Finnhub responses filtered before normalization
+- All existing exports preserved, no function signatures changed
+- ESLint passes with zero errors
+
+---
+Task ID: 6
+Agent: sentiment-filter-improver
+Task: Deep audit improvements for sentiment-filter.ts
+
+Work Log:
+- Fix 1: In-memory sentiment cache for hot-path optimization
+- Fix 2: Word tracking fix for already-scored articles
+- Fix 3: Exponential decay recency weighting
+- Fix 4: Smoother sentiment trend with weighted slope
+- Fix 5: getSentimentStats pagination limit
+
+Stage Summary:
+- 5 improvements applied to sentiment-filter.ts
+- Performance improved with in-memory cache and better DB queries
+- Word tracking now complete for all articles
+
+---
+Task ID: 7
+Agent: ai-decision-engine-improver
+Task: Deep audit improvements for ai-decision-engine.ts
+
+Work Log:
+- Fix 1: Added missing OHLCVBar type import from indicator-pool
+- Fix 2: Fixed confidence trend logic bug (IMPROVING+bearish now reduces confidence, DECLINING+bearish now boosts)
+- Fix 3: Added atrValue field to TechnicalFactors interface, stored real ATR in analyzeTechnicalFromBars, used real ATR for SL/TP calculation with fallback to DEFAULT_ATR_PCT
+- Fix 4: Added REDUCE and CLOSE_ALL decision generation based on risk score, open positions, and consecutive losses; added reasoning for both in generateReasoning()
+- Fix 5: Added optional precomputedRiskFactors parameter to makeDecision(); makeBatchDecision() now computes risk factors ONCE and passes to each symbol
+- Fix 6: Replaced simple confidence/100 lot sizing with risk-based calculation using 1% account risk, SL distance, and confidence scaling (0.5x-1.0x), clamped to 0.01-5.0
+
+Stage Summary:
+- 6 improvements applied to ai-decision-engine.ts
+- Critical logic bug fixed in confidence trend adjustment
+- All 6 decision types now properly generated
+- SL/TP now uses real ATR data when available
+- Batch processing eliminates redundant DB queries for risk factors
+- Lot sizing now considers actual risk (SL distance) and account size

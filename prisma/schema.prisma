@@ -438,3 +438,116 @@ model PendingOrder {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
+
+// ============================================
+// PHASE 6: NEWS API (FINNHUB / MARKETAUX)
+// ============================================
+
+model NewsSourceConfig {
+  id              String   @id @default(cuid())
+  provider        String   @unique // FINNHUB, MARKETAUX
+  apiKey          String
+  baseUrl         String
+  enabled         Boolean  @default(true)
+  priority        Int      @default(0) // Higher = used first
+  rateLimitPerMin Int      @default(60)
+  rateLimitPerDay Int      @default(1000)
+  lastCallAt      DateTime?
+  callsThisMinute Int      @default(0)
+  callsThisDay    Int      @default(0)
+  lastError       String?
+  consecutiveErrors Int    @default(0)
+  circuitState    String   @default("CLOSED") // CLOSED (normal), OPEN (tripped), HALF_OPEN
+  circuitOpenUntil DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model NewsFetchLog {
+  id              String   @id @default(cuid())
+  provider        String   // FINNHUB, MARKETAUX
+  endpoint        String
+  statusCode      Int?
+  responseTimeMs  Int
+  articlesFetched Int      @default(0)
+  articlesNew     Int      @default(0)
+  articlesDedup   Int      @default(0)
+  error           String?
+  createdAt       DateTime @default(now())
+}
+
+// ============================================
+// PHASE 6: SENTIMENT FILTER
+// ============================================
+
+model SentimentSnapshot {
+  id              String   @id @default(cuid())
+  symbol          String   // "MARKET" for aggregate, or specific ticker
+  overallScore    Float    // -100 to +100
+  articleCount    Int      @default(0)
+  positiveCount   Int      @default(0)
+  negativeCount   Int      @default(0)
+  neutralCount    Int      @default(0)
+  sentimentRegime String   @default("NEUTRAL") // BULLISH, BEARISH, NEUTRAL, EXTREME_FEAR, EXTREME_GREED
+  confidence      Float    @default(0) // 0-100
+  weightedScore   Float    @default(0) // Time-decay weighted
+  topPositiveWords  String  @default("[]") // JSON: top positive keywords
+  topNegativeWords  String  @default("[]") // JSON: top negative keywords
+  sectorBreakdown  String  @default("{}") // JSON: sentiment by sector
+  timestamp       DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@index([symbol, timestamp(sort: Desc)])
+}
+
+model SentimentKeyword {
+  id              String   @id @default(cuid())
+  word            String   @unique
+  category        String   // POSITIVE, NEGATIVE, INTENSIFIER, NEGATOR, FINANCIAL_POSITIVE, FINANCIAL_NEGATIVE
+  weight          Float    @default(1.0)
+  language        String   @default("EN") // EN, ID
+  createdAt       DateTime @default(now())
+}
+
+// ============================================
+// PHASE 6: AI DECISION ENGINE
+// ============================================
+
+model DecisionLog {
+  id              String   @id @default(cuid())
+  symbol          String
+  decision        String   // BUY, SELL, HOLD, SKIP, REDUCE, CLOSE_ALL
+  confidence      Float    // 0-100
+  reasoning       String   // Human-readable explanation
+  factors         String   @default("{}") // JSON: { technical: {...}, sentiment: {...}, news: {...}, risk: {...} }
+  signalSources   String   @default("[]") // JSON: which signals contributed
+  riskScore       Float    @default(0)
+  sentimentScore  Float    @default(0)
+  volatilityRegime String  @default("NORMAL")
+  strategyUsed    String?
+  timeframe       String?
+  finalAction     String   // What was actually executed
+  overridden      Boolean  @default(false)
+  overrideReason  String?
+  pnlImpact      Float?   // P&L if trade was taken
+  createdAt       DateTime @default(now())
+
+  @@index([symbol, createdAt(sort: Desc)])
+  @@index([decision, createdAt(sort: Desc)])
+}
+
+model AiDecisionConfig {
+  id                String   @id @default(cuid())
+  name              String   @unique @default("default")
+  minConfidenceBuy  Float    @default(65.0)  // Minimum confidence to BUY
+  minConfidenceSell Float    @default(65.0)  // Minimum confidence to SELL
+  sentimentWeight   Float    @default(0.25)  // Weight of sentiment in final score
+  technicalWeight   Float    @default(0.50)  // Weight of technical analysis
+  newsWeight        Float    @default(0.25)  // Weight of news impact
+  maxPositionsPerDecision Int @default(3)
+  cooldownSeconds   Int      @default(300)   // Min seconds between decisions for same symbol
+  extremeSentimentBlock Boolean @default(true) // Block trades in extreme sentiment
+  volatilityScalingEnabled Boolean @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}

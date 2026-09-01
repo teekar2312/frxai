@@ -1706,3 +1706,169 @@ Reporting module had inconsistencies between backtest and live performance repor
 
 ### Verification
 - `bun run lint` passes with zero errors
+
+---
+
+## TASK 3-a — 6 Dashboard Module Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+
+### Context
+Six targeted improvements to the Dashboard module addressing data flow, UX accuracy, performance, and timezone correctness.
+
+---
+
+### Fix 1: Pass isMarketOpen to EquityChart
+**File:** `src/app/page.tsx`
+**Problem:** `<EquityChart />` received no `isMarketOpen` prop, so the component's auto-refresh (60s market-open / 5m closed) always used the 5-minute fallback since `isMarketOpen` was `undefined`.
+**Fix:** Changed `<EquityChart />` to `<EquityChart isMarketOpen={isMarketOpen} />`.
+
+### Fix 2: Auto Trading Toggle Wired to Real System State
+**Files:** `src/app/page.tsx`, `src/app/api/system/trading-enabled/route.ts` (new)
+**Problem:** The ON/OFF button only toggled `useState(false)` — state was lost on refresh and never persisted.
+**Fix:**
+- Created new API route `src/app/api/system/trading-enabled/route.ts` using JSON file storage (`data/trading-enabled.json`) with GET/PUT handlers.
+- In `page.tsx`: added `useEffect` to load initial state on mount from the API.
+- Replaced inline `onClick` with `handleToggleAutoTrading` callback that calls PUT API and reverts on error.
+
+### Fix 3: AccountSummary — Display winRateToday and hasRealData
+**File:** `src/components/trading/AccountSummary.tsx`
+**Problem:** API returned `winRateToday` and `hasRealData` but the UI ignored both. No-data state showed misleading zeros.
+**Fix:**
+- Added `winRateToday: number` and `hasRealData: boolean` to `AccountData` interface and `defaultData`.
+- Mapped both fields in `fetchData`.
+- Renamed Win Rate card label to "Win Rate (All)" with a `subtitle: "Today: X%"` shown below the main value.
+- Added `subtitle` rendering support in the stats card template.
+- Added `WifiOff` import and an info banner that shows "No account data yet. Connect MT5 to begin trading." when `hasRealData` is false and loading is complete.
+
+### Fix 4: EquityChart Y-Axis Percentage-Based Padding
+**File:** `src/components/trading/EquityChart.tsx`
+**Problem:** Hardcoded `$500` padding (`dataMin - 500`, `dataMax + 500`) broke for large accounts (flat chart) or blown accounts (negative values).
+**Fix:**
+- Added `yDomain` computed via `useMemo` that calculates 5% padding of the data range.
+- Falls back to `['auto', 'auto']` when no data exists, or `[max-500, max+500]` when all values are identical.
+- Replaced hardcoded `domain` string with the computed `yDomain` variable.
+
+### Fix 5: MT5 Status Polling — Pause When Tab Hidden
+**File:** `src/app/page.tsx`
+**Problem:** `setInterval(fetchMt5Status, 10000)` ran continuously even when the browser tab was hidden, wasting resources.
+**Fix:** Replaced simple `setInterval` with Page Visibility API integration:
+- `startPolling()` — fetches immediately then starts interval.
+- `stopPolling()` — clears interval.
+- `visibilitychange` listener pauses polling when `document.hidden` is true and resumes when the tab becomes visible again.
+- Proper cleanup in the effect return removes both interval and event listener.
+
+### Fix 6: Account API todayStart Uses WIB Midnight
+**File:** `src/app/api/account/route.ts`
+**Problem:** `new Date(); todayStart.setHours(0,0,0,0)` used server local time (UTC in production). For WIB, "today" starts at 00:00 WIB = 17:00 UTC previous day, causing trades between 17:00–00:00 UTC to be counted on the wrong day.
+**Fix:**
+- Changed `todayStr` to use `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' })` for WIB-aware date.
+- Changed `todayStart` to `new Date(todayStr + 'T00:00:00+07:00')` for correct WIB midnight.
+
+### Files Modified
+- `src/app/page.tsx` — isMarketOpen prop, auto-trading state persistence, visibility API polling
+- `src/app/api/system/trading-enabled/route.ts` — new file for auto-trading toggle persistence
+- `src/components/trading/AccountSummary.tsx` — winRateToday, hasRealData, no-data banner, subtitle rendering
+- `src/components/trading/EquityChart.tsx` — dynamic Y-axis domain with percentage padding
+- `src/app/api/account/route.ts` — WIB timezone-aware date calculations
+
+### Verification
+- `bun run lint` passes with zero errors
+- Dev server compiles successfully
+
+---
+
+## TASK 3-b — 6 Notifications & Price Alerts Module Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+
+### Context
+Six targeted improvements to the Notifications and Price Alerts module addressing data integrity, performance, UX accuracy, and safety.
+
+---
+
+### Fix 1: Alerts POST — NaN Price Validation
+**File:** `src/app/api/alerts/route.ts`
+**Problem:** `parseFloat(String(price))` on line 55 would persist `NaN` if `price` was `"abc"` or empty string.
+**Fix:** Added `parsedPrice` validation after the required-fields check: `Number.isFinite(parsedPrice) && parsedPrice > 0`. Returns 400 if invalid. Uses `parsedPrice` in the create call instead of inline `parseFloat`.
+
+### Fix 2: Alerts GET — Add Take Limit + Pagination
+**File:** `src/app/api/alerts/route.ts`
+**Problem:** `findMany` had no `take` limit — all alerts ever created were returned every 10-second poll.
+**Fix:** Added `limit` query param support (default 100, max 500, min 1). Applied `take: limit` to the `findMany` call.
+
+### Fix 3: Alert Active Count Is Misleading
+**File:** `src/components/trading/PriceAlerts.tsx`
+**Problem:** Count used `a.status === 'Active'` (derived from `!triggered`), which included disabled alerts (`active: false, triggered: false`). Label said "Price Alerts" but implied active.
+**Fix:** Changed filter to `a.active && a.status === 'Active'`. Updated label from "Price Alerts (N)" to "Active Alerts (N)".
+
+### Fix 4: Alert Delete — Confirmation Dialog
+**File:** `src/components/trading/PriceAlerts.tsx`
+**Problem:** Clicking the trash icon immediately deleted the alert with no confirmation.
+**Fix:** Added `AlertDialog` from shadcn/ui with `deleteConfirmId` state. Trash button now opens a confirmation dialog. Delete action only executes on "Delete" button click in the dialog.
+
+### Fix 5: evaluatePriceAlerts — Add Take Limit
+**File:** `src/lib/trade-execution-engine.ts`
+**Problem:** `findMany({ where: { active: true, triggered: false } })` had no limit — thousands of untriggered alerts would iterate on every price update.
+**Fix:** Added `take: 1000` to cap the query results.
+
+### Fix 6: PriceAlerts Fetch With Limit Param
+**File:** `src/components/trading/PriceAlerts.tsx`
+**Problem:** `fetch('/api/alerts')` fetched ALL alerts every 10 seconds.
+**Fix:** Changed to `fetch('/api/alerts?limit=200')` to cap the payload using the new API support from Fix #2.
+
+### Files Modified
+- `src/app/api/alerts/route.ts` — NaN price validation, take limit with query param
+- `src/components/trading/PriceAlerts.tsx` — accurate active count, delete confirmation dialog, limit param on fetch
+- `src/lib/trade-execution-engine.ts` — take: 1000 on evaluatePriceAlerts query
+
+### Verification
+- `bun run lint` passes with zero errors
+
+---
+
+## Task 3-c: Reporting Module — 6 Crucial Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+
+### Fix 1: Session Detection Uses WIB Hours, Not UTC
+**File:** `src/app/api/reports/performance/route.ts`
+**Problem:** `getSessionFromTime` used `date.getHours()` (UTC), making all IDX session boundaries wrong by 7 hours.
+**Fix:** Added `getWibHours()` helper using `Intl.DateTimeFormat` with `timeZone: 'Asia/Jakarta'` to extract hours in WIB before session classification. Also corrected AFTERNOON boundary from `< 15` to `< 16` to match IDX 13:00-16:15 WIB session.
+
+### Fix 2: Daily PnL Grouping Uses WIB Date, Not UTC
+**File:** `src/app/api/reports/performance/route.ts`
+**Problem:** `trade.closeTime.toISOString().slice(0, 10)` extracted UTC date, causing trades closed between 00:00-07:00 WIB to be grouped into the wrong calendar day.
+**Fix:** Added `toWibDateStr()` helper using `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' })` and used it for daily PnL map key.
+
+### Fix 3: Sessions Performance — Dynamic Base Balance
+**File:** `src/app/api/sessions/performance/route.ts`
+**Problem:** Hardcoded `BASE_BALANCE = 10000` — equity and risk budget calculations were wrong if the real account balance differed.
+**Fix:** Replaced with a dynamic lookup: reads `endBalance` from the most recent `DailyPerformance` record, falling back to 10000 if none exists.
+
+### Fix 4: winCount Query Moved Into Promise.all
+**File:** `src/app/api/trades/history/route.ts`
+**Problem:** `winCount` was queried sequentially after `Promise.all`, adding unnecessary latency.
+**Fix:** Added `db.trade.count({ where: { ...where, pnl: { gt: 0 } } })` as a 4th element in the `Promise.all` array, destructured as `winCount`.
+
+### Fix 5: Log CSV Export — Added Details and Metadata Columns
+**File:** `src/lib/trading-logger.ts`
+**Problem:** CSV export excluded `details` and `metadata` fields — the most valuable fields for debugging.
+**Fix:** Added `details` and `metadata` to CSV headers. Values are JSON-stringified and double-quote-escaped for CSV safety.
+
+### Fix 6: Log JSON Export — Removed Pretty-Printing, Added Missing Fields
+**File:** `src/lib/trading-logger.ts`
+**Problem:** `JSON.stringify(..., null, 2)` produced massive output for large exports (100MB+ for 50K logs). Also `details` and `metadata` were missing.
+**Fix:** Removed `null, 2` argument for compact output. Added `details` and `metadata` fields to the JSON mapping.
+
+### Files Modified
+- `src/app/api/reports/performance/route.ts` — WIB-aware session detection + WIB date for daily PnL
+- `src/app/api/sessions/performance/route.ts` — dynamic base balance from DailyPerformance
+- `src/app/api/trades/history/route.ts` — winCount merged into Promise.all
+- `src/lib/trading-logger.ts` — CSV gets details/metadata columns; JSON compact + details/metadata
+
+### Verification
+- `bun run lint` passes with zero errors

@@ -6,11 +6,15 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const activeOnly = searchParams.get('active') === 'true'
 
+    const rawLimit = parseInt(searchParams.get('limit') ?? '100', 10)
+    const limit = (Number.isFinite(rawLimit) && rawLimit >= 1) ? Math.min(rawLimit, 500) : 100
+
     const where = activeOnly ? { active: true } : undefined
 
     const alerts = await db.priceAlert.findMany({
       where,
       orderBy: { createdAt: "desc" },
+      take: limit,
     })
     return NextResponse.json({ success: true, data: alerts })
   } catch (error) {
@@ -37,6 +41,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // Validate price is a finite positive number
+    const parsedPrice = parseFloat(String(price))
+    if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+      return NextResponse.json(
+        { success: false, error: 'price must be a finite positive number' },
+        { status: 400 }
+      )
+    }
+
     // Normalize condition to uppercase
     const normalizedCondition = (condition as string).toUpperCase()
 
@@ -52,7 +65,7 @@ export async function POST(request: NextRequest) {
       data: {
         symbol: symbol.toUpperCase(),
         condition: normalizedCondition,
-        price: parseFloat(String(price)),
+        price: parsedPrice,
         message: message ?? null,
       },
     })

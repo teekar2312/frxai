@@ -10,8 +10,11 @@ export async function GET() {
   try {
     const performance = await getTodaySessionPerformance()
 
+    // Get actual balance from DailyPerformance
+    const lastPerf = await db.dailyPerformance.findFirst({ orderBy: { date: 'desc' } })
+    const baseBalance = lastPerf ? lastPerf.endBalance : 10000
+
     // Calculate equity for risk budget (90-day window for closed trades)
-    const BASE_BALANCE = 10000
     const ninetyDaysAgo = new Date()
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
 
@@ -19,7 +22,7 @@ export async function GET() {
     const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
     const openTrades = await db.trade.findMany({ where: { status: 'OPEN' } })
     const totalOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
-    const equity = BASE_BALANCE + totalClosedPnl + totalOpenPnl
+    const equity = baseBalance + totalClosedPnl + totalOpenPnl
 
     const riskBudget = await getSessionRiskBudget(equity)
 

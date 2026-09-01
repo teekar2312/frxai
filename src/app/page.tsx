@@ -64,6 +64,25 @@ export default function TradingDashboard() {
 
   const [activeTab, setActiveTab] = useState<TabId>('dashboard')
   const [autoTrading, setAutoTrading] = useState(false)
+
+  // Load initial auto-trading state from server
+  useEffect(() => {
+    fetch('/api/system/trading-enabled').then(r => r.json()).then(json => {
+      if (json.success) setAutoTrading(json.data.enabled)
+    }).catch(() => {})
+  }, [])
+
+  const handleToggleAutoTrading = useCallback(async () => {
+    const newValue = !autoTrading
+    setAutoTrading(newValue)
+    try {
+      await fetch('/api/system/trading-enabled', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: newValue }),
+      })
+    } catch { /* revert on error */ setAutoTrading(!newValue) }
+  }, [autoTrading])
   const [mt5Status, setMt5Status] = useState<string>('DISCONNECTED')
   const [mt5Latency, setMt5Latency] = useState<number>(0)
   const [mt5Uptime, setMt5Uptime] = useState<number>(0)
@@ -85,8 +104,29 @@ export default function TradingDashboard() {
   }, [])
 
   useEffect(() => {
-    const interval = setInterval(fetchMt5Status, 10000)
-    return () => clearInterval(interval)
+    let interval: ReturnType<typeof setInterval>
+    const startPolling = () => {
+      fetchMt5Status()
+      interval = setInterval(fetchMt5Status, 10000)
+    }
+    const stopPolling = () => {
+      clearInterval(interval)
+    }
+
+    const handleVisibility = () => {
+      if (document.hidden) {
+        stopPolling()
+      } else {
+        startPolling()
+      }
+    }
+
+    startPolling()
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      stopPolling()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [fetchMt5Status])
 
   const isConnected = mt5Status === 'CONNECTED'
@@ -133,7 +173,7 @@ export default function TradingDashboard() {
                 variant={autoTrading ? 'default' : 'outline'}
                 size="sm"
                 className={"h-7 gap-1.5 text-xs " + (autoTrading ? 'bg-emerald-600 hover:bg-emerald-700' : '')}
-                onClick={() => setAutoTrading(!autoTrading)}
+                onClick={handleToggleAutoTrading}
               >
                 {autoTrading && (
                   <span className="relative flex h-2 w-2">
@@ -189,7 +229,7 @@ export default function TradingDashboard() {
 
           <TabsContent value="dashboard" className="space-y-6">
             <AccountSummary />
-            <EquityChart />
+            <EquityChart isMarketOpen={isMarketOpen} />
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <StockWatchlist />
               <TradingPositions />

@@ -23,6 +23,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Bell, Plus, Trash2, BellOff, ArrowUpCircle, ArrowDownCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -101,6 +111,7 @@ export default function PriceAlerts() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   // Form state
   const [newSymbol, setNewSymbol] = useState('')
@@ -115,7 +126,7 @@ export default function PriceAlerts() {
 
   const fetchAlerts = useCallback(async () => {
     try {
-      const res = await fetch('/api/alerts')
+      const res = await fetch('/api/alerts?limit=200')
       if (res.ok) {
         const json = await res.json()
         const data: Array<Record<string, unknown>> = json.data ?? json.alerts ?? []
@@ -245,15 +256,16 @@ export default function PriceAlerts() {
   }
 
   return (
+    <>
     <Card>
       <CardHeader className="pb-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
             <Bell className="h-5 w-5 text-amber-600" />
             <CardTitle className="text-base">
-              Price Alerts{' '}
+              Active Alerts{' '}
               <span className="text-muted-foreground font-normal">
-                ({alerts.filter((a) => a.status === 'Active').length})
+                ({alerts.filter((a) => a.active && a.status === 'Active').length})
               </span>
             </CardTitle>
           </div>
@@ -417,7 +429,7 @@ export default function PriceAlerts() {
                     variant="ghost"
                     size="sm"
                     className="h-8 w-8 p-0 text-muted-foreground hover:text-red-600"
-                    onClick={() => handleDelete(alert.id)}
+                    onClick={() => setDeleteConfirmId(alert.id)}
                     disabled={deletingId === alert.id}
                   >
                     {deletingId === alert.id ? (
@@ -434,5 +446,29 @@ export default function PriceAlerts() {
         )}
       </CardContent>
     </Card>
+
+    <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete Alert</AlertDialogTitle>
+          <AlertDialogDescription>
+            Are you sure you want to delete this price alert? This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={() => {
+              if (deleteConfirmId) {
+                handleDelete(deleteConfirmId)
+                setDeleteConfirmId(null)
+              }
+            }}
+            className="bg-red-600 hover:bg-red-700"
+          >Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   )
 }

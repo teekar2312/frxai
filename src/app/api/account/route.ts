@@ -3,8 +3,8 @@ import { db } from "@/lib/db"
 
 export async function GET() {
   try {
-    // Get today's DailyPerformance for base balance and daily P&L
-    const todayStr = new Date().toISOString().split("T")[0]
+    // Get today's DailyPerformance for base balance and daily P&L (WIB timezone)
+    const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
     const todayPerf = await db.dailyPerformance.findUnique({
       where: { date: todayStr },
     })
@@ -30,8 +30,8 @@ export async function GET() {
       where: { status: "OPEN" },
     })
 
-    const todayStart = new Date()
-    todayStart.setHours(0, 0, 0, 0)
+    // WIB midnight = 00:00 WIB = 17:00 UTC previous day
+    const todayStart = new Date(todayStr + 'T00:00:00+07:00')
 
     const closedToday = await db.trade.findMany({
       where: {

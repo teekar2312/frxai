@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
     const skip = (page - 1) * limit
 
-    const [trades, total, aggregates] = await Promise.all([
+    const [trades, total, aggregates, winCount] = await Promise.all([
       db.trade.findMany({
         where,
         orderBy: { [sortField]: sortDir },
@@ -85,9 +85,8 @@ export async function GET(request: NextRequest) {
         _sum: { pnl: true, commission: true, slippage: true },
         _count: { _all: true },
       }),
+      db.trade.count({ where: { ...where, pnl: { gt: 0 } } }),
     ])
-
-    const winCount = await db.trade.count({ where: { ...where, pnl: { gt: 0 } } })
 
     return NextResponse.json({
       success: true,

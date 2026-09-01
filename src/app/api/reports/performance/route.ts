@@ -10,13 +10,29 @@ const PERIOD_MAP: Record<string, number> = {
 
 const VALID_GROUP_BY = ['symbol', 'strategy', 'session'] as const
 
+function getWibHours(date: Date): number {
+  const str = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    hour: 'numeric',
+    hour12: false,
+    minute: 'numeric',
+  }).format(date)
+  // Format is "HH:MM" or "H:MM"; Intl may return '24' for midnight
+  return parseInt(str.split(':')[0], 10) % 24
+}
+
 function getSessionFromTime(date: Date): string {
-  const hours = date.getHours()
+  const hours = getWibHours(date)
+  // IDX sessions in WIB
   if (hours < 9) return 'PRE_MARKET'
   if (hours < 11) return 'MORNING'
   if (hours < 13) return 'MIDDAY_BREAK'
-  if (hours < 15) return 'AFTERNOON'
+  if (hours < 16) return 'AFTERNOON'
   return 'AFTER_HOURS'
+}
+
+function toWibDateStr(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(date)
 }
 
 function getGroupKey(trade: { symbol: string; strategy: string | null; openTime: Date }, groupBy: string): string {
@@ -175,7 +191,7 @@ export async function GET(request: NextRequest) {
     // === Daily P&L time series (computed from trades for consistency) ===
     const dailyMap = new Map<string, { pnl: number; wins: number; total: number }>()
     for (const trade of trades) {
-      const day = trade.closeTime.toISOString().slice(0, 10)
+      const day = toWibDateStr(trade.closeTime)
       const entry = dailyMap.get(day) || { pnl: 0, wins: 0, total: 0 }
       entry.pnl += trade.pnl
       entry.total++

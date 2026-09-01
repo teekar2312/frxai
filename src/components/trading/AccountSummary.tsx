@@ -12,6 +12,7 @@ import {
   Target,
   Percent,
   Gauge,
+  WifiOff,
 } from 'lucide-react'
 
 interface AccountData {
@@ -24,6 +25,8 @@ interface AccountData {
   openPositions: number
   totalTradesToday: number
   winRate: number
+  winRateToday: number
+  hasRealData: boolean
   leverage: string
   spreadFrom: string
   commission: string
@@ -39,6 +42,8 @@ const defaultData: AccountData = {
   openPositions: 0,
   totalTradesToday: 0,
   winRate: 0,
+  winRateToday: 0,
+  hasRealData: false,
   leverage: '1:25',
   spreadFrom: '0.5 pip',
   commission: '$1/lot',
@@ -85,6 +90,8 @@ export default function AccountSummary() {
           openPositions: d.openPositions ?? 0,
           totalTradesToday: d.totalTradesToday ?? 0,
           winRate: d.winRate ?? 0,
+          winRateToday: d.winRateToday ?? 0,
+          hasRealData: d.hasRealData ?? false,
           leverage: d.leverage ?? '1:25',
           spreadFrom: d.spread?.replace(/^from\s+/i, '') ?? d.spreadFrom?.replace(/^from\s+/i, '') ?? '0.5 pip',
           commission: d.commission ?? '$1/lot',
@@ -184,8 +191,9 @@ export default function AccountSummary() {
       bg: 'bg-violet-50 dark:bg-violet-950/40',
     },
     {
-      label: 'Win Rate',
+      label: 'Win Rate (All)',
       value: `${data.winRate}%`,
+      subtitle: `Today: ${data.winRateToday}%`,
       icon: Percent,
       color: data.winRate >= 50 ? 'text-emerald-600' : 'text-red-600',
       bg:
@@ -212,6 +220,17 @@ export default function AccountSummary() {
 
   return (
     <div className="space-y-4">
+      {!data.hasRealData && !loading && (
+        <div className="flex items-center gap-3 rounded-lg border border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/40 px-4 py-3">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-sky-100 dark:bg-sky-900/60">
+            <WifiOff className="h-4 w-4 text-sky-600" />
+          </div>
+          <div>
+            <p className="text-sm font-medium text-sky-800 dark:text-sky-200">No account data yet</p>
+            <p className="text-xs text-sky-600 dark:text-sky-400">Connect MT5 to begin trading.</p>
+          </div>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold tracking-tight">
           Account Summary
@@ -248,6 +267,11 @@ export default function AccountSummary() {
                   >
                     {loading ? '—' : stat.value}
                   </p>
+                  {stat.subtitle && !loading && (
+                    <p className="truncate text-[10px] text-muted-foreground">
+                      {stat.subtitle}
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>

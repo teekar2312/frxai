@@ -122,6 +122,17 @@ export default function EquityChart({ isMarketOpen }: EquityChartProps) {
     }
   }, [data])
 
+  const yDomain = useMemo(() => {
+    if (data.length === 0) return ['auto', 'auto'] as const
+    const values = data.flatMap(d => [d.balance, d.equity]).filter(v => v != null && isFinite(v))
+    if (values.length === 0) return ['auto', 'auto'] as const
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    if (max === min) return [max - 500, max + 500] as const
+    const padding = (max - min) * 0.05
+    return [min - padding, max + padding] as const
+  }, [data])
+
   const isPositive = data.length > 0 ? stats.current >= stats.start : true
 
   const labelFormatter = (label: string) => {
@@ -266,7 +277,7 @@ export default function EquityChart({ isMarketOpen }: EquityChartProps) {
                     tick={{ fontSize: 11 }}
                     stroke="hsl(var(--muted-foreground))"
                     tickFormatter={(v: number) => `$${(v / 1000).toFixed(1)}k`}
-                    domain={['dataMin - 500', 'dataMax + 500']}
+                    domain={yDomain}
                   />
                   <Tooltip
                     contentStyle={{

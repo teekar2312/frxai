@@ -1638,6 +1638,7 @@ export async function evaluatePriceAlerts(
   try {
     const activeAlerts = await db.priceAlert.findMany({
       where: { active: true, triggered: false },
+      take: 1000,
     })
 
     for (const alert of activeAlerts) {

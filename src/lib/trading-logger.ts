@@ -1038,23 +1038,24 @@ export async function exportLogs(params: {
   })
 
   if (format === 'csv') {
-    const headers = 'id,timestamp,level,category,message,source,symbol,tradeId'
+    const headers = 'id,timestamp,level,category,message,source,symbol,tradeId,details,metadata'
     const rows = logs.map(l => {
       const id = l.id
       const timestamp = l.createdAt.toISOString()
       const lvl = l.level
       const cat = l.category
-      // Escape double quotes in message
       const msg = `"${(l.message ?? '').replace(/"/g, '""')}"`
       const src = l.source ? `"${l.source.replace(/"/g, '""')}"` : ''
       const sym = l.symbol ?? ''
       const tid = l.tradeId ?? ''
-      return `${id},${timestamp},${lvl},${cat},${msg},${src},${sym},${tid}`
+      const details = l.details ? `"${JSON.stringify(l.details).replace(/"/g, '""')}"` : ''
+      const metadata = l.metadata ? `"${JSON.stringify(l.metadata).replace(/"/g, '""')}"` : ''
+      return `${id},${timestamp},${lvl},${cat},${msg},${src},${sym},${tid},${details},${metadata}`
     })
     return [headers, ...rows].join('\n')
   }
 
-  // Default: JSON format
+  // Default: JSON format (compact — no pretty-printing for performance)
   return JSON.stringify(logs.map(l => ({
     id: l.id,
     timestamp: l.createdAt.toISOString(),
@@ -1064,7 +1065,9 @@ export async function exportLogs(params: {
     source: l.source,
     symbol: l.symbol,
     tradeId: l.tradeId,
-  })), null, 2)
+    details: l.details,
+    metadata: l.metadata,
+  })))
 }
 
 export default logger

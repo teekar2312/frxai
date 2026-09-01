@@ -60,12 +60,15 @@ export async function POST(request: NextRequest) {
         trailingSteps: effectiveTrailingSteps,
         trailingAdjustments: trade.trailingAdjustments,
         trailingCooldownSec: effectiveCooldownSec,
+        commission: trade.commission,
+        lotSize: trade.lotSize,
       },
       currentPrice,
       { currentPhase, now },
     )
 
     if (result.adjusted && result.newSl) {
+      // Update peak prices (always, for consistency with pipeline behavior)
       const newHighestPrice = trade.direction === 'BUY'
         ? Math.max(trade.highestPrice ?? trade.currentPrice, currentPrice)
         : trade.highestPrice
@@ -73,8 +76,9 @@ export async function POST(request: NextRequest) {
         ? Math.min(trade.lowestPrice ?? trade.currentPrice, currentPrice)
         : trade.lowestPrice
 
-      await db.trade.update({
-        where: { id: tradeId },
+      // Atomic update: only apply if trade is still open
+      const updateResult = await db.trade.updateMany({
+        where: { id: tradeId, status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
         data: {
           sl: result.newSl,
           highestPrice: newHighestPrice,
@@ -85,6 +89,13 @@ export async function POST(request: NextRequest) {
           breakEvenApplied: result.breakEvenApplied ? true : trade.breakEvenApplied,
         },
       })
+
+      if (updateResult.count === 0) {
+        return NextResponse.json(
+          { success: false, error: `Trade ${tradeId} was closed during trailing evaluation` },
+          { status: 409 },
+        )
+      }
 
       logger.info('TRADE_EXECUTION', `Trailing stop adjusted for ${trade.symbol}`, {
         tradeId,

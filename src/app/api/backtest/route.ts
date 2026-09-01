@@ -77,18 +77,52 @@ function sma(closes: number[], period: number): number {
   return sum / period
 }
 
-function atr(bars: { high: number; low: number; close: number }[], period: number): number {
-  if (bars.length < period + 1) return 0
-  const trs: number[] = []
-  for (let i = 1; i < bars.length; i++) {
-    const h = bars[i].high
-    const l = bars[i].low
-    const pc = bars[i - 1].close
-    trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)))
+/**
+ * O(1) running ATR state. Call `update()` with each new bar to get the current ATR.
+ * Seeds with a simple average of the first `period` true ranges.
+ */
+class RunningAtr {
+  private trBuffer: number[] = []
+  private trSum = 0
+  private prevClose: number | null = null
+  readonly period: number
+  value = 0
+  seeded = false
+
+  constructor(period: number) {
+    this.period = period
   }
-  // simple average of last `period` TRs
-  const slice = trs.slice(-period)
-  return slice.reduce((a, b) => a + b, 0) / slice.length
+
+  /** Process one bar and return the current ATR value. */
+  update(bar: { high: number; low: number; close: number }): number {
+    if (this.prevClose === null) {
+      this.prevClose = bar.close
+      return 0
+    }
+
+    const tr = Math.max(
+      bar.high - bar.low,
+      Math.abs(bar.high - this.prevClose),
+      Math.abs(bar.low - this.prevClose),
+    )
+    this.prevClose = bar.close
+
+    if (!this.seeded) {
+      this.trBuffer.push(tr)
+      this.trSum += tr
+      if (this.trBuffer.length === this.period) {
+        this.value = this.trSum / this.period
+        this.seeded = true
+      }
+      return 0
+    }
+
+    // Running: subtract oldest TR, add newest
+    this.trSum += tr - this.trBuffer.shift()!
+    this.trBuffer.push(tr)
+    this.value = this.trSum / this.period
+    return this.value
+  }
 }
 
 // ---------- Timeframe helpers ----------
@@ -99,16 +133,19 @@ function isIntradayTf(tf: string): boolean {
   return t === "M1" || t === "M5" || t === "M15" || t === "M30" || t === "H1" || t === "H4"
 }
 
-/** Approximate number of bars per year for Sharpe annualisation */
+/** Approximate number of bars per year for Sharpe annualisation.
+ * IDX trades 09:00-16:15 WIB = 435 min/day, ~250 trading days/year. */
 function getBarsPerYear(timeframe: string): number {
   const t = timeframe.toUpperCase()
+  const IDX_MINUTES_PER_DAY = 435 // 09:00-16:15 WIB
+  const TRADING_DAYS = 250
   switch (t) {
-    case "M1":  return 390 * 250       // ~97,500 (6.5h * 60min * 250 days)
-    case "M5":  return 78 * 250         // ~19,500
-    case "M15": return 26 * 250         // ~6,500
-    case "M30": return 13 * 250         // ~3,250
-    case "H1":  return 8 * 250          // ~2,000
-    case "H4":  return 2 * 250          // ~500
+    case "M1":  return Math.floor(IDX_MINUTES_PER_DAY) * TRADING_DAYS       // ~108,750
+    case "M5":  return Math.floor(IDX_MINUTES_PER_DAY / 5) * TRADING_DAYS    // ~21,750
+    case "M15": return Math.floor(IDX_MINUTES_PER_DAY / 15) * TRADING_DAYS   // ~7,250
+    case "M30": return Math.floor(IDX_MINUTES_PER_DAY / 30) * TRADING_DAYS   // ~3,625
+    case "H1":  return Math.floor(IDX_MINUTES_PER_DAY / 60) * TRADING_DAYS   // ~1,812
+    case "H4":  return Math.floor(IDX_MINUTES_PER_DAY / 240) * TRADING_DAYS  // ~453
     case "D1":  return 252              // trading days
     case "W1":  return 52
     default:    return 252
@@ -174,12 +211,16 @@ function runSmaCrossover(
     return { trades, equityCurve }
   }
 
-  // ---- Improvement 6: O(1) SMA using running sums ----
-  // Initialize running sums for fast and slow SMAs
+  // ---- O(1) SMA using running sums ----
   let fastSum = 0
   for (let i = 0; i < FAST; i++) fastSum += candles[i].close
   let slowSum = 0
   for (let i = 0; i < SLOW; i++) slowSum += candles[i].close
+
+  // ---- O(1) running ATR ----
+  const runningAtr = new RunningAtr(ATR_PERIOD)
+  // Pre-seed ATR from bars before the main loop
+  for (let i = 0; i < SLOW; i++) runningAtr.update(candles[i])
 
   for (let i = SLOW; i < candles.length; i++) {
     // Update running sums: add new close, subtract old close
@@ -193,26 +234,20 @@ function runSmaCrossover(
     const slowNow = slowSum / SLOW
 
     // For previous values, we need to look back one bar
-    // Compute previous fast/slow from the bar before
     let prevFast: number
     let prevSlow: number
     if (i === SLOW) {
-      // For the first iteration at i=SLOW, compute from the slice ending at i-1
       const prevCloses = candles.slice(0, i).map((c) => c.close)
       prevFast = sma(prevCloses, FAST)
       prevSlow = sma(prevCloses, SLOW)
     } else {
-      // Previous fast/slow are the running sums from bar i-1
-      const prevFastSum = fastSum - newClose + oldFastClose  // undo current, go back
+      const prevFastSum = fastSum - newClose + oldFastClose
       const prevSlowSum = slowSum - newClose + oldSlowClose
       prevFast = prevFastSum / FAST
       prevSlow = prevSlowSum / SLOW
     }
 
-    const currentAtr = atr(
-      candles.slice(0, i + 1).map((c) => ({ high: c.high, low: c.low, close: c.close })),
-      ATR_PERIOD,
-    )
+    const currentAtr = runningAtr.update(candles[i])
 
     // Check exit for open position
     if (inPosition) {
@@ -227,11 +262,11 @@ function runSmaCrossover(
       }
 
       if (exitPrice !== null) {
-        // Improvement 5: Slippage on exit — worsen price in unfavorable direction
+        // Slippage on exit — worsen price in unfavorable direction
         if (posDirection === "LONG") {
-          exitPrice -= slippagePips * pipValue  // sell lower
+          exitPrice -= slippagePips * pipValue
         } else {
-          exitPrice += slippagePips * pipValue  // buy higher
+          exitPrice += slippagePips * pipValue
         }
 
         const rawPnl = posDirection === "LONG"
@@ -267,11 +302,11 @@ function runSmaCrossover(
         const dir = buySignal ? "LONG" : "SHORT"
         let entryPrice = candles[i].close
 
-        // Improvement 5: Slippage on entry — worsen price in unfavorable direction
+        // Slippage on entry — worsen price in unfavorable direction
         if (dir === "LONG") {
-          entryPrice += slippagePips * pipValue  // buy higher
+          entryPrice += slippagePips * pipValue
         } else {
-          entryPrice -= slippagePips * pipValue  // sell lower
+          entryPrice -= slippagePips * pipValue
         }
 
         const slDist = currentAtr * slAtrMult
@@ -295,24 +330,22 @@ function runSmaCrossover(
       }
     }
 
-    // ---- Improvement 7: Equity curve recording ----
-    // For intraday: record every bar; for D1/W1: record once per day (dedup by date)
+    // Equity curve: include mark-to-market for open positions
+    let markToMarketEquity = equity
+    if (inPosition) {
+      const unrealizedPnl = posDirection === "LONG"
+        ? (candles[i].close - posEntryPrice) * posShares
+        : (posEntryPrice - candles[i].close) * posShares
+      markToMarketEquity = equity + unrealizedPnl
+    }
+
     const dateStr = candles[i].openTime.toISOString().split("T")[0]
     if (isIntraday) {
-      // Record every bar, but cap at MAX_EQUITY_POINTS
-      if (equityCurve.length < MAX_EQUITY_POINTS) {
-        // Subsample: if we'd exceed, take every Nth point
-        const remaining = candles.length - SLOW
-        const remainingBars = remaining - i
-        const slotsLeft = MAX_EQUITY_POINTS - equityCurve.length
-        // Simple approach: always push, trim later if needed
-        equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
-      }
+      equityCurve.push({ date: dateStr, equity: Math.round(markToMarketEquity * 100) / 100 })
     } else {
-      // Daily/weekly: deduplicate by date
       const lastDate = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].date : ""
       if (dateStr !== lastDate) {
-        equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+        equityCurve.push({ date: dateStr, equity: Math.round(markToMarketEquity * 100) / 100 })
       }
     }
   }
@@ -386,24 +419,19 @@ function runEmaCrossover(
   for (let i = 0; i < SLOW_PERIOD; i++) slowEma += candles[i].close
   slowEma /= SLOW_PERIOD
 
+  // Advance fastEma from bar FAST_PERIOD to SLOW_PERIOD-1 so both EMAs
+  // are properly converged before the main signal loop starts at SLOW_PERIOD.
+  for (let i = FAST_PERIOD; i < SLOW_PERIOD; i++) {
+    fastEma = candles[i].close * fastK + fastEma * (1 - fastK)
+  }
+
   // Track previous EMA values for crossover detection
   let prevFastEma = fastEma
   let prevSlowEma = slowEma
 
-  // We start generating signals from SLOW_PERIOD onwards (need both EMAs seeded)
-  // First, advance EMAs from FAST_PERIOD to SLOW_PERIOD to get proper slowEma
-  for (let i = FAST_PERIOD; i < SLOW_PERIOD; i++) {
-    fastEma = candles[i].close * fastK + fastEma * (1 - fastK)
-  }
-  // At i = SLOW_PERIOD, slowEma is already seeded from SMA, but we need to advance it too
-  // Actually, let's recompute: seed both from SMA, then iterate from SLOW_PERIOD
-  fastEma = 0
-  for (let i = 0; i < FAST_PERIOD; i++) fastEma += candles[i].close
-  fastEma /= FAST_PERIOD
-
-  slowEma = 0
-  for (let i = 0; i < SLOW_PERIOD; i++) slowEma += candles[i].close
-  slowEma /= SLOW_PERIOD
+  // O(1) running ATR
+  const runningAtr = new RunningAtr(ATR_PERIOD)
+  for (let i = 0; i < SLOW_PERIOD; i++) runningAtr.update(candles[i])
 
   // Now iterate: at bar i, compute EMA, then check signal
   for (let i = SLOW_PERIOD; i < candles.length; i++) {
@@ -414,10 +442,7 @@ function runEmaCrossover(
     fastEma = candles[i].close * fastK + fastEma * (1 - fastK)
     slowEma = candles[i].close * slowK + slowEma * (1 - slowK)
 
-    const currentAtr = atr(
-      candles.slice(0, i + 1).map((c) => ({ high: c.high, low: c.low, close: c.close })),
-      ATR_PERIOD,
-    )
+    const currentAtr = runningAtr.update(candles[i])
 
     // Check exit for open position
     if (inPosition) {
@@ -500,14 +525,22 @@ function runEmaCrossover(
       }
     }
 
-    // Equity curve recording
+    // Equity curve: include mark-to-market for open positions
+    let markToMarketEquity = equity
+    if (inPosition) {
+      const unrealizedPnl = posDirection === "LONG"
+        ? (candles[i].close - posEntryPrice) * posShares
+        : (posEntryPrice - candles[i].close) * posShares
+      markToMarketEquity = equity + unrealizedPnl
+    }
+
     const dateStr = candles[i].openTime.toISOString().split("T")[0]
     if (isIntraday) {
-      equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+      equityCurve.push({ date: dateStr, equity: Math.round(markToMarketEquity * 100) / 100 })
     } else {
       const lastDate = equityCurve.length > 0 ? equityCurve[equityCurve.length - 1].date : ""
       if (dateStr !== lastDate) {
-        equityCurve.push({ date: dateStr, equity: Math.round(equity * 100) / 100 })
+        equityCurve.push({ date: dateStr, equity: Math.round(markToMarketEquity * 100) / 100 })
       }
     }
   }

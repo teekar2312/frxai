@@ -593,13 +593,19 @@ export interface TrailingStopResult {
  * SL values produces non-standard prices that the broker will reject.
  * This function rounds the candidate SL to the nearest valid tick.
  *
+ * When `direction` is 'SELL', rounds UP to the nearest tick (more conservative
+ * for a SELL stop-loss). For 'BUY' or unspecified, rounds to the nearest tick.
+ *
  * Falls back to rounding to 4 decimal places if the symbol is not in SYMBOL_MAP.
  */
-export function roundToTickSize(price: number, symbol: string): number {
+export function roundToTickSize(price: number, symbol: string, direction?: 'BUY' | 'SELL'): number {
   const mapping = validateSymbol(symbol)
   if (mapping && mapping.tickSize > 0) {
-    // For BUY trailing SL (below price), round DOWN to nearest tick
-    // For general use, round to nearest tick
+    if (direction === 'SELL') {
+      // Round UP for SELL SL (more conservative)
+      return Math.ceil(price / mapping.tickSize) * mapping.tickSize
+    }
+    // Default: round to nearest tick
     return Math.round(price / mapping.tickSize) * mapping.tickSize
   }
   // Fallback: round to 4 decimal places for forex-style symbols
@@ -672,9 +678,11 @@ export function isTrailingAllowedForPhase(phase: TradingPhase): boolean {
  *   1. **Tick-size rounding** (Fix 1): Candidate SL is rounded to the symbol's
  *      valid tick size to prevent broker rejections on IDX.
  *
- *   2. **Break-even floor** (Fix 2): For BUY, SL is floored at entryPrice (never
- *      set below entry). For SELL, SL is capped at entryPrice. Prevents turning a
- *      winning trade into a loser.
+ *   2. **Break-even floor** (Fix 2): For BUY, SL is floored at the commission-aware
+ *      break-even price (entryPrice + commission per share). For SELL, SL is capped
+ *      at (entryPrice - commission per share). Prevents turning a winning trade into
+ *      a loser when commission is factored in. Falls back to entryPrice if commission
+ *      or lotSize is not provided.
  *
  *   3. **Cooldown throttle** (Fix 3): If `lastSlAdjust` is provided and the
  *      cooldown has not elapsed, the adjustment is skipped (returned but not
@@ -717,6 +725,10 @@ export function adjustTrailingStop(
     trailingSteps?: string | null
     trailingAdjustments?: number
     trailingCooldownSec?: number
+    /** Round-trip commission for break-even calculation. */
+    commission?: number
+    /** Lot size for commission-per-share calculation. */
+    lotSize?: number
   },
   newPrice: number,
   options?: {
@@ -763,6 +775,11 @@ export function adjustTrailingStop(
       }
     } catch {
       // Invalid JSON — fall back to simple trailing
+      logger.warn('TRADE_EXECUTION', `Invalid trailingSteps JSON for trade, falling back to simple trailing`, {
+        tradeId: trade.id,
+        symbol: trade.symbol,
+        details: { rawTrailingSteps: trade.trailingSteps?.slice(0, 100) },
+      })
     }
   }
 
@@ -820,21 +837,25 @@ export function adjustTrailingStop(
     const newHighest = Math.max(currentHighest, newPrice)
     let candidateSl = newHighest - effectiveTrailingDist
 
-    // --- Fix 2: Break-even floor ---
-    // SL must never be set below entry price for a BUY trade
+    // --- Fix 2: Break-even floor (commission-aware) ---
+    // SL must never be set below the true break-even price for a BUY trade.
+    // True break-even accounts for round-trip commission.
     let breakEvenApplied = false
-    if (candidateSl < entryPrice) {
-      candidateSl = entryPrice
+    const breakEvenFloor = (trade.commission != null && trade.lotSize != null && trade.lotSize > 0)
+      ? entryPrice + (trade.commission / (trade.lotSize * 100))
+      : entryPrice
+    if (candidateSl < breakEvenFloor) {
+      candidateSl = breakEvenFloor
       breakEvenApplied = true
     }
 
     // --- Fix 1: Tick-size rounding ---
-    // Round DOWN to nearest tick (for BUY SL, we want the SL to be valid)
+    // Round to nearest tick (for BUY SL, round to nearest valid tick)
     if (trade.symbol) {
-      candidateSl = roundToTickSize(candidateSl, trade.symbol)
-      // After rounding down, re-check break-even floor
-      if (candidateSl < entryPrice) {
-        candidateSl = entryPrice
+      candidateSl = roundToTickSize(candidateSl, trade.symbol, 'BUY')
+      // After rounding, re-check break-even floor
+      if (candidateSl < breakEvenFloor) {
+        candidateSl = breakEvenFloor
         breakEvenApplied = true
       }
     }
@@ -868,26 +889,25 @@ export function adjustTrailingStop(
     const newLowest = Math.min(currentLowest, newPrice)
     let candidateSl = newLowest + effectiveTrailingDist
 
-    // --- Fix 2: Break-even floor ---
-    // SL must never be set above entry price for a SELL trade
+    // --- Fix 2: Break-even floor (commission-aware) ---
+    // SL must never be set above the true break-even price for a SELL trade.
+    // True break-even accounts for round-trip commission.
     let breakEvenApplied = false
-    if (candidateSl > entryPrice) {
-      candidateSl = entryPrice
+    const breakEvenFloor = (trade.commission != null && trade.lotSize != null && trade.lotSize > 0)
+      ? entryPrice - (trade.commission / (trade.lotSize * 100))
+      : entryPrice
+    if (candidateSl > breakEvenFloor) {
+      candidateSl = breakEvenFloor
       breakEvenApplied = true
     }
 
-    // --- Fix 1: Tick-size rounding ---
-    // Round UP to nearest tick (for SELL SL, we want the SL to be valid)
+    // --- Fix 1: Tick-size rounding (unified via roundToTickSize) ---
+    // Round UP for SELL SL (more conservative)
     if (trade.symbol) {
-      const mapping = validateSymbol(trade.symbol)
-      if (mapping && mapping.tickSize > 0) {
-        candidateSl = Math.ceil(candidateSl / mapping.tickSize) * mapping.tickSize
-      } else {
-        candidateSl = Math.round(candidateSl * 10000) / 10000
-      }
+      candidateSl = roundToTickSize(candidateSl, trade.symbol, 'SELL')
       // After rounding up, re-check break-even floor
-      if (candidateSl > entryPrice) {
-        candidateSl = entryPrice
+      if (candidateSl > breakEvenFloor) {
+        candidateSl = breakEvenFloor
         breakEvenApplied = true
       }
     }
@@ -922,11 +942,15 @@ export function adjustTrailingStop(
 /**
  * Process trailing stops for all open trades given a price update map.
  *
- * Fetches all OPEN trades with trailingStop=true, applies the trailing stop
+ * Fetches all OPEN and PARTIAL_FILLED trades with trailingStop=true, applies the trailing stop
  * adjustment logic (with all 6 improvements: tick-size rounding, break-even
  * floor, cooldown throttle, trading phase awareness, max-adjustments cap,
  * and tiered trailing steps), updates the database for adjusted trades,
  * and emits TRAILING_STOP_ADJUSTED events.
+ *
+ * Peak tracking (highestPrice/lowestPrice) is always updated on every tick,
+ * even when SL is not adjusted (cooldown, phase block, or below minImprovement),
+ * to prevent stale peaks from causing premature stop-outs.
  *
  * Returns aggregate counts of adjustments, cooldown-blocked, phase-blocked, and errors.
  */
@@ -947,7 +971,7 @@ export async function processTrailingStopsForAllTrades(
     const symbols = Array.from(priceUpdate.keys())
     const trailingTrades = await db.trade.findMany({
       where: {
-        status: 'OPEN',
+        status: { in: ['OPEN', 'PARTIAL_FILLED'] },
         trailingStop: true,
         symbol: { in: symbols },
       },
@@ -961,11 +985,39 @@ export async function processTrailingStopsForAllTrades(
       metadata: { symbolCount: priceUpdate.size, phase: currentPhase },
     })
 
+    // Always update highestPrice/lowestPrice for ALL trailing trades on every tick,
+    // even if SL is not adjusted (cooldown, phase block, below minImprovement).
+    // This prevents stale peaks from causing premature stop-outs.
+    for (const trade of trailingTrades) {
+      const newPrice = priceUpdate.get(trade.symbol)
+      if (newPrice === undefined) continue
+      const updates: Record<string, unknown> = {}
+      if (trade.direction === 'BUY') {
+        const newHigh = Math.max(trade.highestPrice ?? trade.currentPrice, newPrice)
+        if (newHigh !== (trade.highestPrice ?? trade.currentPrice)) updates.highestPrice = newHigh
+      } else {
+        const newLow = Math.min(trade.lowestPrice ?? trade.currentPrice, newPrice)
+        if (newLow !== (trade.lowestPrice ?? trade.currentPrice)) updates.lowestPrice = newLow
+      }
+      if (Object.keys(updates).length > 0) {
+        await db.trade.update({ where: { id: trade.id }, data: updates })
+      }
+    }
+
     for (const trade of trailingTrades) {
       const newPrice = priceUpdate.get(trade.symbol)
       if (newPrice === undefined) continue
 
       try {
+        // Re-read peak values after the batch update above so adjustTrailingStop
+        // uses the freshest highestPrice/lowestPrice
+        const freshHighest = trade.direction === 'BUY'
+          ? Math.max(trade.highestPrice ?? trade.currentPrice, newPrice)
+          : trade.highestPrice
+        const freshLowest = trade.direction === 'SELL'
+          ? Math.min(trade.lowestPrice ?? trade.currentPrice, newPrice)
+          : trade.lowestPrice
+
         const result = adjustTrailingStop(
           {
             id: trade.id,
@@ -976,12 +1028,14 @@ export async function processTrailingStopsForAllTrades(
             trailingStop: trade.trailingStop,
             trailingDist: trade.trailingDist,
             sl: trade.sl,
-            highestPrice: trade.highestPrice,
-            lowestPrice: trade.lowestPrice,
+            highestPrice: freshHighest,
+            lowestPrice: freshLowest,
             lastSlAdjust: trade.lastSlAdjust,
             trailingSteps: trade.trailingSteps,
             trailingAdjustments: trade.trailingAdjustments,
             trailingCooldownSec: trade.trailingCooldownSec,
+            commission: trade.commission,
+            lotSize: trade.lotSize,
           },
           newPrice,
           { currentPhase, now },
@@ -994,20 +1048,11 @@ export async function processTrailingStopsForAllTrades(
           continue
         }
 
-        // Update the trade in DB with all new trailing stop fields
-        const newHighestPrice = trade.direction === 'BUY'
-          ? Math.max(trade.highestPrice ?? trade.currentPrice, newPrice)
-          : trade.highestPrice
-        const newLowestPrice = trade.direction === 'SELL'
-          ? Math.min(trade.lowestPrice ?? trade.currentPrice, newPrice)
-          : trade.lowestPrice
-
-        await db.trade.update({
-          where: { id: trade.id },
+        // Atomic DB update: only update if trade is still open (not closed by SL/TP concurrently)
+        const updateResult = await db.trade.updateMany({
+          where: { id: trade.id, status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
           data: {
             sl: result.newSl,
-            highestPrice: newHighestPrice,
-            lowestPrice: newLowestPrice,
             lastSlAdjust: now,
             trailingAdjustments: (trade.trailingAdjustments ?? 0) + 1,
             // Set activation timestamp on first successful adjustment
@@ -1015,6 +1060,15 @@ export async function processTrailingStopsForAllTrades(
             breakEvenApplied: result.breakEvenApplied ? true : trade.breakEvenApplied,
           },
         })
+
+        if (updateResult.count === 0) {
+          // Trade was closed during trailing evaluation — skip silently
+          logger.warn('TRADE_EXECUTION', `Trailing stop adjustment skipped: trade ${trade.id} was closed during evaluation`, {
+            tradeId: trade.id,
+            symbol: trade.symbol,
+          })
+          continue
+        }
 
         adjusted++
 
@@ -1743,10 +1797,11 @@ export async function evaluatePriceAlerts(
  * Process a price update through the full pipeline.
  *
  * Execution order:
- *   1. Trailing stops (adjust SL before checking SL triggers)
- *   2. SL/TP triggers (close trades that hit stops/targets)
- *   3. Partial close triggers (execute scaled exits)
- *   4. Price alert evaluation (CROSS_UP/CROSS_DOWN need previousPrices)
+ *   1. Update currentPrice on open trades (so all subsequent stages use fresh prices)
+ *   2. Trailing stops (adjust SL before checking SL triggers)
+ *   3. SL/TP triggers (close trades that hit stops/targets)
+ *   4. Partial close triggers (execute scaled exits)
+ *   5. Price alert evaluation (CROSS_UP/CROSS_DOWN need previousPrices)
  *
  * Returns aggregate results from all pipeline stages.
  */
@@ -1763,35 +1818,11 @@ export async function processPriceUpdate(
   let triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; triggeredAt: Date }> = []
 
   try {
-    // Stage 1: Trailing stops — adjust SL levels before we check SL triggers
-    const trailingResult = await processTrailingStopsForAllTrades(currentPrices)
-    trailingAdjusted = trailingResult.adjusted
-    errors += trailingResult.errors
-    // Track new telemetry (used in log but not in return type to maintain backward compat)
-    const _trailingCooldownBlocked = trailingResult.cooldownBlocked
-    const _trailingPhaseBlocked = trailingResult.phaseBlocked
-    const _trailingMaxCapHit = trailingResult.maxCapHit
-
-    // Stage 2: SL/TP triggers — close trades that hit their stops or targets
-    const slTpResult = await processSlTpForAllOpenTrades(currentPrices)
-    slTriggered = slTpResult.slTriggered
-    tpTriggered = slTpResult.tpTriggered
-    errors += slTpResult.errors
-
-    // Stage 3: Partial close triggers — execute scaled exits at TP levels
-    const partialResult = await checkPartialCloseTriggers(currentPrices)
-    partialCloses = partialResult.triggered
-    errors += partialResult.errors
-
-    // Stage 4: Evaluate price alerts
-    const alertResult = await evaluatePriceAlerts(currentPrices, previousPrices)
-    triggeredAlerts = alertResult.triggered
-
-    // Stage 5: Update currentPrice on open trades to prevent stale values
+    // Stage 1: Update currentPrice on open trades so all subsequent stages use fresh prices
     try {
       for (const [symbol, price] of currentPrices) {
         await db.trade.updateMany({
-          where: { status: 'OPEN', symbol },
+          where: { status: { in: ['OPEN', 'PARTIAL_FILLED'] }, symbol },
           data: { currentPrice: price },
         })
       }
@@ -1801,6 +1832,30 @@ export async function processPriceUpdate(
         details: err instanceof Error ? err.message : String(err),
       })
     }
+
+    // Stage 2: Trailing stops — adjust SL levels before we check SL triggers
+    const trailingResult = await processTrailingStopsForAllTrades(currentPrices)
+    trailingAdjusted = trailingResult.adjusted
+    errors += trailingResult.errors
+    // Track new telemetry (used in log but not in return type to maintain backward compat)
+    const _trailingCooldownBlocked = trailingResult.cooldownBlocked
+    const _trailingPhaseBlocked = trailingResult.phaseBlocked
+    const _trailingMaxCapHit = trailingResult.maxCapHit
+
+    // Stage 3: SL/TP triggers — close trades that hit their stops or targets
+    const slTpResult = await processSlTpForAllOpenTrades(currentPrices)
+    slTriggered = slTpResult.slTriggered
+    tpTriggered = slTpResult.tpTriggered
+    errors += slTpResult.errors
+
+    // Stage 4: Partial close triggers — execute scaled exits at TP levels
+    const partialResult = await checkPartialCloseTriggers(currentPrices)
+    partialCloses = partialResult.triggered
+    errors += partialResult.errors
+
+    // Stage 5: Evaluate price alerts
+    const alertResult = await evaluatePriceAlerts(currentPrices, previousPrices)
+    triggeredAlerts = alertResult.triggered
   } catch (err) {
     errors++
     logger.error('TRADE_EXECUTION', 'Price update pipeline error', {

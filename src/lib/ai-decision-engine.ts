@@ -171,6 +171,7 @@ const BREAKING_NEWS_CACHE_TTL_MS = 60_000 // 1 minute
 let lastNewsFetchTime: Record<string, number> = {}
 const NEWS_FETCH_CACHE_MS = 5 * 60 * 1000 // 5 minutes
 const MATCHING_WINDOW_MS = 5 * 60 * 1000 // 5 minutes to match decision to trade
+const NEWS_FETCH_CACHE_MAX_ENTRIES = 100 // Max entries before LRU eviction
 const ESTIMATED_ACCOUNT_VALUE = 100_000_000 // 100M IDR estimate
 const RISK_PER_TRADE_PCT = 0.01 // 1% risk per trade
 
@@ -511,6 +512,15 @@ export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
     const result = await fetchNews({ symbols: [symbol], maxArticles: 20, forceRefresh: shouldRefresh })
     if (result.newArticles > 0 || shouldRefresh) {
       lastNewsFetchTime[symbol] = nowMs
+      // Fix 4: LRU eviction — evict oldest 20% when cache exceeds max entries
+      const cacheKeys = Object.keys(lastNewsFetchTime)
+      if (cacheKeys.length > NEWS_FETCH_CACHE_MAX_ENTRIES) {
+        const sortedKeys = cacheKeys.sort((a, b) => lastNewsFetchTime[a] - lastNewsFetchTime[b])
+        const evictCount = Math.ceil(sortedKeys.length * 0.2)
+        for (let i = 0; i < evictCount; i++) {
+          delete lastNewsFetchTime[sortedKeys[i]]
+        }
+      }
     }
     const articles = result.articles
 
@@ -1553,16 +1563,26 @@ export async function getDecisionAccuracy(days: number = 30): Promise<DecisionAc
       }
 
       // Match to a trade in-memory from the pre-loaded batch
+      // Fix 5: When multiple matches, pick the closest by openTime
       const decisionTime = d.createdAt.getTime()
       const matchWindowStart = decisionTime
       const matchWindowEnd = decisionTime + MATCHING_WINDOW_MS
 
-      const matchedTrade = allClosedTrades.find(
+      const matches = allClosedTrades.filter(
         t => t.symbol === d.symbol
           && t.direction === dType
           && t.openTime.getTime() >= matchWindowStart
           && t.openTime.getTime() <= matchWindowEnd,
       )
+
+      let matchedTrade: typeof matches[0] | undefined
+      if (matches.length > 0) {
+        matchedTrade = matches.reduce((best, t) => {
+          const bestDist = Math.abs(best.openTime.getTime() - decisionTime)
+          const tDist = Math.abs(t.openTime.getTime() - decisionTime)
+          return tDist < bestDist ? t : best
+        })
+      }
 
       if (matchedTrade) {
         const pnl = matchedTrade.pnl
@@ -1990,8 +2010,9 @@ const MIN_DECISIONS_PER_MC = 15
 /** Per-strategy performance entry for self-learning */
 export interface StrategyPerformanceEntry {
   strategy: string
-  totalTrades: number
-  winRate: number
+  totalTrades: number      // Raw integer count
+  weightedTrades: number   // Time-decay weighted sum
+  winRate: number           // Based on weighted values
   avgPnl: number
   bestMarketCondition: string
   worstMarketCondition: string
@@ -2015,8 +2036,8 @@ export interface MarketConditionWeightHint {
 
 /** Complete self-learning state persisted in DB */
 export interface SelfLearningState {
-  /** Per-strategy win rates: strategy -> {wins, total, pnlSum} */
-  strategyStats: Record<string, { wins: number; total: number; pnlSum: number }>
+  /** Per-strategy win rates: strategy -> {wins, total, pnlSum, rawTotal?, rawWins?} */
+  strategyStats: Record<string, { wins: number; total: number; pnlSum: number; rawTotal?: number; rawWins?: number }>
   /** Per (strategy, marketCondition) stats */
   strategyMarketStats: Record<string, { wins: number; total: number; pnlSum: number }>
   /** Confidence calibration: 10-point buckets from 0-100 (last bucket 90+ with rangeEnd=101) */
@@ -2061,25 +2082,14 @@ function getDefaultSelfLearningState(): SelfLearningState {
   }
 }
 
-/** Persist self-learning state to DB via a special DecisionLog record */
+/** Persist self-learning state to DB via dedicated SystemConfig table */
 async function persistSelfLearningState(state: SelfLearningState): Promise<void> {
   try {
     const jsonStr = toJsonString(state)
-    await db.decisionLog.upsert({
-      where: { id: '__self_learning_state__' },
-      update: {
-        factors: jsonStr,
-        createdAt: new Date(),
-      },
-      create: {
-        id: '__self_learning_state__',
-        symbol: '__SYSTEM__',
-        decision: 'HOLD',
-        confidence: 0,
-        reasoning: 'Self-learning state persistence record',
-        factors: jsonStr,
-        finalAction: 'HOLD',
-      },
+    await db.systemConfig.upsert({
+      where: { key: '__self_learning_state__' },
+      update: { value: jsonStr },
+      create: { key: '__self_learning_state__', value: jsonStr },
     })
   } catch (err) {
     logger.error('AI_ENGINE', 'Failed to persist self-learning state', {
@@ -2096,17 +2106,61 @@ export async function loadSelfLearningState(): Promise<SelfLearningState> {
     && selfLearningCache.state
     && (Date.now() - selfLearningCache.loadedAt) < SELF_LEARNING_CACHE_TTL_MS
   ) {
+    // Fix 3: Staleness warning even for cached state
+    if (selfLearningCache.state.totalAnalyzed > 0) {
+      const ageMs = Date.now() - new Date(selfLearningCache.state.lastUpdated).getTime()
+      const ageHours = ageMs / (1000 * 60 * 60)
+      if (ageHours > 24) {
+        logger.warn('AI_ENGINE', `Self-learning state is stale (${Math.round(ageHours)}h since last update)`, {
+          metadata: { ageHours: Math.round(ageHours), lastUpdated: selfLearningCache.state.lastUpdated, totalAnalyzed: selfLearningCache.state.totalAnalyzed },
+        })
+      }
+    }
     return selfLearningCache.state
   }
 
-  // Load from DB
+  // One-time migration: check if old DecisionLog record exists
   try {
-    const record = await db.decisionLog.findUnique({
+    const oldRecord = await db.decisionLog.findUnique({
       where: { id: '__self_learning_state__' },
     })
-    if (record && record.factors) {
-      const parsed = safeJsonParse(record.factors) as SelfLearningState | null
+    if (oldRecord && oldRecord.factors) {
+      const parsed = safeJsonParse(oldRecord.factors) as SelfLearningState | null
       if (parsed && parsed.calibrationBuckets && parsed.adaptiveMultipliers) {
+        logger.info('AI_ENGINE', 'Migrating self-learning state from DecisionLog to SystemConfig')
+        await db.systemConfig.upsert({
+          where: { key: '__self_learning_state__' },
+          update: { value: oldRecord.factors },
+          create: { key: '__self_learning_state__', value: oldRecord.factors },
+        })
+        // Delete old record
+        await db.decisionLog.delete({ where: { id: '__self_learning_state__' } }).catch(() => {})
+        selfLearningCache = { state: parsed, loadedAt: Date.now() }
+        return parsed
+      }
+    }
+  } catch {
+    // Migration failed, continue to SystemConfig path
+  }
+
+  // Load from SystemConfig
+  try {
+    const record = await db.systemConfig.findUnique({
+      where: { key: '__self_learning_state__' },
+    })
+    if (record && record.value) {
+      const parsed = safeJsonParse(record.value) as SelfLearningState | null
+      if (parsed && parsed.calibrationBuckets && parsed.adaptiveMultipliers) {
+        // Fix 3: Staleness warning
+        if (parsed.totalAnalyzed > 0) {
+          const ageMs = Date.now() - new Date(parsed.lastUpdated).getTime()
+          const ageHours = ageMs / (1000 * 60 * 60)
+          if (ageHours > 24) {
+            logger.warn('AI_ENGINE', `Self-learning state is stale (${Math.round(ageHours)}h since last update)`, {
+              metadata: { ageHours: Math.round(ageHours), lastUpdated: parsed.lastUpdated, totalAnalyzed: parsed.totalAnalyzed },
+            })
+          }
+        }
         selfLearningCache = { state: parsed, loadedAt: Date.now() }
         return parsed
       }
@@ -2290,7 +2344,7 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
 
     // --- Step 2: Match decisions to trades and build stats ---
     // Improvement 3: Use weighted accumulators for time-decay
-    const strategyStats: Record<string, { wins: number; total: number; pnlSum: number }> = {}
+    const strategyStats: Record<string, { wins: number; total: number; pnlSum: number; rawTotal: number; rawWins: number }> = {}
     const strategyMarketStats: Record<string, { wins: number; total: number; pnlSum: number }> = {}
     const calBuckets: Array<{ wins: number; total: number; rangeStart: number; rangeEnd: number }> = []
     for (let i = 0; i < 100; i += 10) {
@@ -2333,15 +2387,21 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
         pnl = d.pnlImpact as number
       } else {
         // Match in-memory
+        // Fix 5: When multiple matches, pick the closest by openTime
         const decisionTime = d.createdAt.getTime()
-        const matched = allClosedTrades.find(
+        const matchCandidates = allClosedTrades.filter(
           t => t.symbol === d.symbol
             && t.direction === d.decision
             && t.openTime.getTime() >= decisionTime
             && t.openTime.getTime() <= decisionTime + MATCHING_WINDOW_MS,
         )
-        if (matched) {
-          pnl = matched.pnl
+        if (matchCandidates.length > 0) {
+          const closest = matchCandidates.reduce((best, t) => {
+            const bestDist = Math.abs(best.openTime.getTime() - decisionTime)
+            const tDist = Math.abs(t.openTime.getTime() - decisionTime)
+            return tDist < bestDist ? t : best
+          })
+          pnl = closest.pnl
         }
       }
 
@@ -2360,13 +2420,16 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
         if (isWin) calBuckets[bucketIdx].wins += weight
       }
 
-      // Update strategy stats (weighted)
+      // Update strategy stats (weighted + raw)
       if (!strategyStats[strategy]) {
-        strategyStats[strategy] = { wins: 0, total: 0, pnlSum: 0 }
+        strategyStats[strategy] = { wins: 0, total: 0, pnlSum: 0, rawTotal: 0, rawWins: 0 }
       }
       strategyStats[strategy].total += weight
       strategyStats[strategy].pnlSum += pnl * weight
       if (isWin) strategyStats[strategy].wins += weight
+      // Fix 2: Track raw (unweighted) counts separately
+      strategyStats[strategy].rawTotal = (strategyStats[strategy].rawTotal || 0) + 1
+      if (isWin) strategyStats[strategy].rawWins = (strategyStats[strategy].rawWins || 0) + 1
 
       // Per (strategy, marketCondition) (weighted)
       const smKey = `${strategy}|${marketCondition}`
@@ -2565,7 +2628,8 @@ export async function getStrategyPerformance(days: number = 30): Promise<Strateg
 
       results.push({
         strategy,
-        totalTrades: stats.total,
+        totalTrades: stats.rawTotal || Math.round(stats.total),
+        weightedTrades: Math.round(stats.total * 100) / 100,
         winRate: stats.total > 0
           ? Math.round((stats.wins / stats.total) * 100) / 100
           : 0,
@@ -2642,6 +2706,7 @@ export async function getStrategyPerformance(days: number = 30): Promise<Strateg
       results.push({
         strategy,
         totalTrades: stats.total,
+        weightedTrades: stats.total, // No decay in DB fallback path
         winRate: stats.total > 0 ? Math.round((stats.wins / stats.total) * 100) / 100 : 0,
         avgPnl: stats.total > 0 ? Math.round((stats.pnlSum / stats.total) * 100) / 100 : 0,
         bestMarketCondition: bestMc,

@@ -2252,3 +2252,144 @@ related to DB-level filtering, lock ordering, query reduction, NLP consistency, 
 - All changes are backward-compatible (no interface changes, no new dependencies)
 - Raw SQL uses `$queryRawUnsafe` with alphanumeric validation guard
 - Throttle does not affect `filterTrade()` cached snapshot reads
+
+---
+Task ID: 2-a
+Agent: Trailing Stop Improver
+Task: Implement 7 crucial Auto Trailing Stop improvements
+
+Work Log:
+- Read worklog.md to understand 5 previous deep-audit passes on this codebase
+- Read trailing stop engine (lines 549-1089) and price update pipeline (lines 1641-1842)
+- Read API route at `/api/execution/trailing-stop/route.ts`
+- Verified Prisma schema has `commission Float @default(0)` and `lotSize Float` on Trade model
+- Confirmed `roundToTickSize` and `adjustTrailingStop` are only used in 2 files (backward compat safe)
+- Applied all 7 fixes (details below)
+- Updated API route to pass `commission`/`lotSize` and use atomic `updateMany`
+- `bun run lint` — 0 errors, 0 warnings
+
+Stage Summary:
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/lib/trade-execution-engine.ts` | 7 fixes (peak tracking, PARTIAL_FILLED, atomic update, pipeline reorder, commission BE, unified rounding, JSON parse warning) |
+| `src/app/api/execution/trailing-stop/route.ts` | commission/lotSize pass-through, atomic updateMany, 409 on closed trade |
+
+### Fixes Applied
+
+| # | Fix | Severity | Description |
+|---|-----|----------|-------------|
+| 1 | Always update highestPrice/lowestPrice | CRITICAL | Added pre-loop batch that updates peak prices for ALL trailing trades on every tick, before the SL-adjustment loop. Previously peaks were only updated inside `if (result.adjusted)`, meaning favorable price moves below `minImprovement` went unrecorded → stale peak → premature stop-out. Removed redundant peak update from the adjusted block. |
+| 2 | Include PARTIAL_FILLED | HIGH | Changed `status: 'OPEN'` to `status: { in: ['OPEN', 'PARTIAL_FILLED'] }` in the trailing trades query. Partial-closed trades with remaining lots still need active trailing. |
+| 3 | Atomic trailing stop DB update | CRITICAL | Changed `db.trade.update({ where: { id } })` to `db.trade.updateMany({ where: { id, status: { in: ['OPEN', 'PARTIAL_FILLED'] } } })` with `count > 0` check. Logs warning and skips if trade was closed by SL/TP concurrently. |
+| 4 | Move currentPrice update before trailing | MEDIUM | Moved Stage 5 (currentPrice batch update) to Stage 1 in `processPriceUpdate()`, before trailing/SL/TP. Also expanded the where clause to include `PARTIAL_FILLED`. Ensures `highestPrice`/`lowestPrice` comparisons use fresh `currentPrice`. |
+| 5 | Commission-aware break-even floor | MEDIUM | Added `commission?: number` and `lotSize?: number` to `adjustTrailingStop` trade interface. Break-even floor is now `entryPrice ± (commission / (lotSize * 100))` instead of raw `entryPrice`. Falls back to `entryPrice` when commission/lotSize not provided. Updated JSDoc. |
+| 6 | Unify tick-size rounding for SELL | MEDIUM | Added optional `direction?: 'BUY' | 'SELL'` parameter to `roundToTickSize()`. SELL direction uses `Math.ceil` (round up). BUY direction uses `Math.round` (round to nearest). Replaced inline SELL rounding logic (lines 881-887) with `roundToTickSize(candidateSl, trade.symbol, 'SELL')`. |
+| 7 | Log trailingSteps JSON parse failure | LOW | Added `logger.warn()` with tradeId, symbol, and first 100 chars of raw `trailingSteps` when JSON.parse fails. Previously silently swallowed. |
+
+### Backward Compatibility
+- `roundToTickSize(price, symbol)` — `direction` param is optional, defaults to nearest-tick
+- `adjustTrailingStop(trade, newPrice, options)` — `commission` and `lotSize` are optional on trade input
+- No changes to return types or exported interfaces
+- Pipeline stage numbers renumbered in JSDoc (currentPrice → Stage 1, trailing → Stage 2, etc.)
+
+### Verification
+- `bun run lint` — **0 errors, 0 warnings**
+
+---
+Task ID: 2-b
+Agent: Backtest Engine Improver
+Task: Implement 5 crucial Backtesting engine improvements
+
+Work Log:
+- Read full `/src/app/api/backtest/route.ts` (866 lines)
+- Identified 5 issues: O(n²) ATR, missing mark-to-market, truncated equity curve, EMA dead code, wrong IDX hours
+- Implemented `RunningAtr` class for O(1) per-bar ATR computation
+- Removed dead `atr()` function (was O(n) per call, called every bar → O(n²))
+- Added mark-to-market unrealized PnL to equity curve in both engines
+- Fixed SMA engine intraday equity curve silently stopping at 2000 bars
+- Removed EMA engine double-seed dead code (lines 399-406 undid lines 395-397)
+- Corrected `getBarsPerYear` from US hours (390 min/day) to IDX hours (435 min/day)
+- `bun run lint` — 0 errors, 0 warnings
+
+Stage Summary:
+
+### File Modified
+| File | Changes |
+|------|----------|
+| `src/app/api/backtest/route.ts` | 5 fixes (running ATR, mark-to-market, equity curve cap, EMA dead code, IDX hours) |
+
+### Fixes Applied
+
+| # | Fix | Severity | Description |
+|---|-----|----------|-------------|
+| 1 | O(n²) ATR → O(1) RunningAtr | CRITICAL | Both SMA and EMA engines called `atr(candles.slice(0, i+1), 14)` every bar, creating O(n) array + O(n) loop per bar = O(n²) total. For M1 data (~100K bars), this is ~10 billion operations. Replaced with `RunningAtr` class that maintains a circular TR buffer and running sum, updating in O(1) per bar. Removed dead `atr()` function. |
+| 2 | Equity curve mark-to-market | HIGH | Both engines only recorded closed-trade PnL in the equity curve. Open positions with large unrealized losses appeared flat, understating max drawdown. Added unrealized PnL calculation using current bar's close price for open positions. |
+| 3 | SMA intraday equity curve truncation | MEDIUM | SMA engine had `if (equityCurve.length < MAX_EQUITY_POINTS)` inside the loop, silently stopping equity recording after 2000 bars. For M1 data with 100K+ bars, 98% of the backtest had no equity data. Removed the early-stop check; now pushes all points and subsamples at the end (matching EMA engine behavior). |
+| 4 | EMA double-seed dead code | MEDIUM | Lines 424-437 seeded fastEma/slowEma, then lines 439-441 advanced fastEma, but lines 443-450 re-seeded both EMAs — undoing the warmup. The warmup loop was dead code. Removed the re-seed block, kept single seed + proper fastEma warmup from FAST_PERIOD to SLOW_PERIOD. |
+| 5 | IDX bars-per-year for Sharpe | MEDIUM | `getBarsPerYear` used US market hours (390 min/day). IDX trades 09:00-16:15 WIB = 435 min/day. Corrected all intraday multipliers: M1=108,750, M5=21,750, M15=7,250, M30=3,625, H1=1,812, H4=453. |
+
+### Verification
+- `bun run lint` — **0 errors, 0 warnings**
+
+---
+Task ID: 2-c
+Agent: Self-Learning ML Improver
+Task: Implement 5 crucial Self-Learning ML improvements
+
+Work Log:
+- Read worklog.md to understand 7+ previous deep-audit/fix passes on this codebase
+- Read full prisma/schema.prisma (559 lines) and ai-decision-engine.ts (2709 lines)
+- Added `SystemConfig` model to prisma/schema.prisma with key (unique), value (JSON blob), timestamps
+- Ran `bun run db:push` — schema applied, Prisma client regenerated
+- Updated `persistSelfLearningState` to use `db.systemConfig.upsert` instead of `db.decisionLog.upsert`
+- Updated `loadSelfLearningState` with 3-step load: (1) in-memory cache check, (2) one-time migration from DecisionLog → SystemConfig, (3) SystemConfig load
+- Added staleness warning when self-learning state is >24h old (both cached and fresh loads)
+- Added `NEWS_FETCH_CACHE_MAX_ENTRIES = 100` constant and LRU eviction (oldest 20%) in `analyzeNewsFactors`
+- Replaced `.find()` with `.filter()` + `.reduce(closest by openTime)` in both `getDecisionAccuracy` and `updateSelfLearningState`
+- Added `weightedTrades` field to `StrategyPerformanceEntry` interface
+- Added `rawTotal`/`rawWins` optional fields to `SelfLearningState.strategyStats` type and local `strategyStats` variable
+- Tracked raw (unweighted) counts alongside weighted counts in `updateSelfLearningState`
+- Updated `getStrategyPerformance` self-learning path: `totalTrades` = rawTotal, `weightedTrades` = weighted total
+- Updated `getStrategyPerformance` DB fallback path: both fields set to raw count (no decay applied)
+- `bun run lint` — 0 errors, 0 warnings
+- `npx tsc --noEmit` — 0 new errors (2 pre-existing errors in unrelated lines unchanged)
+
+Stage Summary:
+- **Fix 1 (HIGH)**: Self-learning state migrated from `DecisionLog` (id='__self_learning_state__') to dedicated `SystemConfig` table. One-time migration automatically moves data and deletes old record.
+- **Fix 2 (HIGH)**: `StrategyPerformanceEntry` now has `totalTrades` (raw integer) and `weightedTrades` (time-decay weighted). `SelfLearningState.strategyStats` tracks both raw and weighted counts.
+- **Fix 3 (MEDIUM)**: Staleness warning logged when self-learning state is >24h old, with age in hours and lastUpdated timestamp.
+- **Fix 4 (MEDIUM)**: `lastNewsFetchTime` cache capped at 100 entries; oldest 20% evicted when exceeded.
+- **Fix 5 (MEDIUM)**: Decision-trade matching now picks the closest trade by openTime when multiple matches exist within the 5-min window. Applied in both `getDecisionAccuracy` and `updateSelfLearningState`.
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `prisma/schema.prisma` | Added `SystemConfig` model (key, value, timestamps) |
+| `src/lib/ai-decision-engine.ts` | All 5 fixes (SystemConfig, raw/weighted, staleness, LRU, closest match) |
+
+### Backward Compatibility
+- `StrategyPerformanceEntry`: Added `weightedTrades` field (optional for consumers, always populated)
+- `SelfLearningState.strategyStats`: Added optional `rawTotal`/`rawWins` (old data without these fields still works via `||` fallback)
+- API route `/api/ai/accuracy` unchanged (passes through `getStrategyPerformance` output)
+- One-time migration runs transparently on next `loadSelfLearningState()` call
+
+---
+Task ID: 2
+Agent: Main Orchestrator
+Task: Deep audit of Auto Trailing Stop, Backtesting, Self-Learning ML — 17 improvements
+
+Work Log:
+- Read and analyzed all source files for 3 modules (trade-execution-engine.ts, backtest/route.ts, ai-decision-engine.ts)
+- Identified 17 crucial improvements across all modules
+- Launched 3 parallel subagents (2-a, 2-b, 2-c) for implementation
+- All 3 subagents completed successfully
+- Verified all changes: `bun run lint` — 0 errors, 0 warnings
+- Verified key changes: PARTIAL_FILLED inclusion, atomic DB updates, RunningAtr class, SystemConfig model, raw/weighted counts
+
+Stage Summary:
+- **17 total improvements** across 3 modules, committed as deep audit pass
+- **Auto Trailing Stop (7 fixes)**: Always-update peaks, PARTIAL_FILLED inclusion, atomic DB updates, pipeline reorder, commission-aware break-even, unified tick rounding, JSON parse warning
+- **Backtesting (5 fixes)**: O(n) RunningAtr, mark-to-market equity curve, SMA intraday truncation fix, EMA double-seed removal, IDX bars-per-year
+- **Self-Learning ML (5 fixes)**: SystemConfig table migration, raw vs weighted counts, staleness warning, LRU cache eviction, closest-match trade selection

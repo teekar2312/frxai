@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
 
     const skip = (page - 1) * limit
 
-    const [trades, total] = await Promise.all([
+    const [trades, total, aggregates] = await Promise.all([
       db.trade.findMany({
         where,
         orderBy: { [sortField]: sortDir },
@@ -80,7 +80,14 @@ export async function GET(request: NextRequest) {
         },
       }),
       db.trade.count({ where }),
+      db.trade.aggregate({
+        where,
+        _sum: { pnl: true, commission: true, slippage: true },
+        _count: { _all: true },
+      }),
     ])
+
+    const winCount = await db.trade.count({ where: { ...where, pnl: { gt: 0 } } })
 
     return NextResponse.json({
       success: true,
@@ -88,6 +95,13 @@ export async function GET(request: NextRequest) {
       total,
       page,
       limit,
+      aggregates: {
+        totalPnl: Math.round((aggregates._sum.pnl ?? 0) * 100) / 100,
+        winRate: aggregates._count._all > 0 ? Math.round((winCount / aggregates._count._all) * 10000) / 100 : 0,
+        avgPnl: aggregates._count._all > 0 ? Math.round(((aggregates._sum.pnl ?? 0) / aggregates._count._all) * 100) / 100 : 0,
+        totalCommission: Math.round((aggregates._sum.commission ?? 0) * 100) / 100,
+        totalSlippage: Math.round((aggregates._sum.slippage ?? 0) * 100) / 100,
+      },
     })
   } catch (error) {
     console.error('Trade history error:', error)

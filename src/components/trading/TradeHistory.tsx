@@ -59,12 +59,21 @@ interface TradeRecord {
   slippage: number
 }
 
+interface Aggregates {
+  totalPnl: number
+  winRate: number
+  avgPnl: number
+  totalCommission: number
+  totalSlippage: number
+}
+
 interface HistoryResponse {
   success: boolean
   data: TradeRecord[]
   total: number
   page: number
   limit: number
+  aggregates: Aggregates
 }
 
 const REASON_STYLES: Record<string, string> = {
@@ -101,6 +110,7 @@ function formatCloseTime(ct: string | null): string {
 export default function TradeHistory() {
   const [trades, setTrades] = useState<TradeRecord[]>([])
   const [total, setTotal] = useState(0)
+  const [aggregates, setAggregates] = useState<Aggregates | null>(null)
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -141,6 +151,7 @@ export default function TradeHistory() {
       if (json.success) {
         setTrades(json.data)
         setTotal(json.total)
+        setAggregates(json.aggregates)
       } else {
         throw new Error('API returned error')
       }
@@ -171,10 +182,10 @@ export default function TradeHistory() {
 
   const totalPages = Math.ceil(total / limit)
 
-  // Summary stats
-  const totalPnl = trades.reduce((s, t) => s + t.pnl, 0)
-  const wins = trades.filter((t) => t.pnl > 0).length
-  const avgPnl = trades.length > 0 ? totalPnl / trades.length : 0
+  // Summary stats (from server-side aggregates, not current page)
+  const totalPnl = aggregates?.totalPnl ?? 0
+  const winRate = aggregates?.winRate ?? 0
+  const avgPnl = aggregates?.avgPnl ?? 0
 
   function renderPagination() {
     if (totalPages <= 1) return null
@@ -248,7 +259,7 @@ export default function TradeHistory() {
             Win Rate
           </div>
           <p className="text-xl font-bold">
-            {trades.length > 0 ? ((wins / trades.length) * 100).toFixed(1) : '0.0'}%
+            {winRate.toFixed(1)}%
           </p>
         </Card>
         <Card className="p-4">

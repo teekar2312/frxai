@@ -3,15 +3,12 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { toast } from 'sonner'
 
-// Track recently notified event IDs to avoid duplicate toasts
-const notifiedIds = new Set<string>()
-const MAX_TRACKED = 200 // Prevent memory leak
-
 /**
  * Hook that polls for new unresolved risk events and shows toast notifications.
- * Only shows each event once (tracked by ID).
+ * Only shows each event once (tracked by ID via ref, per-component instance).
  */
 export function useLiveNotifications() {
+  const notifiedIdsRef = useRef<Set<string>>(new Set())
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const checkEvents = useCallback(async () => {
@@ -23,16 +20,16 @@ export function useLiveNotifications() {
       const events = json.data?.events ?? json.events ?? []
 
       for (const event of events) {
-        if (notifiedIds.has(event.id)) continue
-        notifiedIds.add(event.id)
+        if (notifiedIdsRef.current.has(event.id)) continue
+        notifiedIdsRef.current.add(event.id)
 
         // Prune old IDs to prevent memory leak
-        if (notifiedIds.size > MAX_TRACKED) {
-          const iter = notifiedIds.values()
+        if (notifiedIdsRef.current.size > 200) {
+          const iter = notifiedIdsRef.current.values()
           const first = iter.next().value
           const second = iter.next().value
-          if (first) notifiedIds.delete(first)
-          if (second) notifiedIds.delete(second)
+          if (first) notifiedIdsRef.current.delete(first)
+          if (second) notifiedIdsRef.current.delete(second)
         }
 
         if (event.severity === 'CRITICAL') {

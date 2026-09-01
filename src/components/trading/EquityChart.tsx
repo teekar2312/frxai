@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TrendingUp, TrendingDown, DollarSign, Mountain, ArrowDownToLine, BarChart3 } from 'lucide-react'
@@ -34,32 +34,67 @@ function formatCurrency(value: number): string {
 
 const TIME_RANGES: TimeRange[] = ['1D', '1W', '1M', '3M']
 
-export default function EquityChart() {
+interface EquityChartProps {
+  isMarketOpen?: boolean
+}
+
+export default function EquityChart({ isMarketOpen }: EquityChartProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('1M')
   const [data, setData] = useState<EquityDataPoint[]>([])
   const [loading, setLoading] = useState(true)
+  const abortRef = useRef<AbortController | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
-    fetch(`/api/account/equity-curve?range=${timeRange}`)
+  const fetchEquityData = useCallback((range: TimeRange) => {
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    fetch(`/api/account/equity-curve?range=${range}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to fetch')
         return res.json()
       })
       .then((json) => {
-        if (!cancelled) {
-          setData(json.data ?? [])
-          setLoading(false)
-        }
+        setData(json.data ?? [])
+        setLoading(false)
       })
-      .catch(() => {
-        if (!cancelled) {
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
           setData([])
           setLoading(false)
         }
       })
-    return () => { cancelled = true }
+  }, [])
+
+  // Initial fetch + refetch on range change
+  useEffect(() => {
+    const controller = new AbortController()
+    abortRef.current = controller
+    fetch(`/api/account/equity-curve?range=${timeRange}`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to fetch')
+        return res.json()
+      })
+      .then((json) => {
+        setData(json.data ?? [])
+        setLoading(false)
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          setData([])
+          setLoading(false)
+        }
+      })
+    return () => { controller.abort() }
   }, [timeRange])
+
+  // Auto-refresh: 60s during market hours, 5min outside
+  useEffect(() => {
+    const delay = isMarketOpen === true ? 60000 : 300000
+    const interval = setInterval(() => {
+      fetchEquityData(timeRange)
+    }, delay)
+    return () => clearInterval(interval)
+  }, [timeRange, isMarketOpen, fetchEquityData])
 
   const stats = useMemo(() => {
     if (data.length === 0) return { start: 0, current: 0, peak: 0, trough: 0, maxDD: 0 }
@@ -240,10 +275,10 @@ export default function EquityChart() {
                       borderRadius: '8px',
                       fontSize: '12px',
                     }}
-                    formatter={(value: number, name: string) => [
-                      `$${value.toLocaleString()}`,
-                      name === 'balance' ? 'Balance' : 'Equity',
-                    ]}
+                    formatter={(value: unknown, name: string) => {
+                      const display = typeof value === 'number' ? `$${value.toLocaleString()}` : '—'
+                      return [display, name === 'balance' ? 'Balance' : 'Equity']
+                    }}
                     labelFormatter={(label: string) => `Date: ${label}`}
                   />
                   <Legend

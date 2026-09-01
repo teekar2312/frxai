@@ -9,8 +9,8 @@ export async function GET() {
       where: { date: todayStr },
     })
 
-    // Determine base balance from DailyPerformance, fallback to 10000
-    let baseBalance = 10000
+    // Determine base balance from DailyPerformance; null signals no real data yet
+    let baseBalance: number | null = null
     if (todayPerf) {
       baseBalance = todayPerf.startBalance
     } else {
@@ -22,6 +22,8 @@ export async function GET() {
         baseBalance = lastPerf.endBalance
       }
     }
+    const hasRealData = baseBalance !== null
+    if (baseBalance === null) baseBalance = 0
 
     // Get live trade data from DB for realistic aggregation
     const openTrades = await db.trade.findMany({
@@ -38,9 +40,15 @@ export async function GET() {
       },
     })
 
-    const allClosed = await db.trade.findMany({
-      where: { status: "CLOSED" },
-    })
+    // Lightweight count queries instead of loading all closed trades into memory
+    const [totalClosedCount, winCount, todayWins, todayTotal] = await Promise.all([
+      db.trade.count({ where: { status: "CLOSED" } }),
+      db.trade.count({ where: { status: "CLOSED", pnl: { gt: 0 } } }),
+      db.trade.count({ where: { status: "CLOSED", pnl: { gt: 0 }, closeTime: { gte: todayStart } } }),
+      db.trade.count({ where: { status: "CLOSED", closeTime: { gte: todayStart } } }),
+    ])
+    const winRate = totalClosedCount > 0 ? Math.round((winCount / totalClosedCount) * 10000) / 100 : 0
+    const winRateToday = todayTotal > 0 ? Math.round((todayWins / todayTotal) * 10000) / 100 : 0
 
     // Calculate totals from real data
     const totalOpenPnl = openTrades.reduce((sum, t) => sum + t.pnl, 0)
@@ -57,10 +65,6 @@ export async function GET() {
     }
 
     const totalTradesToday = closedToday.length + openTrades.length
-
-    const wins = allClosed.filter((t) => t.pnl > 0).length
-    const totalClosed = allClosed.length
-    const winRate = totalClosed > 0 ? Math.round((wins / totalClosed) * 10000) / 100 : 0
 
     // Account calculations
     const currentBalance = Math.round(baseBalance * 100) / 100
@@ -84,7 +88,9 @@ export async function GET() {
       openPositions: openTrades.length,
       totalTradesToday,
       winRate,
-      totalTrades: totalClosed,
+      winRateToday,
+      hasRealData,
+      totalTrades: totalClosedCount,
       currency: "USD",
       accountNumber: "FX-2024-88421",
     }

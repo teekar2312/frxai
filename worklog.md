@@ -1551,3 +1551,158 @@ Stage Summary:
 - 3 modified files: src/app/page.tsx (added History tab), src/app/api/logs/export/route.ts (limit + date defaults), src/lib/trading-logger.ts (limit param)
 - bun run lint passes with zero errors
 
+---
+
+## TASK 2-a — 7 Dashboard Module Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+**Agent**: Task 2-a
+
+### Improvements Applied
+
+| # | Improvement | File(s) | Summary |
+|---|-------------|---------|---------|
+| 1 | Unbounded findMany → count aggregation | `src/app/api/account/route.ts` | Replaced `db.trade.findMany({ status: 'CLOSED' })` with 4 parallel `db.trade.count()` queries (totalClosed, wins, todayWins, todayTotal). Eliminates O(N) memory load. |
+| 2 | Hardcoded $10,000 fallback → null/0 with `hasRealData` | `src/app/api/account/route.ts` | `baseBalance` now starts as `null`; set to `0` only for calculations. Response includes `hasRealData: boolean` so frontend can distinguish real vs fabricated data. |
+| 3 | WIB timezone conversion fix | `src/app/api/account/equity-curve/route.ts` | Replaced manual `+7h` hack with `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' })` for correct WIB date boundaries. Cutoff computed as `new Date(wibStr + 'T00:00:00+07:00')`. |
+| 4 | Balance line uses `endBalance` | `src/app/api/account/equity-curve/route.ts` | Changed `r.startBalance` → `r.endBalance` to show true closing balance progression. |
+| 5 | AccountSummary polling AbortController | `src/components/trading/AccountSummary.tsx` | Added `abortRef` to abort in-flight fetches on cleanup/unmount. `fetchData` now accepts `active` boolean; checks `if (!active) return` before state updates. |
+| 6 | EquityChart auto-refresh | `src/components/trading/EquityChart.tsx` | Added `isMarketOpen` prop. Polling interval: 60s during market hours, 5min outside. Uses AbortController for cleanup. |
+| 7 | Recharts Tooltip formatter safety | `src/components/trading/EquityChart.tsx` | Changed formatter signature from `(value: number, ...)` to `(value: unknown, ...)` with `typeof value === 'number'` guard. Returns `'—'` for non-numeric values. |
+
+### Files Modified
+- `src/app/api/account/route.ts` — count queries, null baseBalance, hasRealData, winRateToday
+- `src/app/api/account/equity-curve/route.ts` — WIB timezone fix, endBalance
+- `src/components/trading/AccountSummary.tsx` — AbortController, active guard
+- `src/components/trading/EquityChart.tsx` — isMarketOpen prop, auto-refresh, tooltip safety
+
+### Verification
+- `bun run lint` passes with zero errors
+
+---
+
+## Task 2-b — Notifications/Risk Events Module: 5 Critical Improvements
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Context
+Five targeted fixes in the Notifications/Risk Events module addressing data correctness bugs, validation gaps, and memory leak risks.
+
+### Changes
+
+| # | Fix | File | Severity | Summary |
+|---|-----|------|----------|---------|
+| 1 | Stats respect filters | `src/app/api/risk-events/route.ts` | HIGH | Stats count queries now reuse the same `where` clause as the events list, so filtering by severity/resolved correctly narrows all stat counters |
+| 2 | PATCH validation + resolvedAt fix | `src/app/api/risk-events/route.ts` | HIGH | Added `typeof id !== 'string'` validation, `findUnique` existence check (404), and fixed resolved/resolvedAt mismatch — `resolvedValue` is now computed once and used consistently for both fields |
+| 3 | Limit param NaN guard | `src/app/api/risk-events/route.ts` | MEDIUM | `parseInt` result is validated with `Number.isFinite` + `>= 1`, clamped to max 100, defaults to 20 on invalid input |
+| 4 | Module-level Set → useRef | `src/lib/notification-hooks.ts` | MEDIUM | Moved `notifiedIds` Set from module scope (shared across instances, persists across HMR) into a `useRef` inside `useLiveNotifications()`. Removed module-level `MAX_TRACKED` constant |
+| 5 | PriceAlerts polling refresh + prune | `src/components/trading/PriceAlerts.tsx` | HIGH | Removed separate polling useEffect that only checked for toasts without refreshing UI. Consolidated into main `fetchAlerts()` with `prevTriggeredRef` for diff-based toast dedup. Added 200-cap pruning to `toastedIdsRef`. Added `setInterval(fetchAlerts, 10000)` for auto-refresh |
+
+### Files Modified
+- `src/app/api/risk-events/route.ts` — 3 fixes (stats filters, PATCH validation, limit validation)
+- `src/lib/notification-hooks.ts` — 1 fix (module-level Set → useRef)
+- `src/components/trading/PriceAlerts.tsx` — 1 fix (polling consolidation + pruning)
+
+### Verification
+- `bun run lint` passes with zero errors
+
+---
+
+## TASK 2-C — Price Alerts Module: 6 Crucial Improvements
+
+**Task ID**: 2-c
+**Status**: Completed
+
+### Context
+Price alerts module had critical bugs: identical CROSS_UP/CROSS_DOWN vs ABOVE/BELOW logic, duplicate trigger race condition, NaN propagation, zero input validation on PATCH, alerts not integrated into the main pipeline, and TOCTOU on DELETE.
+
+---
+
+### 1. Real CROSS_UP / CROSS_DOWN Crossing Detection
+**File**: `src/lib/trade-execution-engine.ts` — `evaluatePriceAlerts()`
+- Added `previousPrices?: Map<string, number>` parameter
+- CROSS_UP now triggers only when `prevPrice < target && currentPrice >= target`
+- CROSS_DOWN now triggers only when `prevPrice > target && currentPrice <= target`
+- ABOVE/BELOW remain simple comparisons (no previous price needed)
+- If `previousPrices` is not provided, CROSS conditions are safely skipped
+
+### 2. Duplicate Trigger Race Condition Fix
+**File**: `src/lib/trade-execution-engine.ts` — `evaluatePriceAlerts()`
+- Replaced individual `db.priceAlert.update({ where: { id } })` with `db.priceAlert.updateMany({ where: { id, triggered: false } })`
+- Only pushes to result array when `result.count > 0`, ensuring exactly-once trigger semantics
+
+### 3. NaN Price Validation in Price-Update Route
+**File**: `src/app/api/execution/price-update/route.ts`
+- Added validation: `Number.isFinite(p) || p <= 0` check on all parsed entries
+- Returns 400 with clear error message before any DB operations
+- Added module-level `previousPricesMap` maintained across calls for crossing detection
+
+### 4. Alert PATCH Validation (condition/price/message)
+**File**: `src/app/api/alerts/[id]/route.ts` — PATCH handler
+- Condition: validates against `['ABOVE', 'BELOW', 'CROSS_UP', 'CROSS_DOWN']`, normalizes to uppercase
+- Price: validates as finite positive number, parses from string if needed
+- Message: coerced to string and truncated to 200 chars
+- Active: coerced with `Boolean()`
+- Returns 400 with descriptive errors for invalid input
+
+### 5. Alert Evaluation Integrated into processPriceUpdate Pipeline
+**File**: `src/lib/trade-execution-engine.ts` — `processPriceUpdate()`
+- Added `previousPrices?: Map<string, number>` parameter (default `undefined`)
+- Added Stage 4: `evaluatePriceAlerts(currentPrices, previousPrices)` as final pipeline stage
+- Added `triggeredAlerts` field to `PriceUpdateResult` interface
+- Included `triggeredAlerts` in return value and `alertsTriggered` count in log metadata
+- Route caller no longer needs separate `evaluatePriceAlerts` call
+
+### 6. Alert DELETE TOCTOU Fix
+**File**: `src/app/api/alerts/[id]/route.ts` — DELETE handler
+- Removed `findUnique` + `delete` two-step pattern
+- Now calls `delete` directly, catches Prisma `P2025` (record not found) → returns 404
+- Other errors re-thrown and caught by outer try/catch → 500
+
+---
+
+### Files Modified
+- `src/lib/trade-execution-engine.ts` — evaluatePriceAlerts + processPriceUpdate + PriceUpdateResult
+- `src/app/api/execution/price-update/route.ts` — NaN validation + previousPricesMap + caller update
+- `src/app/api/alerts/[id]/route.ts` — PATCH validation + DELETE TOCTOU fix
+
+### Verification
+- `bun run lint` passes with zero errors
+
+---
+
+## Task 2-d: Reporting Module — 7 Critical Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+
+### Context
+Reporting module had inconsistencies between backtest and live performance reporting, unbounded queries, and pagination-skewed summary stats.
+
+---
+
+### Changes Made
+
+| # | Improvement | File(s) | Severity | Fix |
+|---|-------------|---------|----------|-----|
+| 1 | Max drawdown uses equity curve with % | `src/app/api/reports/performance/route.ts` | HIGH | Fetch pre-period balance from DailyPerformance, compute running equity from trades, return both `maxDrawdown` (%) and `maxDrawdownAmount` ($) |
+| 2 | Unbounded trade loading | `src/app/api/reports/performance/route.ts` | HIGH | Added `take: 50000` cap to findMany query |
+| 3 | Daily PnL inconsistency | `src/app/api/reports/performance/route.ts` | HIGH | Removed DailyPerformance query for dailyPnl; compute directly from trades grouped by close date |
+| 4 | TradeHistory summary stats from page | `src/app/api/trades/history/route.ts`, `src/components/trading/TradeHistory.tsx` | HIGH | Added aggregate query (sum/count) to API; frontend uses `aggregates` state instead of current-page trades |
+| 5 | Break-even classification inconsistency | `src/app/api/backtest/route.ts` | MEDIUM | Changed `pnl <= 0` to `pnl < 0` in computeMetrics losses filter |
+| 6 | Profit factor sentinel inconsistency | `src/app/api/reports/performance/route.ts`, `src/app/api/backtest/route.ts` | MEDIUM | Both modules now return `null` for infinite profit factor instead of `-1` or `99.99` |
+| 7 | Session performance unbounded query | `src/app/api/sessions/performance/route.ts` | HIGH | Added 90-day date filter (`closeTime: { gte: ninetyDaysAgo }`) for closed trades query |
+
+---
+
+### Files Modified
+- `src/app/api/reports/performance/route.ts` — equity-based drawdown, take cap, dailyPnl from trades, profitFactor null, maxDrawdownAmount
+- `src/app/api/trades/history/route.ts` — added aggregate query + winCount + aggregates response
+- `src/components/trading/TradeHistory.tsx` — Aggregates interface, state, API consumption, summary cards from aggregates
+- `src/app/api/backtest/route.ts` — break-even fix (`pnl < 0`), profitFactor `null` for infinite
+- `src/app/api/sessions/performance/route.ts` — 90-day filter on closed trades query
+
+### Verification
+- `bun run lint` passes with zero errors

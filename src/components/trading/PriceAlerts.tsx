@@ -110,14 +110,37 @@ export default function PriceAlerts() {
 
   // Track which triggered alert IDs have already been toasted
   const toastedIdsRef = useRef<Set<string>>(new Set())
+  // Track previously seen triggered IDs for toast dedup
+  const prevTriggeredRef = useRef<Set<string>>(new Set())
 
   const fetchAlerts = useCallback(async () => {
     try {
       const res = await fetch('/api/alerts')
       if (res.ok) {
         const json = await res.json()
-        const data = json.data ?? json.alerts ?? []
-        setAlerts(Array.isArray(data) ? data.map(mapApiAlert) : [])
+        const data: Array<Record<string, unknown>> = json.data ?? json.alerts ?? []
+        const mapped = Array.isArray(data) ? data.map(mapApiAlert) : []
+        setAlerts(mapped)
+
+        // Detect newly triggered alerts for toast notifications
+        const newTriggered = mapped.filter(
+          (a) => a.status === 'Triggered' && !prevTriggeredRef.current.has(a.id)
+        )
+        prevTriggeredRef.current = new Set(mapped.filter((a) => a.status === 'Triggered').map((a) => a.id))
+
+        for (const alert of newTriggered) {
+          if (toastedIdsRef.current.has(alert.id)) continue
+          toastedIdsRef.current.add(alert.id)
+          // Prune to prevent unbounded growth
+          if (toastedIdsRef.current.size > 200) {
+            const iter = toastedIdsRef.current.values()
+            const first = iter.next().value
+            if (first) toastedIdsRef.current.delete(first)
+          }
+          toast.success(
+            `Price alert triggered: ${alert.symbol} ${alert.condition} ${Number(alert.targetPrice).toLocaleString()}`
+          )
+        }
       }
     } catch {
       // Silently fail — will show empty state
@@ -130,41 +153,11 @@ export default function PriceAlerts() {
     fetchAlerts()
   }, [fetchAlerts])
 
-  // Poll for newly triggered alerts and show toast notifications
+  // Auto-refresh alerts list periodically
   useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch('/api/alerts')
-        if (!res.ok) return
-        const json = await res.json()
-        const data: Array<Record<string, unknown>> = json.data ?? []
-        const thirtySecondsAgo = new Date(Date.now() - 30_000)
-
-        for (const item of data) {
-          if (
-            item.triggered &&
-            item.triggeredAt &&
-            !toastedIdsRef.current.has(String(item.id))
-          ) {
-            const triggeredAt = new Date(String(item.triggeredAt))
-            if (triggeredAt >= thirtySecondsAgo) {
-              toastedIdsRef.current.add(String(item.id))
-              const apiCondition = String(item.condition ?? 'ABOVE')
-              const displayCondition = API_TO_CONDITION[apiCondition] ?? apiCondition
-              toast.info(
-                `${item.symbol} ${displayCondition} Rp ${Number(item.price).toLocaleString()}`,
-                { description: item.message ? String(item.message) : undefined }
-              )
-            }
-          }
-        }
-      } catch {
-        // Silently fail polling
-      }
-    }, 10_000)
-
+    const interval = setInterval(fetchAlerts, 10_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [fetchAlerts])
 
   const handleDelete = async (id: string) => {
     setDeletingId(id)

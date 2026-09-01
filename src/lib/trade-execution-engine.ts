@@ -1615,19 +1615,25 @@ export interface PriceUpdateResult {
   partialCloses: number
   errors: number
   durationMs: number
+  triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; triggeredAt: Date }>
 }
 
 /**
  * Evaluate all active price alerts against current prices.
- * For each triggered alert, mark it as triggered in DB and return the triggered alerts.
+ * For each triggered alert, atomically mark it as triggered in DB (using
+ * updateMany with a precondition to prevent duplicate triggers) and return
+ * the triggered alerts.
+ *
+ * CROSS_UP / CROSS_DOWN require previous prices to detect actual crossings.
+ * If previousPrices is not provided, CROSS_UP/CROSS_DOWN alerts are skipped.
  */
 export async function evaluatePriceAlerts(
-  priceUpdate: Map<string, number>,
+  currentPrices: Map<string, number>,
+  previousPrices?: Map<string, number>,
 ): Promise<{
-  triggered: number
-  alerts: Array<{ id: string; symbol: string; condition: string; price: number; message: string | null }>
+  triggered: Array<{ id: string; symbol: string; condition: string; price: number; triggeredAt: Date }>
 }> {
-  const triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; message: string | null }> = []
+  const triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; triggeredAt: Date }> = []
 
   try {
     const activeAlerts = await db.priceAlert.findMany({
@@ -1635,7 +1641,7 @@ export async function evaluatePriceAlerts(
     })
 
     for (const alert of activeAlerts) {
-      const currentPrice = priceUpdate.get(alert.symbol)
+      const currentPrice = currentPrices.get(alert.symbol)
       if (currentPrice == null) continue
 
       let isTriggered = false
@@ -1647,32 +1653,32 @@ export async function evaluatePriceAlerts(
         case 'BELOW':
           isTriggered = currentPrice <= alert.price
           break
-        case 'CROSS_UP':
-          isTriggered = currentPrice >= alert.price
+        case 'CROSS_UP': {
+          const prevPrice = previousPrices?.get(alert.symbol)
+          isTriggered = prevPrice !== undefined && prevPrice < alert.price && currentPrice >= alert.price
           break
-        case 'CROSS_DOWN':
-          isTriggered = currentPrice <= alert.price
+        }
+        case 'CROSS_DOWN': {
+          const prevPrice = previousPrices?.get(alert.symbol)
+          isTriggered = prevPrice !== undefined && prevPrice > alert.price && currentPrice <= alert.price
           break
+        }
         default:
           continue
       }
 
       if (isTriggered) {
-        try {
-          await db.priceAlert.update({
-            where: { id: alert.id },
-            data: { triggered: true, triggeredAt: new Date() },
-          })
+        const result = await db.priceAlert.updateMany({
+          where: { id: alert.id, triggered: false },
+          data: { triggered: true, triggeredAt: new Date() },
+        })
+        if (result.count > 0) {
           triggeredAlerts.push({
             id: alert.id,
             symbol: alert.symbol,
             condition: alert.condition,
             price: alert.price,
-            message: alert.message,
-          })
-        } catch (err) {
-          logger.error('TRADE_EXECUTION', `Failed to mark alert ${alert.id} as triggered`, {
-            details: err instanceof Error ? err.message : String(err),
+            triggeredAt: new Date(),
           })
         }
       }
@@ -1691,7 +1697,7 @@ export async function evaluatePriceAlerts(
     })
   }
 
-  return { triggered: triggeredAlerts.length, alerts: triggeredAlerts }
+  return { triggered: triggeredAlerts }
 }
 
 /**
@@ -1701,11 +1707,13 @@ export async function evaluatePriceAlerts(
  *   1. Trailing stops (adjust SL before checking SL triggers)
  *   2. SL/TP triggers (close trades that hit stops/targets)
  *   3. Partial close triggers (execute scaled exits)
+ *   4. Price alert evaluation (CROSS_UP/CROSS_DOWN need previousPrices)
  *
  * Returns aggregate results from all pipeline stages.
  */
 export async function processPriceUpdate(
-  priceUpdate: Map<string, number>,
+  currentPrices: Map<string, number>,
+  previousPrices?: Map<string, number>,
 ): Promise<PriceUpdateResult> {
   const startTime = Date.now()
   let trailingAdjusted = 0
@@ -1713,10 +1721,11 @@ export async function processPriceUpdate(
   let tpTriggered = 0
   let partialCloses = 0
   let errors = 0
+  let triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; triggeredAt: Date }> = []
 
   try {
     // Stage 1: Trailing stops — adjust SL levels before we check SL triggers
-    const trailingResult = await processTrailingStopsForAllTrades(priceUpdate)
+    const trailingResult = await processTrailingStopsForAllTrades(currentPrices)
     trailingAdjusted = trailingResult.adjusted
     errors += trailingResult.errors
     // Track new telemetry (used in log but not in return type to maintain backward compat)
@@ -1725,20 +1734,24 @@ export async function processPriceUpdate(
     const _trailingMaxCapHit = trailingResult.maxCapHit
 
     // Stage 2: SL/TP triggers — close trades that hit their stops or targets
-    const slTpResult = await processSlTpForAllOpenTrades(priceUpdate)
+    const slTpResult = await processSlTpForAllOpenTrades(currentPrices)
     slTriggered = slTpResult.slTriggered
     tpTriggered = slTpResult.tpTriggered
     errors += slTpResult.errors
 
     // Stage 3: Partial close triggers — execute scaled exits at TP levels
-    const partialResult = await checkPartialCloseTriggers(priceUpdate)
+    const partialResult = await checkPartialCloseTriggers(currentPrices)
     partialCloses = partialResult.triggered
     errors += partialResult.errors
+
+    // Stage 4: Evaluate price alerts
+    const alertResult = await evaluatePriceAlerts(currentPrices, previousPrices)
+    triggeredAlerts = alertResult.triggered
   } catch (err) {
     errors++
     logger.error('TRADE_EXECUTION', 'Price update pipeline error', {
       details: err instanceof Error ? err.message : String(err),
-      metadata: { symbolCount: priceUpdate.size },
+      metadata: { symbolCount: currentPrices.size },
     })
   }
 
@@ -1746,7 +1759,7 @@ export async function processPriceUpdate(
 
   logger.info('TRADE_EXECUTION', `Price update pipeline completed`, {
     metadata: {
-      symbolCount: priceUpdate.size,
+      symbolCount: currentPrices.size,
       trailingAdjusted,
       trailingCooldownBlocked: _trailingCooldownBlocked,
       trailingPhaseBlocked: _trailingPhaseBlocked,
@@ -1754,6 +1767,7 @@ export async function processPriceUpdate(
       slTriggered,
       tpTriggered,
       partialCloses,
+      alertsTriggered: triggeredAlerts.length,
       errors,
       durationMs,
     },
@@ -1769,6 +1783,7 @@ export async function processPriceUpdate(
     partialCloses,
     errors,
     durationMs,
+    triggeredAlerts,
   }
 }
 

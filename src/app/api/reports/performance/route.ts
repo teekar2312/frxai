@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
       startDate.setHours(0, 0, 0, 0)
     }
 
-    // Fetch all CLOSED trades in the date range
+    // Fetch all CLOSED trades in the date range (capped to prevent OOM)
     const trades = await db.trade.findMany({
       where: {
         status: 'CLOSED',
@@ -77,21 +77,15 @@ export async function GET(request: NextRequest) {
         },
       },
       orderBy: { closeTime: 'asc' },
+      take: 50000,
     })
 
-    // Fetch DailyPerformance for the date range
-    const startDateStrFmt = startDate.toISOString().slice(0, 10)
-    const endDateStrFmt = endDate.toISOString().slice(0, 10)
-
-    const dailyPerf = await db.dailyPerformance.findMany({
-      where: {
-        date: {
-          gte: startDateStrFmt,
-          lte: endDateStrFmt,
-        },
-      },
-      orderBy: { date: 'asc' },
+    // Get initial balance before the period for equity-based drawdown
+    const prePeriodPerf = await db.dailyPerformance.findFirst({
+      where: { date: { lt: startDate.toISOString().slice(0, 10) } },
+      orderBy: { date: 'desc' },
     })
+    const initialBalance = prePeriodPerf ? prePeriodPerf.endBalance : (trades.length > 0 ? 10000 : 0)
 
     // === Overall metrics ===
     const totalTrades = trades.length
@@ -103,24 +97,23 @@ export async function GET(request: NextRequest) {
 
     const totalWins = winTrades.reduce((sum, t) => sum + t.pnl, 0)
     const totalLosses = Math.abs(lossTrades.reduce((sum, t) => sum + t.pnl, 0))
-    const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? Infinity : 0
+    const profitFactor = totalLosses > 0 ? totalWins / totalLosses : totalWins > 0 ? null : 0
 
     const avgWin = winTrades.length > 0 ? totalWins / winTrades.length : 0
     const avgLoss = lossTrades.length > 0 ? totalLosses / lossTrades.length : 0
 
-    // Max drawdown: iterate chronologically, track cumulative PnL and peak
-    let peakEquity = 0
+    // Max drawdown: compute from equity curve with percentage
+    let peakEquity = initialBalance
     let maxDrawdown = 0
-    let runningPnl = 0
+    let maxDrawdownAmount = 0
+    let runningEquity = initialBalance
     for (const trade of trades) {
-      runningPnl += trade.pnl
-      if (runningPnl > peakEquity) {
-        peakEquity = runningPnl
-      }
-      const dd = peakEquity - runningPnl
-      if (dd > maxDrawdown) {
-        maxDrawdown = dd
-      }
+      runningEquity += trade.pnl
+      if (runningEquity > peakEquity) peakEquity = runningEquity
+      const dd = peakEquity > 0 ? ((peakEquity - runningEquity) / peakEquity) * 100 : 0
+      const ddAmount = peakEquity - runningEquity
+      if (dd > maxDrawdown) maxDrawdown = dd
+      if (ddAmount > maxDrawdownAmount) maxDrawdownAmount = ddAmount
     }
 
     // Avg hold time in hours
@@ -138,8 +131,9 @@ export async function GET(request: NextRequest) {
       winRate: Math.round(winRate * 100) / 100,
       totalPnl: Math.round(totalPnl * 100) / 100,
       avgPnl: Math.round(avgPnl * 100) / 100,
-      profitFactor: profitFactor === Infinity ? -1 : Math.round(profitFactor * 100) / 100,
+      profitFactor: profitFactor === null ? null : Math.round(profitFactor * 100) / 100,
       maxDrawdown: Math.round(maxDrawdown * 100) / 100,
+      maxDrawdownAmount: Math.round(maxDrawdownAmount * 100) / 100,
       avgWin: Math.round(avgWin * 100) / 100,
       avgLoss: Math.round(avgLoss * 100) / 100,
       avgHoldHours: Math.round(avgHoldHours * 100) / 100,
@@ -178,14 +172,25 @@ export async function GET(request: NextRequest) {
       })
       .sort((a, b) => b.totalPnl - a.totalPnl)
 
-    // === Daily P&L time series ===
-    const dailyPnl = dailyPerf.map((d) => ({
-      date: d.date,
-      pnl: Math.round(d.totalPnl * 100) / 100,
-      pnlPercent: Math.round(d.pnlPercent * 100) / 100,
-      winRate: d.tradesClosed > 0 ? Math.round((d.winTrades / d.tradesClosed) * 10000) / 100 : 0,
-      tradesClosed: d.tradesClosed,
-    }))
+    // === Daily P&L time series (computed from trades for consistency) ===
+    const dailyMap = new Map<string, { pnl: number; wins: number; total: number }>()
+    for (const trade of trades) {
+      const day = trade.closeTime.toISOString().slice(0, 10)
+      const entry = dailyMap.get(day) || { pnl: 0, wins: 0, total: 0 }
+      entry.pnl += trade.pnl
+      entry.total++
+      if (trade.pnl > 0) entry.wins++
+      dailyMap.set(day, entry)
+    }
+
+    const dailyPnl = Array.from(dailyMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, d]) => ({
+        date,
+        pnl: Math.round(d.pnl * 100) / 100,
+        winRate: d.total > 0 ? Math.round((d.wins / d.total) * 10000) / 100 : 0,
+        tradesClosed: d.total,
+      }))
 
     return NextResponse.json({
       success: true,

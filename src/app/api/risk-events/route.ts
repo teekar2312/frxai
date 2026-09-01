@@ -4,7 +4,8 @@ import { db } from "@/lib/db"
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const limit = parseInt(searchParams.get("limit") ?? "20")
+    const rawLimit = parseInt(searchParams.get("limit") ?? "20", 10)
+    const limit = (Number.isFinite(rawLimit) && rawLimit >= 1) ? Math.min(rawLimit, 100) : 20
     const severity = searchParams.get("severity")
     const resolved = searchParams.get("resolved")
 
@@ -20,13 +21,13 @@ export async function GET(request: NextRequest) {
       take: Math.min(limit, 100),
     })
 
-    // Stats
-    const total = await db.riskEvent.count()
-    const unresolved = await db.riskEvent.count({ where: { resolved: false } })
-    const critical = await db.riskEvent.count({ where: { severity: "CRITICAL" } })
+    // Stats (respect applied filters — reuse same where clause)
+    const total = await db.riskEvent.count({ where })
+    const unresolved = await db.riskEvent.count({ where: { ...where, resolved: false } })
+    const critical = await db.riskEvent.count({ where: { ...where, severity: "CRITICAL" } })
     const today = new Date().toISOString().split("T")[0]
     const todayEvents = await db.riskEvent.count({
-      where: { createdAt: { gte: new Date(today) } },
+      where: { ...where, createdAt: { gte: new Date(today) } },
     })
 
     return NextResponse.json({
@@ -49,16 +50,29 @@ export async function PATCH(request: NextRequest) {
     const body = await request.json()
     const { id, resolved } = body
 
-    if (!id) {
+    if (!id || typeof id !== 'string') {
       return NextResponse.json(
-        { success: false, error: "id is required" },
+        { success: false, error: 'Valid id is required' },
         { status: 400 }
+      )
+    }
+
+    const resolvedValue = typeof resolved === 'boolean' ? resolved : true
+
+    const existing = await db.riskEvent.findUnique({ where: { id } })
+    if (!existing) {
+      return NextResponse.json(
+        { success: false, error: 'Risk event not found' },
+        { status: 404 }
       )
     }
 
     const updated = await db.riskEvent.update({
       where: { id },
-      data: { resolved: resolved ?? true, resolvedAt: resolved ? new Date() : null },
+      data: {
+        resolved: resolvedValue,
+        resolvedAt: resolvedValue ? new Date() : null,
+      },
     })
 
     return NextResponse.json({ success: true, data: updated })

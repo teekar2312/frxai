@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server"
-import { processPriceUpdate, evaluatePriceAlerts } from "@/lib/trade-execution-engine"
+import { processPriceUpdate } from "@/lib/trade-execution-engine"
 
 /**
  * POST /api/execution/price-update
  * Receives a map of symbol→price and processes the full pipeline:
  * trailing stops → SL/TP triggers → partial close triggers → price alert evaluation
  */
+
+let previousPricesMap: Map<string, number> = new Map()
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -18,20 +21,26 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const priceMap = new Map<string, number>(
-      Object.entries(prices).map(([sym, price]) => [sym, Number(price)])
-    )
+    // Validate all price values are finite positive numbers
+    const entries = Object.entries(prices).map(([sym, price]) => [sym, Number(price)] as const)
+    if (entries.some(([, p]) => !Number.isFinite(p) || p <= 0)) {
+      return NextResponse.json(
+        { success: false, error: 'All price values must be finite positive numbers' },
+        { status: 400 },
+      )
+    }
+    const priceMap = new Map(entries)
 
-    const result = await processPriceUpdate(priceMap)
+    const result = await processPriceUpdate(priceMap, previousPricesMap)
 
-    // Evaluate price alerts after the main pipeline
-    const alertResult = await evaluatePriceAlerts(priceMap)
+    // Save current prices as previous for next call (after pipeline so crossing detection works)
+    previousPricesMap = new Map(priceMap)
 
     return NextResponse.json({
       success: true,
       data: {
         ...result,
-        alertsTriggered: alertResult.triggered,
+        alertsTriggered: result.triggeredAlerts.length,
       },
     })
   } catch (error) {

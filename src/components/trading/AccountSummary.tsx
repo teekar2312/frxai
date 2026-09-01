@@ -57,14 +57,20 @@ export default function AccountSummary() {
   const [loading, setLoading] = useState(true)
   const [marketOpen, setMarketOpen] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (active: boolean) => {
+    if (!active) return
     try {
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
       const [accountRes, mt5Res] = await Promise.all([
-        fetch('/api/account'),
-        fetch('/api/mt5/status'),
+        fetch('/api/account', { signal: controller.signal }),
+        fetch('/api/mt5/status', { signal: controller.signal }),
       ])
 
+      if (!active) return
       // Process account data
       if (accountRes.ok) {
         const json = await accountRes.json()
@@ -85,6 +91,7 @@ export default function AccountSummary() {
         })
       }
 
+      if (!active) return
       // Process MT5 status for market awareness
       if (mt5Res.ok) {
         const mt5Json = await mt5Res.json()
@@ -105,16 +112,17 @@ export default function AccountSummary() {
       const delay = marketOpen ? 10000 : 60000
       timerRef.current = setTimeout(async () => {
         if (!active) return
-        await fetchData()
+        await fetchData(active)
         scheduleNext()
       }, delay)
     }
 
     // Initial fetch
-    fetchData().then(() => scheduleNext())
+    fetchData(active).then(() => scheduleNext())
 
     return () => {
       active = false
+      abortRef.current?.abort()
       if (timerRef.current) clearTimeout(timerRef.current)
     }
   }, [fetchData, marketOpen])

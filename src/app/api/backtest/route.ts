@@ -539,7 +539,7 @@ function computeMetrics(
 ) {
   const totalTrades = trades.length
   const wins = trades.filter((t) => t.pnl > 0)
-  const losses = trades.filter((t) => t.pnl <= 0)
+  const losses = trades.filter((t) => t.pnl < 0)
   const winTrades = wins.length
   const lossTrades = losses.length
   const winRate = totalTrades > 0 ? Math.round((winTrades / totalTrades) * 10000) / 100 : 0
@@ -553,7 +553,7 @@ function computeMetrics(
 
   const grossProfit = wins.reduce((s, t) => s + t.pnl, 0)
   const grossLoss = Math.abs(losses.reduce((s, t) => s + t.pnl, 0))
-  const profitFactor = grossLoss > 0 ? Math.round((grossProfit / grossLoss) * 100) / 100 : grossProfit > 0 ? 99.99 : 0
+  const profitFactor = grossLoss > 0 ? Math.round((grossProfit / grossLoss) * 100) / 100 : grossProfit > 0 ? null : 0
 
   const totalPnl = trades.reduce((s, t) => s + t.pnl, 0)
   const finalCapital = Math.round((capital + totalPnl) * 100) / 100

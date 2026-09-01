@@ -6,12 +6,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const range = searchParams.get("range") ?? "1M"
 
-    // Calculate date cutoff in UTC+7 (WIB)
+    // Calculate date cutoff properly in WIB timezone (Asia/Jakarta, UTC+7)
     const now = new Date()
-    // WIB is UTC+7, so UTC equivalent is 7 hours behind
-    const wibOffsetMs = 7 * 60 * 60 * 1000
-    const nowWib = new Date(now.getTime() + wibOffsetMs)
+    const wibFormatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' })
+    const nowWibStr = wibFormatter.format(now) // 'YYYY-MM-DD' in WIB
 
+    // Parse the WIB date as a local moment with +07:00 offset
+    const nowWib = new Date(nowWibStr + 'T00:00:00+07:00')
     const cutoff = new Date(nowWib)
     switch (range) {
       case "1D":
@@ -29,9 +30,7 @@ export async function GET(request: NextRequest) {
       default:
         cutoff.setMonth(cutoff.getMonth() - 1)
     }
-
-    // Convert back to UTC for DB comparison (date field is YYYY-MM-DD string)
-    const cutoffDateStr = cutoff.toISOString().split("T")[0]
+    const cutoffDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(cutoff)
 
     const records = await db.dailyPerformance.findMany({
       where: {
@@ -42,7 +41,7 @@ export async function GET(request: NextRequest) {
 
     const data = records.map((r) => ({
       date: r.date,
-      balance: r.startBalance,
+      balance: r.endBalance,
       equity: r.startBalance + r.totalPnl,
     }))
 

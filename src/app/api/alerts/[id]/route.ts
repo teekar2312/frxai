@@ -17,11 +17,42 @@ export async function PATCH(
       )
     }
 
+    const VALID_CONDITIONS = ['ABOVE', 'BELOW', 'CROSS_UP', 'CROSS_DOWN']
+
     const updateData: Record<string, unknown> = {}
+
+    // Validate and update condition
+    if (body.condition !== undefined) {
+      const normalized = String(body.condition).toUpperCase()
+      if (!VALID_CONDITIONS.includes(normalized)) {
+        return NextResponse.json(
+          { success: false, error: `Invalid condition. Must be one of: ${VALID_CONDITIONS.join(', ')}` },
+          { status: 400 },
+        )
+      }
+      updateData.condition = normalized
+    }
+
+    // Validate and update price
+    if (body.price !== undefined) {
+      const parsedPrice = typeof body.price === 'number' ? body.price : parseFloat(String(body.price))
+      if (!Number.isFinite(parsedPrice) || parsedPrice <= 0) {
+        return NextResponse.json(
+          { success: false, error: 'price must be a finite positive number' },
+          { status: 400 },
+        )
+      }
+      updateData.price = parsedPrice
+    }
+
+    // Validate and update message
+    if (body.message !== undefined) {
+      updateData.message = String(body.message).slice(0, 200)
+    }
 
     // Toggle active status
     if (body.active !== undefined) {
-      updateData.active = body.active
+      updateData.active = Boolean(body.active)
     }
 
     // Acknowledge / mark as triggered
@@ -29,11 +60,6 @@ export async function PATCH(
       updateData.triggered = true
       updateData.triggeredAt = new Date()
     }
-
-    // Allow updating price and message
-    if (body.price !== undefined) updateData.price = body.price
-    if (body.message !== undefined) updateData.message = body.message
-    if (body.condition !== undefined) updateData.condition = body.condition
 
     const updated = await db.priceAlert.update({
       where: { id },
@@ -57,22 +83,21 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const existing = await db.priceAlert.findUnique({ where: { id } })
-    if (!existing) {
-      return NextResponse.json(
-        { success: false, error: "Alert not found" },
-        { status: 404 }
-      )
+    try {
+      await db.priceAlert.delete({ where: { id } })
+      return NextResponse.json({ success: true, message: 'Alert deleted' })
+    } catch (error: unknown) {
+      const prismaError = error as { code?: string }
+      if (prismaError.code === 'P2025') {
+        return NextResponse.json({ success: false, error: 'Alert not found' }, { status: 404 })
+      }
+      throw error
     }
-
-    await db.priceAlert.delete({ where: { id } })
-
-    return NextResponse.json({ success: true, message: "Alert deleted" })
   } catch (error) {
-    console.error("Error deleting alert:", error)
+    console.error('Error deleting alert:', error)
     return NextResponse.json(
-      { success: false, error: "Failed to delete alert" },
-      { status: 500 }
+      { success: false, error: 'Failed to delete alert' },
+      { status: 500 },
     )
   }
 }

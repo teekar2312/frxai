@@ -498,7 +498,8 @@ export function calculateSectorExposure(
 export async function getRiskSnapshot(): Promise<RiskSnapshot> {
   const config = await getRiskConfig()
   const openTrades = await db.trade.findMany({ where: { status: "OPEN" } })
-  const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
+  const NINETY_DAYS_AGO = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
+  const allClosed = await db.trade.findMany({ where: { status: "CLOSED", closeTime: { gte: NINETY_DAYS_AGO } } })
 
   const BASE_BALANCE = 10000
   const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
@@ -509,9 +510,9 @@ export async function getRiskSnapshot(): Promise<RiskSnapshot> {
   const freeMargin = Math.max(0, Math.round((equity - totalMarginUsed) * 100) / 100)
   const marginLevelPercent = totalMarginUsed > 0 ? Math.round((equity / totalMarginUsed) * 10000) / 100 : 0
 
-  // ---- Time-based P&L ----
+  // ---- Time-based P&L (WIB timezone) ----
   const now = new Date()
-  const todayStr = now.toISOString().split("T")[0]
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now)
   const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
   const monthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
 
@@ -826,6 +827,19 @@ export async function preTradeCheck(params: {
   const warnings: string[] = []
   let positionSizeReduction = 0
 
+  // Market open check
+  if (!isMarketOpen()) {
+    return {
+      approved: false,
+      reason: 'Market is currently closed',
+      suggestedLotSize: 0,
+      riskAmount: 0,
+      riskPercent: 0,
+      warnings: [],
+      volatilityMultiplier: 1.0,
+    }
+  }
+
   // Phase 4: Volatility regime risk multiplier
   let volatilityMultiplier = 1.0
   try {
@@ -978,6 +992,34 @@ export async function preTradeCheck(params: {
     }
   }
 
+  // ---- 4b. SL direction validation ----
+  if (params.sl) {
+    if (params.direction === 'BUY' && params.sl >= params.entryPrice) {
+      return {
+        approved: false,
+        reason: 'Invalid stop-loss: must be below entry price for BUY',
+        suggestedLotSize: 0,
+        riskAmount: 0,
+        riskPercent: 0,
+        warnings,
+        volatilityMultiplier,
+        gapRisk: gapRiskResult ?? undefined,
+      }
+    }
+    if (params.direction === 'SELL' && params.sl <= params.entryPrice) {
+      return {
+        approved: false,
+        reason: 'Invalid stop-loss: must be above entry price for SELL',
+        suggestedLotSize: 0,
+        riskAmount: 0,
+        riskPercent: 0,
+        warnings,
+        volatilityMultiplier,
+        gapRisk: gapRiskResult ?? undefined,
+      }
+    }
+  }
+
   // ---- 5. Calculate risk amount (including slippage) ----
   let riskAmount = 0
   if (params.sl) {
@@ -1032,7 +1074,15 @@ export async function preTradeCheck(params: {
 
   // ---- 7. No stop loss? ----
   if (!params.sl) {
-    warnings.push("No stop loss set - this increases uncontrolled risk")
+    // SL-less trades: enforce strict maximum
+    const noSlMaxRisk = config.maxRiskPerTrade * 0.5 // Half of normal max risk
+    const noSlMaxLot = Math.max(1, Math.floor((snapshot.equity * noSlMaxRisk / 100) / (100000 * params.entryPrice) * 100) / 100)
+    if (suggestedLotSize > noSlMaxLot) {
+      suggestedLotSize = Math.max(0.01, noSlMaxLot)
+      warnings.push(`No stop-loss provided: lot size capped to ${noSlMaxLot} (${noSlMaxRisk}% risk)`)
+    }
+    riskAmount = suggestedLotSize * 100000 * params.entryPrice * (noSlMaxRisk / 100)
+    riskPercent = noSlMaxRisk
   }
 
   // ---- 8. Correlation risk (existing sector check) ----
@@ -1239,13 +1289,52 @@ export async function preTradeCheck(params: {
   }
 
   // ---- Apply dynamic scaling factor ----
-  if (snapshot.scalingFactor < 1.0) {
+  if (snapshot.scalingFactor > 1.0) {
+    const scaledLot = Math.max(0.01, Math.round(suggestedLotSize * snapshot.scalingFactor * 100) / 100)
+    if (scaledLot > suggestedLotSize) {
+      warnings.push(
+        `Dynamic risk scaling applied: lot increased from ${suggestedLotSize} to ${scaledLot} (factor: ${snapshot.scalingFactor})`,
+      )
+      suggestedLotSize = scaledLot
+    }
+  } else if (snapshot.scalingFactor < 1.0) {
     const scaledLot = Math.max(0.01, Math.round(suggestedLotSize * snapshot.scalingFactor * 100) / 100)
     if (scaledLot < suggestedLotSize) {
       warnings.push(
         `Dynamic risk scaling applied: lot reduced from ${suggestedLotSize} to ${scaledLot} (factor: ${snapshot.scalingFactor})`,
       )
       suggestedLotSize = scaledLot
+    }
+  }
+
+  // ---- Re-validate after scaling ----
+  if (suggestedLotSize > 0) {
+    const CONTRACT_SIZE = 100000
+    const leverage = 25
+    const scaledNotional = suggestedLotSize * CONTRACT_SIZE * params.entryPrice
+    const scaledMargin = scaledNotional / leverage
+    const scaledMarginPct = (scaledMargin / snapshot.equity) * 100
+
+    // Re-check leverage cap
+    if (scaledMarginPct > config.maxLeveragePerTrade) {
+      suggestedLotSize = Math.max(0.01, Math.floor((snapshot.equity * config.maxLeveragePerTrade / 100 * leverage) / (CONTRACT_SIZE * params.entryPrice * 100)) / 100)
+      warnings.push(`Post-scaling leverage cap: lot reduced to ${suggestedLotSize}`)
+    }
+
+    // Re-check max lot per trade
+    if (suggestedLotSize > config.maxLotPerTrade) {
+      suggestedLotSize = config.maxLotPerTrade
+      warnings.push(`Post-scaling max lot cap: lot reduced to ${config.maxLotPerTrade}`)
+    }
+
+    // Re-check single stock concentration
+    const scaledPositionValue = suggestedLotSize * CONTRACT_SIZE * params.entryPrice
+    const scaledPositionMargin = scaledPositionValue / leverage
+    const totalSymbolMarginAfterScale = sameSymbolTrades.reduce((s, p) => s + p.margin, 0) + scaledPositionMargin
+    const scaledConcentration = (totalSymbolMarginAfterScale / snapshot.equity) * 100
+    if (scaledConcentration > config.maxSingleStockPct) {
+      suggestedLotSize = Math.max(0.01, Math.floor((snapshot.equity * config.maxSingleStockPct / 100) / (CONTRACT_SIZE * params.entryPrice / leverage * 100)) / 100)
+      warnings.push(`Post-scaling concentration cap: lot reduced to ${suggestedLotSize}`)
     }
   }
 
@@ -1472,11 +1561,10 @@ export async function assessGapRisk(params: {
   let estimatedMaxGapPct = vol * 2.5 * 100
 
   // If near market close (within 30 min of 15:00 WIB), increase gap risk by 50%
-  const now = new Date()
-  // WIB is UTC+7
-  const wibOffset = 7 * 60 * 60 * 1000
-  const wibHour = new Date(now.getTime() + wibOffset).getUTCHours()
-  const wibMinute = new Date(now.getTime() + wibOffset).getUTCMinutes()
+  const wibTimeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta', hour12: false })
+  const [wibHourStr, wibMinStr] = wibTimeStr.split(':').map(s => s.trim())
+  const wibHour = parseInt(wibHourStr, 10) % 24
+  const wibMinute = parseInt(wibMinStr, 10)
   const minutesSinceOpen = wibHour * 60 + wibMinute
   // Market closes at 15:00 WIB (900 minutes). Within 30 min = >= 870 minutes.
   const isNearClose = minutesSinceOpen >= 870 && minutesSinceOpen <= 900
@@ -1508,7 +1596,7 @@ export async function assessGapRisk(params: {
     recommendation = "Reduce position size"
   }
 
-  if (hasGapRisk && !isMarketOpen(now)) {
+  if (hasGapRisk && !isMarketOpen()) {
     // Outside market hours, any gap risk is elevated
     severity = "HIGH"
     recommendation = "Avoid new positions near close"

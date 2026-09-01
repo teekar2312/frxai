@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { getRiskSnapshot, logRiskEvent, getRiskConfig, processProactiveMarginMonitoring } from "@/lib/risk-engine"
+import { getRiskSnapshot, logRiskEvent } from "@/lib/risk-engine"
 import logger from "@/lib/trading-logger"
 import { db } from "@/lib/db"
 
@@ -30,24 +30,9 @@ async function logThrottledRiskEvent(params: {
   await logRiskEvent(params)
 }
 
-/**
- * Deep Audit Fix #2: Proactive Margin Monitoring Throttle
- * Only run proactive monitoring every 30 seconds, not on every GET request.
- */
-let lastProactiveCheck = 0
-const PROACTIVE_CHECK_INTERVAL_MS = 30_000
-
 export async function GET() {
   try {
-    const config = await getRiskConfig()
     const snapshot = await getRiskSnapshot()
-
-    // Throttled proactive margin monitoring
-    const now = Date.now()
-    if (now - lastProactiveCheck >= PROACTIVE_CHECK_INTERVAL_MS) {
-      lastProactiveCheck = now
-      await processProactiveMarginMonitoring(snapshot.marginLevelPercent, config)
-    }
 
     // Auto-generate risk events for critical conditions (throttled)
     if (snapshot.isStopOutWarning) {

@@ -251,13 +251,32 @@ export async function calculatePositionSize(params: {
     suggestedLotSize = Math.min(suggestedLotSize, config.maxLotPerTrade)
   }
 
+  // --- Absolute Risk Cap ---
+  // Anti-martingale (up to 3x) + scaling (up to 1.25x) + vol multiplier can produce excessive risk.
+  // Hard cap at 2x the configured max risk per trade.
+  const MAX_RISK_PCT = config.maxRiskPerTrade * 2
+
   // --- Final Derived Values ---
-  const finalContractValue = suggestedLotSize * params.entryPrice * 100000
-  const finalMarginRequired = finalContractValue / LEVERAGE
-  const finalCommissionCost = Math.round(suggestedLotSize * commissionPerLot * 100) / 100
-  const finalSlRiskAmount = Math.round(suggestedLotSize * effectivePipRisk * PIP_VALUE_PER_LOT * 100) / 100
-  const finalNetRisk = Math.round((finalSlRiskAmount + finalCommissionCost) * 100) / 100
-  const riskPercent = params.equity > 0 ? (finalNetRisk / params.equity) * 100 : 0
+  let finalContractValue = suggestedLotSize * params.entryPrice * 100000
+  let finalMarginRequired = finalContractValue / LEVERAGE
+  let finalCommissionCost = Math.round(suggestedLotSize * commissionPerLot * 100) / 100
+  let finalSlRiskAmount = Math.round(suggestedLotSize * effectivePipRisk * PIP_VALUE_PER_LOT * 100) / 100
+  let finalNetRisk = Math.round((finalSlRiskAmount + finalCommissionCost) * 100) / 100
+  let riskPercent = params.equity > 0 ? (finalNetRisk / params.equity) * 100 : 0
+
+  if (riskPercent > MAX_RISK_PCT) {
+    riskPercent = MAX_RISK_PCT
+    // Recalculate lot size from capped risk
+    const cappedRiskAmount = (riskPercent / 100) * params.equity
+    const cappedLotSize = Math.max(MIN_LOT, Math.floor((cappedRiskAmount / costPerLot) / LOT_STEP) * LOT_STEP)
+    suggestedLotSize = Math.min(suggestedLotSize, cappedLotSize)
+    finalContractValue = suggestedLotSize * params.entryPrice * 100000
+    finalMarginRequired = finalContractValue / LEVERAGE
+    finalCommissionCost = Math.round(suggestedLotSize * commissionPerLot * 100) / 100
+    finalSlRiskAmount = Math.round(suggestedLotSize * effectivePipRisk * PIP_VALUE_PER_LOT * 100) / 100
+    finalNetRisk = Math.round((finalSlRiskAmount + finalCommissionCost) * 100) / 100
+    reasoning += ` | RISK CAPPED at ${MAX_RISK_PCT}% (anti-martingale + scaling exceeded safe limits)`
+  }
 
   return {
     suggestedLotSize: Math.round(suggestedLotSize * 100) / 100,
@@ -565,21 +584,21 @@ export function getExchangeRateRisk(): {
  * Get or create today's daily performance record.
  */
 export async function getDailyPerformance(): Promise<DailyPerformanceData> {
-  const todayStr = new Date().toISOString().split("T")[0]
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
 
-  const existing = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
-  if (existing) {
-    return mapDailyPerformanceToData(existing)
-  }
+  const NINETY_DAYS_AGO = new Date()
+  NINETY_DAYS_AGO.setDate(NINETY_DAYS_AGO.getDate() - 90)
 
-  // Create today's record
+  // Use upsert to avoid race condition between findUnique and create
   const BASE_BALANCE = 10000
-  const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
+  const allClosed = await db.trade.findMany({ where: { status: "CLOSED", closeTime: { gte: NINETY_DAYS_AGO } } })
   const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
   const startBalance = Math.round((BASE_BALANCE + totalClosedPnl) * 100) / 100
 
-  const perf = await db.dailyPerformance.create({
-    data: {
+  const perf = await db.dailyPerformance.upsert({
+    where: { date: todayStr },
+    update: {},
+    create: {
       date: todayStr,
       startBalance,
       endBalance: startBalance,
@@ -604,7 +623,7 @@ export async function updateDailyPerformance(params: {
   slippage?: number
   sizingMethod?: string
 }): Promise<void> {
-  const todayStr = new Date().toISOString().split("T")[0]
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
 
   const existing = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
   if (!existing) return
@@ -969,7 +988,7 @@ export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
   }
 
   // Get today's start balance from DailyPerformance
-  const todayStr = now.toISOString().split("T")[0]
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now)
   const todayPerf = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
   const equity = todayPerf ? todayPerf.startBalance : 10000
   const sessionLimit = (sessionRiskLimitPct / 100) * equity
@@ -1102,20 +1121,24 @@ export function calculatePartialProfitLevels(params: {
   // If a custom risk-reward ratio is provided, adjust the level distances
   // while keeping the same close percentages
   if (riskRewardRatio && riskRewardRatio > 0) {
-    const scaledRange = totalRange * (riskRewardRatio / 3)
+    let scaledRange = totalRange * (riskRewardRatio / 3)
+    // Ensure levels don't exceed TP: scaledRange * 3 must fit within totalRange
+    const maxLevelRange = totalRange / 3
+    const effectiveRange = Math.min(scaledRange, maxLevelRange)
+
     levels[0].price = isBuy
-      ? Math.round((entryPrice + scaledRange) * 100) / 100
-      : Math.round((entryPrice - scaledRange) * 100) / 100
+      ? Math.round((entryPrice + effectiveRange) * 100) / 100
+      : Math.round((entryPrice - effectiveRange) * 100) / 100
     levels[0].reason = `R:R ${riskRewardRatio.toFixed(1)}:1 — First scaled profit target (30%)`
 
     levels[1].price = isBuy
-      ? Math.round((entryPrice + scaledRange * 2) * 100) / 100
-      : Math.round((entryPrice - scaledRange * 2) * 100) / 100
+      ? Math.round((entryPrice + effectiveRange * 2) * 100) / 100
+      : Math.round((entryPrice - effectiveRange * 2) * 100) / 100
     levels[1].reason = `R:R ${(riskRewardRatio * 2).toFixed(1)}:1 — Second scaled profit target (30%)`
 
     levels[2].price = isBuy
-      ? Math.round((entryPrice + scaledRange * 3) * 100) / 100
-      : Math.round((entryPrice - scaledRange * 3) * 100) / 100
+      ? Math.round((entryPrice + effectiveRange * 3) * 100) / 100
+      : Math.round((entryPrice - effectiveRange * 3) * 100) / 100
     levels[2].reason = `R:R ${(riskRewardRatio * 3).toFixed(1)}:1 — Final scaled profit target (40%)`
   }
 

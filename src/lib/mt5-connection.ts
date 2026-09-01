@@ -12,7 +12,7 @@
  *  - Persistent state in DB
  *  - Event emission for UI status updates
  *  - DEGRADED state on high latency / heartbeat failures
- *  - IDX trading hours awareness (09:00-15:00 WIB)
+ *  - IDX trading hours awareness (09:00-16:15 WIB)
  *  - Async mutex for MT5 API call serialization
  *  - MT5 error code mapping (10004-10036)
  *  - FINEX Indonesia symbol mapping with sector classification
@@ -586,24 +586,28 @@ function wibToUtc(wibHour: number, wibMinute: number = 0): { hour: number; minut
 }
 
 // Pre-computed UTC boundaries for IDX trading
+// Correct IDX schedule:
+//   Pre-market: 09:00-09:05 WIB, Session 1: 09:05-11:30 WIB, Lunch: 11:30-13:00 WIB,
+//   Session 2: 13:00-16:15 WIB, Post-close: 16:15-17:00 WIB
 const PHASE_BOUNDARIES_UTC = {
-  preOpenStart: wibToUtc(8, 45),     // 01:45 UTC
-  morningOpen: wibToUtc(9, 0),        // 02:00 UTC
-  preCloseStart: wibToUtc(11, 30),     // 04:30 UTC
-  preCloseEnd: wibToUtc(11, 30, 30),   // 04:30:30 UTC (treated as 04:30 since we only have minutes)
-  afternoonOpen: wibToUtc(13, 30),     // 06:30 UTC
-  marketClose: wibToUtc(15, 0),        // 08:00 UTC
+  preOpenStart: wibToUtc(9, 0),       // 02:00 UTC  — pre-market order queuing
+  morningOpen: wibToUtc(9, 5),         // 02:05 UTC  — Session 1 open
+  preCloseStart: wibToUtc(11, 29),     // 04:29 UTC  — 1 min before Session 1 close
+  preCloseEnd: wibToUtc(11, 30),       // 04:30 UTC  — Session 1 close
+  afternoonOpen: wibToUtc(13, 0),      // 06:00 UTC  — Session 2 open
+  marketClose: wibToUtc(16, 15),       // 09:15 UTC  — market close
+  postCloseEnd: wibToUtc(17, 0),       // 10:00 UTC  — post-close period end
 } as const
 
 /**
  * Determine the current IDX trading phase based on UTC time.
- * IDX Schedule (WIB / UTC):
- *   PRE_OPEN:     08:45-09:00 WIB  = 01:45-02:00 UTC
- *   OPEN:         09:00-11:30 WIB  = 02:00-04:30 UTC
- *   PRE_CLOSE:    11:30-11:30:30    = ~04:30 UTC (30s window)
- *   CLOSED:       11:30-13:30 WIB  = 04:30-06:30 UTC (lunch break)
- *   OPEN:         13:30-15:00 WIB  = 06:30-08:00 UTC
- *   AFTER_HOURS:  15:00+ WIB       = 08:00+ UTC
+ * Correct IDX Schedule (WIB / UTC):
+ *   PRE_OPEN:     09:00-09:05 WIB  = 02:00-02:05 UTC  (order queuing only)
+ *   OPEN:         09:05-11:29 WIB  = 02:05-04:29 UTC  (Session 1)
+ *   PRE_CLOSE:    11:29-11:30 WIB  = 04:29-04:30 UTC  (1 min before close)
+ *   CLOSED:       11:30-13:00 WIB  = 04:30-06:00 UTC  (lunch break)
+ *   OPEN:         13:00-16:15 WIB  = 06:00-09:15 UTC  (Session 2)
+ *   AFTER_HOURS:  16:15+ WIB       = 09:15+ UTC
  */
 export function getTradingPhase(now?: Date): TradingPhase {
   const d = now || new Date()
@@ -616,7 +620,7 @@ export function getTradingPhase(now?: Date): TradingPhase {
   const preOpenDec = preOpenStart.hour + preOpenStart.minute / 60
   const morningDec = morningOpen.hour + morningOpen.minute / 60
   const preCloseDec = preCloseStart.hour + preCloseStart.minute / 60
-  const preCloseEndDec = preCloseStart.hour + preCloseStart.minute / 60 + 30 / 3600 // 30 seconds
+  const preCloseEndDec = preCloseEnd.hour + preCloseEnd.minute / 60
   const afternoonDec = afternoonOpen.hour + afternoonOpen.minute / 60
   const closeDec = marketClose.hour + marketClose.minute / 60
 
@@ -626,12 +630,12 @@ export function getTradingPhase(now?: Date): TradingPhase {
   if (utcDecimal >= morningDec && utcDecimal < preCloseDec) {
     return "OPEN"
   }
-  // PRE_CLOSE is a 30-second window; treat it as part of PRE_CLOSE
+  // PRE_CLOSE: 1-minute window before Session 1 close
   if (utcDecimal >= preCloseDec && utcDecimal < preCloseEndDec) {
     return "PRE_CLOSE"
   }
   // Lunch break CLOSED
-  if (utcDecimal >= preCloseDec && utcDecimal < afternoonDec) {
+  if (utcDecimal >= preCloseEndDec && utcDecimal < afternoonDec) {
     return "CLOSED"
   }
   // Afternoon session OPEN
@@ -645,7 +649,7 @@ export function getTradingPhase(now?: Date): TradingPhase {
 /** Check if the IDX market is currently open for trading. */
 export function isMarketOpen(now?: Date): boolean {
   const phase = getTradingPhase(now)
-  return phase === "OPEN" || phase === "PRE_OPEN"
+  return phase === "OPEN"
 }
 
 // ============================================
@@ -754,7 +758,7 @@ const DEFAULT_CONFIG: Omit<Mt5Config, "login" | "password"> = {
   maxReconnectDelayMs: 30000,
   degradedLatencyThresholdMs: 200,
   degradedHeartbeatFailureThreshold: 2,
-  tradingPhaseCheckIntervalMs: 30000, // Check trading phase every 30s
+  tradingPhaseCheckIntervalMs: 5000, // Check trading phase every 5s to catch all transitions
 }
 
 // ============================================
@@ -880,9 +884,18 @@ class Mt5ConnectionManager {
   }
 
   async connect(login: number, password: string, server?: string): Promise<{ success: boolean; error?: string }> {
+    // Clear any pending reconnect timer to prevent duplicate connection attempts
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer)
+      this.reconnectTimer = null
+    }
+
     if (this.status === "CONNECTED" || this.status === "DEGRADED") {
       return { success: true }
     }
+
+    // Reset shutdown flag so auto-reconnect works after manual disconnect → reconnect
+    this.isShuttingDown = false
 
     this.config = {
       ...DEFAULT_CONFIG,
@@ -988,6 +1001,9 @@ class Mt5ConnectionManager {
   }
 
   private async onConnected(): Promise<void> {
+    // Clear any existing timers before starting new ones (prevents duplicates on reconnect)
+    this.clearTimers()
+
     this.reconnectAttempt = 0
     this.metrics.connectedAt = new Date()
     this.metrics.lastError = null
@@ -1565,6 +1581,9 @@ export class CircuitBreaker {
   }
 }
 
+/** Shared module-level circuit breaker instance — preserves state across calls */
+const defaultCircuitBreaker = new CircuitBreaker()
+
 // ============================================
 // CIRCUIT BREAKER STATE PERSISTENCE
 // ============================================
@@ -1825,8 +1844,8 @@ export async function executeOrderWithRetry(params: {
   let attempts = 0
   const totalRetries = maxRetries
 
-  // Use provided circuit breaker or create a default one
-  const cb = circuitBreaker ?? new CircuitBreaker()
+  // Use provided circuit breaker or fall back to the shared module-level instance
+  const cb = circuitBreaker ?? defaultCircuitBreaker
 
   for (let attempt = 0; attempt <= totalRetries; attempt++) {
     attempts = attempt + 1

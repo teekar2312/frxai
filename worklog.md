@@ -1872,3 +1872,113 @@ Six targeted improvements to the Notifications and Price Alerts module addressin
 
 ### Verification
 - `bun run lint` passes with zero errors
+
+---
+
+## Task 4-a — MT5 Connection Module: 7 Crucial Improvements
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+**File:** `src/lib/mt5-connection.ts`
+
+### Improvements Applied
+
+| # | Improvement | Severity | What Changed |
+|---|-------------|----------|-------------|
+| 1 | Fix IDX trading hours | CRITICAL | Corrected all 6 phase boundaries (preOpenStart 09:00, morningOpen 09:05, preCloseStart 11:29, preCloseEnd 11:30, afternoonOpen 13:00, marketClose 16:15 WIB). Added postCloseEnd 17:00 WIB. Fixed header comment from "09:00-15:00 WIB" to "09:00-16:15 WIB". Updated getTradingPhase() schedule comment and logic (lunch CLOSED now uses preCloseEndDec as start boundary). |
+| 2 | clearTimers() in onConnected() | HIGH | Added `this.clearTimers()` as first line of `onConnected()` to prevent duplicate heartbeat/uptime/tradingPhase timers on reconnect. |
+| 3 | Reset isShuttingDown in connect() | HIGH | Added `this.isShuttingDown = false` in `connect()` after status check, before connection attempt. Enables auto-reconnect after manual disconnect → reconnect cycle. |
+| 4 | isMarketOpen() exclude PRE_OPEN | HIGH | Changed `isMarketOpen()` return from `phase === "OPEN" || phase === "PRE_OPEN"` to `phase === "OPEN"` only. Pre-market is order queuing only, not executable trading. |
+| 5 | Clear reconnect timer in connect() | HIGH | Added `clearTimeout(this.reconnectTimer)` + null check at the start of `connect()` to prevent stale reconnect timers from firing during manual reconnect. |
+| 6 | CircuitBreaker module-level default | HIGH | Created `const defaultCircuitBreaker = new CircuitBreaker()` at module level (after class definition). Changed `executeOrderWithRetry` fallback from `new CircuitBreaker()` to `defaultCircuitBreaker` so state persists across calls. |
+| 7 | PRE_CLOSE check frequency + window | HIGH | Reduced `tradingPhaseCheckIntervalMs` from 30000ms to 5000ms. Expanded PRE_CLOSE window from 30s to 1 minute (11:29-11:30 WIB) so the 5s check interval reliably catches it. |
+
+### Verification
+- `bun run lint` passes with zero errors
+
+---
+
+## Task 4-b: 7 Crucial Risk Management Module Improvements
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Context
+Seven high-severity gaps in the risk engine were identified where safety checks could be bypassed or were redundant.
+
+---
+
+### Changes Made
+
+| # | Improvement | File(s) | Severity | Description |
+|---|-------------|---------|----------|-------------|
+| 1 | Scaling re-validation | `src/lib/risk-engine.ts` | CRITICAL | After dynamic scaling factor is applied (up to 1.5x), added re-validation block that re-checks leverage cap, max lot per trade, and single stock concentration against the scaled lot size. Also fixed scaling to apply both upward (1.0–1.5x) and downward factors. |
+| 2 | 90-day date filter | `src/lib/risk-engine.ts` | HIGH | Unbounded `db.trade.findMany({ where: { status: 'CLOSED' } })` query in `getRiskSnapshot()` now filtered to `closeTime >= 90 days ago`, eliminating O(N) perf bomb on large trade histories. |
+| 3 | No-SL trade cap | `src/lib/risk-engine.ts` | CRITICAL | SL-less trades now enforce a strict 50% of max risk cap. Previously only produced a warning and bypassed all risk-amount checks (riskAmount=0). |
+| 4 | WIB timezone | `src/lib/risk-engine.ts` | HIGH | `todayStr` now uses `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' })` instead of UTC. Gap risk WIB conversion replaced manual `+7h` offset with proper `toLocaleString('en-US', { timeZone: 'Asia/Jakarta', hour12: false })` parsing. |
+| 5 | Market open check | `src/lib/risk-engine.ts` | CRITICAL | `preTradeCheck` now calls `isMarketOpen()` early. Trades are rejected with clear message when market is closed. |
+| 6 | Remove double monitoring | `src/app/api/risk/route.ts` | MEDIUM | Removed the second `processProactiveMarginMonitoring()` call from the route handler. `getRiskSnapshot()` already calls it internally. Removed unused imports and throttle constants. |
+| 7 | SL direction validation | `src/lib/risk-engine.ts` | CRITICAL | Added check: BUY requires SL < entryPrice, SELL requires SL > entryPrice. Misconfigured SLs are now rejected before risk calculation. |
+
+---
+
+### Key Code Changes
+
+**`src/lib/risk-engine.ts`:**
+- Added `NINETY_DAYS_AGO` constant and `closeTime: { gte: NINETY_DAYS_AGO }` filter on closed trades query
+- `todayStr` uses `Intl.DateTimeFormat` with `Asia/Jakarta` timezone
+- Market open check (`isMarketOpen()`) at top of `preTradeCheck`
+- SL direction validation (BUY/SELL) before risk amount calculation
+- No-SL trade cap enforces 50% of `maxRiskPerTrade` risk
+- Scaling factor applies both upward and downward, plus re-validation block after scaling
+- Gap risk WIB uses `toLocaleString` with `Asia/Jakarta` timezone
+
+**`src/app/api/risk/route.ts`:**
+- Removed `getRiskConfig` and `processProactiveMarginMonitoring` imports
+- Removed `lastProactiveCheck` throttle variable and `PROACTIVE_CHECK_INTERVAL_MS`
+- Removed the second `processProactiveMarginMonitoring()` call block
+
+---
+
+### Verification
+- `bun run lint` passes with zero errors
+
+---
+
+## Task 4-c: Money Management (7) + Error Logging (7) — 14 Crucial Improvements
+
+**Date**: 2025-01-15
+**Status**: Completed
+
+### MONEY MANAGEMENT IMPROVEMENTS (7)
+
+| # | Fix | File | Summary |
+|---|-----|------|----------|
+| MM1 | 90-day date filter | `src/lib/money-management.ts` | Added `closeTime: { gte: NINETY_DAYS_AGO }` to the unbounded `getDailyPerformance()` closed trades query |
+| MM2 | Race condition fix | `src/lib/money-management.ts` | Replaced `findUnique`→null check→`create` with `upsert` in `getDailyPerformance()` to prevent unique constraint violation on concurrent requests |
+| MM3 | Absolute risk cap | `src/lib/money-management.ts` | After all scaling in `calculatePositionSize()`, added hard cap at `2× maxRiskPerTrade` with lot size recalculation when exceeded |
+| MM4 | WIB timezone for todayStr | `src/lib/money-management.ts` | Replaced all 3 instances of `toISOString().split("T")[0]` with `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format()` for WIB-accurate daily dates |
+| MM5 | Partial profit cap | `src/lib/money-management.ts` | In `calculatePartialProfitLevels()`, added `Math.min(scaledRange, totalRange / 3)` guard to ensure custom R:R levels don't exceed TP price |
+| MM6 | Input validation | `src/app/api/money-management/route.ts` | Added validation for `direction` (BUY/SELL), `method` (FIXED_FRACTIONAL/KELLY/ANTI_MARTINGALE/OPTIMAL_F), and `entryPrice` (positive finite number) in POST handler |
+| MM7 | Risk of Ruin null guard | `src/app/api/money-management/route.ts` | When <10 closed trades exist, returns `probability: null` with advisory message instead of fabricated optimistic fallback values |
+
+### ERROR LOGGING IMPROVEMENTS (7)
+
+| # | Fix | File | Summary |
+|---|-----|------|----------|
+| EL1 | groupBy syntax | `src/lib/trading-logger.ts` | Verified `topMessages` groupBy already has correct structure (siblings, not nested in `where`) |
+| EL2 | Flush data loss | `src/lib/trading-logger.ts` | Changed `batch.slice(-20)` → `batch.slice(-this.MAX_BUFFER)` so all 50 buffered entries are re-queued on flush failure instead of losing 30 |
+| EL3 | LOG_LEVEL validation | `src/lib/trading-logger.ts` | Replaced unchecked env var cast with `Set<LogLevel>` validation; invalid values default to `'DEBUG'` |
+| EL4 | topCategories error filter | `src/lib/trading-logger.ts` | Added `where: { level: { in: ['ERROR', 'CRITICAL', 'FATAL'] } }` to `topCategories` groupBy so it only counts error-level logs, not all logs |
+| EL5 | Burst detection optimization | `src/lib/trading-logger.ts` | Replaced `findMany` (loads all errors into memory) with `count` + `groupBy` (aggregated in DB) for burst detection |
+| EL6 | Limit NaN validation | `src/app/api/logs/route.ts` | Replaced `parseInt(limit)` with NaN-safe: `Math.max(1, Math.min(isNaN(raw) ? 50 : raw, 200))` |
+| EL7 | Cache invalidation + flushTime | `src/app/api/logs/route.ts` + `src/lib/trading-logger.ts` | (a) Added `cachedAnalytics = null` in POST handler alongside `cachedStats = null`; (b) Removed `this._lastFlushTime = now` from `recordFlushFailure()` so failed flushes don't falsely report success time |
+
+### Files Modified
+- `src/lib/money-management.ts` — MM1, MM2, MM3, MM4, MM5
+- `src/app/api/money-management/route.ts` — MM6, MM7
+- `src/lib/trading-logger.ts` — EL2, EL3, EL4, EL5, EL7b
+- `src/app/api/logs/route.ts` — EL6, EL7a
+
+### Verification
+- `bun run lint` passes with zero errors

@@ -15,7 +15,8 @@ const ANALYTICS_CACHE_MS = 30_000
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
-    const limit = parseInt(searchParams.get("limit") ?? "50")
+    const limitRaw = parseInt(searchParams.get("limit") ?? "50", 10)
+    const limit = Math.max(1, Math.min(isNaN(limitRaw) ? 50 : limitRaw, 200))
     const level = searchParams.get("level")
     const category = searchParams.get("category")
     const symbol = searchParams.get("symbol")
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest) {
 
     // Invalidate cache on new log
     cachedStats = null
+    cachedAnalytics = null
 
     const validLevels = ["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL", "FATAL"]
     const logLevel = validLevels.includes(level) ? level : "INFO"

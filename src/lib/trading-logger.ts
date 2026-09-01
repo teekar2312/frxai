@@ -483,7 +483,7 @@ class LogBuffer {
       const errMsg = err instanceof Error ? err.message : String(err)
       console.error("[Logger] FAILED TO FLUSH LOG BUFFER:", err)
       logHealthMonitor.recordFlushFailure(errMsg)
-      this.buffer.unshift(...batch.slice(-20))
+      this.buffer.unshift(...batch.slice(-this.MAX_BUFFER))
     } finally {
       this.isFlushing = false
     }
@@ -510,7 +510,9 @@ function getBuffer(): LogBuffer {
 }
 
 // Minimum log level filter
-let minLevel: LogLevel = (process.env.LOG_LEVEL as LogLevel) || "DEBUG"
+const VALID_LOG_LEVELS = new Set<LogLevel>(['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL', 'FATAL'])
+const envLevel = process.env.LOG_LEVEL?.toUpperCase()
+let minLevel: LogLevel = VALID_LOG_LEVELS.has(envLevel as LogLevel) ? (envLevel as LogLevel) : 'DEBUG'
 
 export function setMinLevel(level: LogLevel) { minLevel = level }
 export function getMinLevel(): LogLevel { return minLevel }
@@ -592,25 +594,26 @@ export async function getLogAnalytics(): Promise<LogAnalytics> {
   const [lastHourErrors, prevHourErrors, topCategories, topMessages] = await Promise.all([
     db.tradingLog.count({ where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: lastHour } } }),
     db.tradingLog.count({ where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: prevHourStart, lt: lastHour } } }),
-    db.tradingLog.groupBy({ by: ["category"], _count: true, orderBy: { _count: { category: "desc" } }, take: 5 }),
+    db.tradingLog.groupBy({ by: ["category"], where: { level: { in: ['ERROR', 'CRITICAL', 'FATAL'] } }, _count: true, orderBy: { _count: { category: "desc" } }, take: 5 }),
     db.tradingLog.groupBy({ by: ["message"], where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] } }, _count: true, orderBy: { _count: { message: "desc" } }, take: 5 }),
   ])
 
   // Error burst detection: >10 errors in 5 min
   const burstStart = new Date(now.getTime() - 5 * 60 * 1000)
-  const burstLogs = await db.tradingLog.findMany({
-    where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: burstStart } },
-    orderBy: { createdAt: "asc" },
-  })
+  const [burstCount, burstTopMsg] = await Promise.all([
+    db.tradingLog.count({ where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: burstStart } } }),
+    db.tradingLog.groupBy({
+      by: ["message"],
+      where: { level: { in: ["ERROR", "CRITICAL", "FATAL"] }, createdAt: { gte: burstStart } },
+      _count: true,
+      orderBy: { _count: { message: "desc" } },
+      take: 1,
+    }),
+  ])
 
   const bursts: LogAnalytics["bursts"] = []
-  if (burstLogs.length > 10) {
-    const msgCounts = new Map<string, number>()
-    for (const l of burstLogs) msgCounts.set(l.message, (msgCounts.get(l.message) || 0) + 1)
-    let topMsg = ""
-    let topCount = 0
-    for (const [msg, count] of msgCounts) { if (count > topCount) { topMsg = msg; topCount = count } }
-    bursts.push({ startTime: burstLogs[0].createdAt, count: burstLogs.length, topMessage: topMsg })
+  if (burstCount > 10) {
+    bursts.push({ startTime: burstStart, count: burstCount, topMessage: burstTopMsg[0]?.message ?? '' })
   }
 
   const direction: LogAnalytics["errorRateTrend"]["direction"] =
@@ -798,7 +801,6 @@ class LogHealthMonitor {
     if (this.recentFlushes.length > this.WINDOW_SIZE) {
       this.recentFlushes.shift()
     }
-    this._lastFlushTime = now
     this._lastFailureTime = now
     this._lastFailureReason = error
     this._totalFlushes++

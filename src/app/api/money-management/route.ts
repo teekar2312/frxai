@@ -3,6 +3,9 @@ import { calculatePositionSize, getDailyPerformance, calculateRiskOfRuin, calcul
 import logger from "@/lib/trading-logger"
 import { db } from "@/lib/db"
 
+const VALID_DIRECTIONS = ['BUY', 'SELL']
+const VALID_METHODS = ['FIXED_FRACTIONAL', 'KELLY', 'ANTI_MARTINGALE', 'OPTIMAL_F']
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -19,6 +22,18 @@ export async function GET(request: NextRequest) {
         orderBy: { closeTime: "desc" },
         take: 100,
       })
+
+      if (closedTrades.length < 10) {
+        return NextResponse.json({
+          success: true,
+          data: {
+            probability: null,
+            interpretation: 'Insufficient trade data (need 10+ trades)',
+            recommendation: 'Trade at minimum risk until sufficient data is collected',
+          },
+        })
+      }
+
       const wins = closedTrades.filter((t) => t.pnl > 0)
       const losses = closedTrades.filter((t) => t.pnl < 0)
       const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length) * 100 : 50
@@ -97,13 +112,29 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         )
       }
+
+      const resolvedDirection = direction || "BUY"
+      if (!VALID_DIRECTIONS.includes(resolvedDirection)) {
+        return NextResponse.json({ success: false, error: 'direction must be BUY or SELL' }, { status: 400 })
+      }
+
+      const resolvedMethod = method || "FIXED_FRACTIONAL"
+      if (!VALID_METHODS.includes(resolvedMethod)) {
+        return NextResponse.json({ success: false, error: `method must be one of: ${VALID_METHODS.join(', ')}` }, { status: 400 })
+      }
+
+      const entryPriceNum = Number(entryPrice)
+      if (!Number.isFinite(entryPriceNum) || entryPriceNum <= 0) {
+        return NextResponse.json({ success: false, error: 'entryPrice must be a positive number' }, { status: 400 })
+      }
+
       const result = await calculatePositionSize({
         symbol,
-        direction: direction || "BUY",
-        entryPrice: Number(entryPrice),
+        direction: resolvedDirection,
+        entryPrice: entryPriceNum,
         sl: sl ? Number(sl) : null,
         equity: Number(equity),
-        method: method || "FIXED_FRACTIONAL",
+        method: resolvedMethod,
         fixedDollarRisk: fixedDollarRisk ? Number(fixedDollarRisk) : undefined,
         scalingFactor: scalingFactor ? Number(scalingFactor) : undefined,
       })

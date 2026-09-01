@@ -310,6 +310,12 @@ const SENTIMENT_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes (shorter than DB stale
 // In-memory lock to prevent concurrent computeSymbolSentiment/computeMarketSentiment for same key
 const computeLocks = new Map<string, Promise<unknown>>() // symbol -> ongoing computation promise
 
+// Time-based throttle to prevent rapid redundant recomputations
+let lastMarketComputeAt = 0
+const MARKET_COMPUTE_MIN_INTERVAL_MS = 2 * 60 * 1000 // 2 minutes minimum between computations
+const lastSymbolComputeAt = new Map<string, number>()
+const SYMBOL_COMPUTE_MIN_INTERVAL_MS = 2 * 60 * 1000 // 2 minutes minimum between computations per symbol
+
 // ============================================================================
 // HELPERS
 // ============================================================================
@@ -473,13 +479,14 @@ export function analyzeText(text: string): SentimentScore {
     const entry = SENTIMENT_LEXICON[lookupKey]
     if (!entry) continue
 
-    // Check for preceding NEGATOR
+    // Check for preceding NEGATOR (look up to 2 tokens back)
     let negated = false
-    if (i > 0) {
-      const prevToken = tokens[i - 1]
+    for (let j = Math.max(0, i - 2); j < i; j++) {
+      const prevToken = tokens[j]
       const prevEntry = SENTIMENT_LEXICON[prevToken] ?? SENTIMENT_LEXICON[phraseMap.get(prevToken) ?? ""]
       if (prevEntry && prevEntry.category === "NEGATOR") {
         negated = true
+        break
       }
     }
 
@@ -662,6 +669,22 @@ export function detectRegime(score: number, confidence: number): SentimentRegime
  * @returns The created/updated SentimentSnapshot
  */
 export async function computeSymbolSentiment(symbol: string) {
+  // Fix 5: Time-based throttle to prevent rapid redundant recomputations
+  if (symbol !== "MARKET") {
+    const lastAt = lastSymbolComputeAt.get(symbol) ?? 0
+    if (Date.now() - lastAt < SYMBOL_COMPUTE_MIN_INTERVAL_MS) {
+      const cached = getCachedSentiment(symbol)
+      if (cached) return cached
+    }
+  }
+
+  // Fix 2: Check lock FIRST (before any DB queries)
+  const existingLock = computeLocks.get(symbol)
+  if (existingLock) {
+    return existingLock as Awaited<ReturnType<typeof computeSymbolSentiment>>
+  }
+
+  const computationPromise = (async () => {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
   const symbolTake = symbol === "MARKET" ? 100 : 50
@@ -673,13 +696,45 @@ export async function computeSymbolSentiment(symbol: string) {
       take: symbolTake,
     })
   } else {
-    // Fetch all recent articles and filter by JSON symbols field
-    articles = await db.newsArticle.findMany({
-      where: { publishedAt: { gte: since } },
-      orderBy: { publishedAt: "desc" },
-      take: symbolTake,
-    })
-    articles = articles.filter((a) => symbolInJsonSymbols(a.symbols as string, symbol))
+    // Fix 1: Use LIKE-based raw SQL to filter at DB level instead of fetching all then JS-filtering
+    // Validate symbol is alphanumeric to prevent SQL injection
+    if (!/^[A-Z0-9]+$/.test(symbol)) {
+      logger.info("AI_ENGINE", `Invalid symbol format for raw query: ${symbol}, returning neutral snapshot`, { symbol })
+      return {
+        id: "",
+        symbol,
+        overallScore: 0,
+        articleCount: 0,
+        positiveCount: 0,
+        negativeCount: 0,
+        neutralCount: 0,
+        sentimentRegime: "NEUTRAL" as SentimentRegime,
+        confidence: 0,
+        weightedScore: 0,
+        topPositiveWords: "[]",
+        topNegativeWords: "[]",
+        sectorBreakdown: "{}",
+        timestamp: new Date(),
+        createdAt: new Date(),
+      }
+    }
+    articles = await db.$queryRawUnsafe<{
+      id: string
+      title: string
+      content: string | null
+      source: string | null
+      url: string | null
+      imageUrl: string | null
+      sentiment: string
+      sentimentScore: number
+      symbols: string | null
+      publishedAt: Date | null
+      createdAt: Date
+      category: string | null
+      fetchedAt: Date
+    }[]>(
+      `SELECT * FROM NewsArticle WHERE publishedAt >= '${since.toISOString()}' AND (symbols LIKE '%"${symbol}"%' OR symbols LIKE '%${symbol}%') ORDER BY publishedAt DESC LIMIT ${symbolTake}`
+    )
   }
 
   if (articles.length === 0) {
@@ -705,13 +760,6 @@ export async function computeSymbolSentiment(symbol: string) {
     }
   }
 
-  // Prevent concurrent computation for the same symbol
-  const existingLock = computeLocks.get(symbol)
-  if (existingLock) {
-    return existingLock as Awaited<ReturnType<typeof computeSymbolSentiment>>
-  }
-
-  const computationPromise = (async () => {
   // Score articles that haven't been scored yet
   let positiveCount = 0
   let negativeCount = 0
@@ -854,6 +902,11 @@ export async function computeSymbolSentiment(symbol: string) {
     // Populate in-memory cache after successful DB save
     setCachedSentiment(symbol, snapshot)
 
+    // Fix 5: Update throttle timestamp after successful computation
+    if (symbol !== "MARKET") {
+      lastSymbolComputeAt.set(symbol, Date.now())
+    }
+
     return snapshot
   } catch (err) {
     logger.error("AI_ENGINE", `Failed to save sentiment snapshot for ${symbol}`, {
@@ -880,6 +933,10 @@ export async function computeSymbolSentiment(symbol: string) {
     }
     // Still cache the fallback so we don't recompute immediately
     setCachedSentiment(symbol, fallbackSnapshot as NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>)
+    // Fix 5: Update throttle timestamp even on fallback
+    if (symbol !== "MARKET") {
+      lastSymbolComputeAt.set(symbol, Date.now())
+    }
     return fallbackSnapshot
   }
   })()
@@ -900,6 +957,19 @@ export async function computeSymbolSentiment(symbol: string) {
  * @returns SentimentSnapshot for the "MARKET" symbol
  */
 export async function computeMarketSentiment() {
+  // Fix 5: Time-based throttle to prevent rapid redundant recomputations
+  if (Date.now() - lastMarketComputeAt < MARKET_COMPUTE_MIN_INTERVAL_MS) {
+    const cached = getCachedSentiment('MARKET')
+    if (cached) return cached
+  }
+
+  // Fix 2: Check lock FIRST (before any DB queries)
+  const existingLock = computeLocks.get('MARKET')
+  if (existingLock) {
+    return existingLock as Awaited<ReturnType<typeof computeMarketSentiment>>
+  }
+
+  const computationPromise = (async () => {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
   const articles = await db.newsArticle.findMany({
@@ -929,13 +999,6 @@ export async function computeMarketSentiment() {
     }
   }
 
-  // Prevent concurrent computation for the same key
-  const existingLock = computeLocks.get('MARKET')
-  if (existingLock) {
-    return existingLock as Awaited<ReturnType<typeof computeMarketSentiment>>
-  }
-
-  const computationPromise = (async () => {
   let positiveCount = 0
   let negativeCount = 0
   let neutralCount = 0
@@ -1084,6 +1147,9 @@ export async function computeMarketSentiment() {
     // Populate in-memory cache after successful DB save
     setCachedSentiment("MARKET", snapshot)
 
+    // Fix 5: Update throttle timestamp after successful computation
+    lastMarketComputeAt = Date.now()
+
     return snapshot
   } catch (err) {
     logger.error("AI_ENGINE", "Failed to save market sentiment snapshot", {
@@ -1108,6 +1174,8 @@ export async function computeMarketSentiment() {
     }
     // Still cache the fallback so we don't recompute immediately
     setCachedSentiment("MARKET", fallbackSnapshot as NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>)
+    // Fix 5: Update throttle timestamp even on fallback
+    lastMarketComputeAt = Date.now()
     return fallbackSnapshot
   }
   })()
@@ -1463,46 +1531,29 @@ export async function filterTrade(
  */
 export async function getSentimentStats(maxSnapshots: number = 200): Promise<SentimentStats> {
   try {
-    const [totalSnapshots, latestMarket, allSnapshots] =
-      await Promise.all([
-        db.sentimentSnapshot.count(),
-        db.sentimentSnapshot.findFirst({
-          where: { symbol: "MARKET" },
-          orderBy: { timestamp: "desc" },
-        }),
-        db.sentimentSnapshot.findMany({ orderBy: { timestamp: "desc" }, take: Math.min(maxSnapshots, 500) }),
-      ])
+    const [totalSnapshots, allSnapshots] = await Promise.all([
+      db.sentimentSnapshot.count(),
+      db.sentimentSnapshot.findMany({ orderBy: { timestamp: "desc" }, take: Math.min(maxSnapshots, 500) }),
+    ])
 
-    // Manual distinct for SQLite compatibility: top 5 bullish symbols by highest score
-    const allSymbolSnapshots = await db.sentimentSnapshot.findMany({
-      where: { symbol: { not: "MARKET" } },
-      orderBy: { overallScore: "desc" },
-      take: 200,
-    })
-    const seenSymbols = new Set<string>()
-    const bullishSymbols: typeof allSymbolSnapshots = []
-    for (const s of allSymbolSnapshots) {
-      if (!seenSymbols.has(s.symbol)) {
-        seenSymbols.add(s.symbol)
-        bullishSymbols.push(s)
-        if (bullishSymbols.length >= 5) break
-      }
+    // Find latest MARKET snapshot from allSnapshots
+    const latestMarket = allSnapshots.find(s => s.symbol === "MARKET") ?? null
+
+    // Extract non-MARKET snapshots, get top bullish/bearish by distinct symbol
+    const nonMarketSnapshots = allSnapshots.filter(s => s.symbol !== "MARKET")
+    const seenBull = new Set<string>()
+    const topBullish: Array<{ symbol: string }> = []
+    for (const s of nonMarketSnapshots) {
+      if (!seenBull.has(s.symbol)) { seenBull.add(s.symbol); topBullish.push(s) }
+      if (topBullish.length >= 5) break
     }
-
-    // Manual distinct for SQLite compatibility: top 5 bearish symbols by lowest score
-    const allSymbolSnapshotsAsc = await db.sentimentSnapshot.findMany({
-      where: { symbol: { not: "MARKET" } },
-      orderBy: { overallScore: "asc" },
-      take: 200,
-    })
-    const seenSymbolsBear = new Set<string>()
-    const bearishSymbols: typeof allSymbolSnapshotsAsc = []
-    for (const s of allSymbolSnapshotsAsc) {
-      if (!seenSymbolsBear.has(s.symbol)) {
-        seenSymbolsBear.add(s.symbol)
-        bearishSymbols.push(s)
-        if (bearishSymbols.length >= 5) break
-      }
+    // Sort nonMarketSnapshots by score ascending for bearish
+    const sortedAsc = [...nonMarketSnapshots].sort((a, b) => (a.overallScore as number) - (b.overallScore as number))
+    const seenBear = new Set<string>()
+    const topBearish: Array<{ symbol: string }> = []
+    for (const s of sortedAsc) {
+      if (!seenBear.has(s.symbol)) { seenBear.add(s.symbol); topBearish.push(s) }
+      if (topBearish.length >= 5) break
     }
 
     // Average confidence
@@ -1537,8 +1588,8 @@ export async function getSentimentStats(maxSnapshots: number = 200): Promise<Sen
             timestamp: latestMarket.timestamp,
           }
         : null,
-      topBullish: bullishSymbols.map((s) => s.symbol),
-      topBearish: bearishSymbols.map((s) => s.symbol),
+      topBullish: topBullish.map((s) => s.symbol),
+      topBearish: topBearish.map((s) => s.symbol),
       avgConfidence,
       regimeDistribution,
     }

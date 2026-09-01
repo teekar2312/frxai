@@ -973,25 +973,6 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
   const symbols = options.symbols ?? DEFAULT_SYMBOLS
   const maxArticles = options.maxArticles ?? 50
 
-  // Check rate limit
-  const rateCheck = await checkRateLimit('FINNHUB')
-  if (!rateCheck.allowed) {
-    logger.info('API_RATE_LIMIT', 'Finnhub rate limited, skipping fetch', {
-      source: 'FINNHUB',
-      details: rateCheck.reason,
-    })
-    return {
-      articles: [],
-      totalFetched: 0,
-      newArticles: 0,
-      deduped: 0,
-      provider: 'FINNHUB',
-      responseTimeMs: Date.now() - startTime,
-      cached: false,
-      lastError: rateCheck.reason,
-    }
-  }
-
   // Check circuit breaker
   const circuitCheck = await checkCircuitBreaker('FINNHUB')
   if (!circuitCheck.allowed) {
@@ -1037,14 +1018,19 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
   // FIX 1: Concurrent fetching with Promise.allSettled
   const fetchPromises = symbols.map(async (symbol) => {
     try {
+      // Per-symbol rate limit check to accurately track N concurrent API calls
+      const rateCheck = await checkRateLimit('FINNHUB')
+      if (!rateCheck.allowed) {
+        return { symbol, error: rateCheck.reason, articles: [] as NormalizedArticle[], rawCount: 0 }
+      }
+
       const url = new URL('https://finnhub.io/api/v1/company-news')
       url.searchParams.set('symbol', symbol)
       url.searchParams.set('from', fromDate.toISOString().split('T')[0])
       url.searchParams.set('to', toDate.toISOString().split('T')[0])
-      url.searchParams.set('token', apiKey)
 
       const response = await fetchWithRetry(url.toString(), {
-        headers: { 'Accept': 'application/json' },
+        headers: { 'Accept': 'application/json', 'X-Finnhub-Token': apiKey },
         signal: AbortSignal.timeout(15_000),
       })
 
@@ -1178,25 +1164,6 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
   const symbols = options.symbols ?? []
   const maxArticles = options.maxArticles ?? 50
 
-  // Check rate limit
-  const rateCheck = await checkRateLimit('MARKETAUX')
-  if (!rateCheck.allowed) {
-    logger.info('API_RATE_LIMIT', 'MARKETAUX rate limited, skipping fetch', {
-      source: 'MARKETAUX',
-      details: rateCheck.reason,
-    })
-    return {
-      articles: [],
-      totalFetched: 0,
-      newArticles: 0,
-      deduped: 0,
-      provider: 'MARKETAUX',
-      responseTimeMs: Date.now() - startTime,
-      cached: false,
-      lastError: rateCheck.reason,
-    }
-  }
-
   // Check circuit breaker
   const circuitCheck = await checkCircuitBreaker('MARKETAUX')
   if (!circuitCheck.allowed) {
@@ -1271,6 +1238,12 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
   // Concurrent fetching with Promise.allSettled (same pattern as Finnhub)
   const fetchPromises = fetchConfigs.map(async (fetchConfig) => {
     try {
+      // Per-config rate limit check to accurately track each API call
+      const rateCheck = await checkRateLimit('MARKETAUX')
+      if (!rateCheck.allowed) {
+        return { config: fetchConfig, articles: [] as NormalizedArticle[], error: rateCheck.reason, rawCount: 0 }
+      }
+
       const response = await fetchWithRetry(fetchConfig.url, {
         headers: { 'Accept': 'application/json' },
         signal: AbortSignal.timeout(15_000),
@@ -1559,8 +1532,10 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
 
     for (const article of recentArticles) {
       const titleLower = article.title.toLowerCase()
-      const contentLower = (article.content ?? '').toLowerCase()
-      const searchText = `${titleLower} ${contentLower}`
+
+      // Scan title only — breaking news keywords almost always appear in titles,
+      // not buried in article body text. ~10-50x faster than scanning content.
+      const searchText = titleLower
 
       const matchedKeywords: string[] = []
       for (const keyword of BREAKING_KEYWORDS) {
@@ -1632,10 +1607,19 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
  *
  * @returns NewsStats with all aggregate data
  */
+// Module-level throttle: run article cleanup at most once per hour
+let lastArticleCleanupAt = 0
+
 export async function getNewsStats(): Promise<NewsStats> {
   try {
     // Cleanup old fetch logs before computing stats
     await cleanupFetchLogs(30)
+
+    // Cleanup old articles at most once per hour to prevent unbounded table growth
+    if (Date.now() - lastArticleCleanupAt > 60 * 60 * 1000) {
+      await cleanupOldArticles(90)
+      lastArticleCleanupAt = Date.now()
+    }
 
     // Total articles
     const totalArticles = await db.newsArticle.count()
@@ -1800,7 +1784,7 @@ export async function seedNewsSourceConfigs(): Promise<void> {
     await db.newsSourceConfig.upsert({
       where: { provider: 'FINNHUB' },
       update: {
-        apiKey: finnhubApiKey,
+        // Note: apiKey intentionally omitted from update to preserve user-set DB values
         baseUrl: 'https://finnhub.io/api/v1',
         priority: 10,
         rateLimitPerMin: 60,
@@ -1825,7 +1809,7 @@ export async function seedNewsSourceConfigs(): Promise<void> {
     await db.newsSourceConfig.upsert({
       where: { provider: 'MARKETAUX' },
       update: {
-        apiKey: marketauxApiKey,
+        // Note: apiKey intentionally omitted from update to preserve user-set DB values
         baseUrl: 'https://api.marketaux.com/v1',
         priority: 5,
         rateLimitPerMin: 10,

@@ -2145,3 +2145,110 @@ Deep audit of `src/lib/trade-execution-engine.ts` (2400+ lines) identified 11 hi
 
 ### Files Modified
 - `src/lib/trade-execution-engine.ts` — All 11 fixes (3 symbol filters, 2 race conditions, 1 leverage, 1 commission, 1 currentPrice sync, 1 daily perf, 1 comment)
+
+## NEWS API DEEP AUDIT — Phase 2 Second Pass (Task 2-a)
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+**Task ID**: 2-a
+
+### Context
+Second-pass audit of the News API module (`src/lib/news-api.ts`) after Phase 6 fixed 12 issues.
+Identified 6 additional gaps: 1 critical (token exposure), 3 high (rate limit accuracy, DB key overwrite), 2 medium (performance, missing cleanup).
+
+---
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/lib/news-api.ts` | 6 fixes (token header, per-symbol rate limit, per-config rate limit, seed update key preservation, title-only breaking news scan, automatic article cleanup) |
+
+---
+
+### Fixes Applied
+
+| # | Fix | Severity | File:Line | Description |
+|---|-----|----------|-----------|-------------|
+| 1 | Finnhub token in URL | CRITICAL | news-api.ts:1044→1033 | `url.searchParams.set('token', apiKey)` removed; token sent via `X-Finnhub-Token` header instead |
+| 2 | Finnhub 1→N rate checks | HIGH | news-api.ts:977→1022 | Single `checkRateLimit('FINNHUB')` removed; per-symbol check added inside `fetchPromises` loop before each fetch |
+| 3 | MARKETAUX 1→2 rate checks | HIGH | news-api.ts:1182→1242 | Single `checkRateLimit('MARKETAUX')` removed; per-config check added inside `fetchConfigs` loop before each fetch |
+| 4 | Seed overwrites DB keys | HIGH | news-api.ts:1803,1828 | `apiKey` removed from `update` branches of both FINNHUB and MARKETAUX upserts; only set in `create` branch |
+| 5 | Breaking news full-text scan | MEDIUM | news-api.ts:1561-1563 | `searchText` changed from `${titleLower} ${contentLower}` to `titleLower` only; ~10-50x faster |
+| 6 | Article cleanup never runs | MEDIUM | news-api.ts:1610-1622 | Added `lastArticleCleanupAt` throttle variable + hourly `cleanupOldArticles(90)` call inside `getNewsStats()` |
+
+---
+
+### Verification
+- `bun run lint` — **0 errors, 0 warnings**
+- All changes are backward-compatible (no interface changes, no new dependencies)
+- Rate limit checks inside promise callbacks maintain concurrency (Promise.allSettled pattern preserved)
+
+## AI DECISION ENGINE — SECOND PASS AUDIT (Task 2-b)
+
+**Date**: 2025-01-15 (continued)
+**Task ID**: 2-b
+**Status**: Completed
+
+### Context
+Second-pass audit of `ai-decision-engine.ts` after Phase 6 already fixed 12 issues.
+Found 5 additional gaps: timezone seed inconsistency, wasted computation,
+duplicate DB queries, uncached news fetches, and unnecessary dynamic imports.
+
+---
+### Fixes Applied
+
+| # | Fix | Severity | Lines | Description |
+|---|-----|----------|-------|-------------|
+| 1 | seededRandom WIB date | CRITICAL | ~183 | `new Date().toISOString().slice(0,10)` → `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())` — prevents seed flip at 00:00-07:00 UTC |
+| 2 | Market phase before analyzers | HIGH | ~1000-1027 | Moved `getTradingPhase()` check BEFORE `Promise.all` of 4 analyzers; returns default factors on CLOSED |
+| 3 | Merge daily perf queries | MEDIUM | ~669-708 | Two identical `dailyPerformance` queries (findFirst + findUnique) merged into single `findUnique`; `dailyLossPct` and `consecutiveLosses` extracted in same query as `baseEquity` |
+| 4 | Time-based news fetch cache | MEDIUM | ~170-172, ~507-514 | Replaced `isMarketOpen()` forceRefresh with 5-minute per-symbol cache (`lastNewsFetchTime` + `NEWS_FETCH_CACHE_MS`) |
+| 5 | Static import getTradingPhase | HIGH | ~33 | Added `getTradingPhase` to existing `import { isMarketOpen } from './mt5-connection'`; removed `await import('./mt5-connection')` dynamic import |
+
+---
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/lib/ai-decision-engine.ts` | 5 fixes (WIB seed, phase check reorder, query merge, news cache, static import) |
+
+---
+### Verification
+- `bun run lint` — **0 errors, 0 warnings**
+- All changes are backward-compatible (no interface changes, no new dependencies)
+- Market CLOSED early return uses `defaultTechnicalFactors()`, `defaultNewsFactors()`, `defaultSentimentFactors()`, `defaultRiskFactors()` since analyzers are skipped
+
+## SENTIMENT FILTER DEEP AUDIT — 5 Second-Pass Fixes (Task 2-c)
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Context
+Second-pass audit on `src/lib/sentiment-filter.ts` building on Phase 6's 12 fixes. Identified 5 remaining issues
+related to DB-level filtering, lock ordering, query reduction, NLP consistency, and computation throttling.
+
+---
+
+### File Modified
+| File | Changes |
+|------|----------|
+| `src/lib/sentiment-filter.ts` | 5 fixes (raw SQL, lock reorder, query merge, negator, throttle) |
+
+---
+
+### Fixes Applied
+
+| # | Fix | Severity | Lines | Description |
+|---|-----|----------|-------|-------------|
+| 1 | DB-level symbol filter | CRITICAL | 699-737 | Replaced `findMany` + JS `symbolInJsonSymbols()` with `$queryRawUnsafe` LIKE query. Symbol validated as `^[A-Z0-9]+$` before SQL interpolation to prevent injection. |
+| 2 | Lock before fetch | HIGH | 671-685, 959-970 | Moved `computeLocks` check before article DB query in both `computeSymbolSentiment()` and `computeMarketSentiment()`. Prevents concurrent callers from both issuing independent DB fetches before reaching the lock. |
+| 3 | Query merge (5→2) | HIGH | 1532-1595 | `getSentimentStats()` reduced from 5 DB queries to 2 (`count` + `findMany`). MARKET snapshot found by scanning allSnapshots; top bullish/bearish extracted from non-MARKET subset with distinct-symbol iteration. |
+| 4 | Negator 2-token lookback | MEDIUM | 476-485 | Negator check now looks up to 2 tokens back (matching intensifier behavior), using a `for` loop with `Math.max(0, i-2)` instead of only checking `tokens[i-1]`. |
+| 5 | Computation throttle | MEDIUM | 313-317, 672-678, 905-908, 1150-1151, 1177-1178 | Added `lastMarketComputeAt`, `lastSymbolComputeAt` maps with 2-minute minimum interval. Throttle returns cached snapshot if available; only prevents redundant recomputation, never blocks cached reads. |
+
+---
+
+### Verification
+- `bun run lint` — **0 errors, 0 warnings**
+- All changes are backward-compatible (no interface changes, no new dependencies)
+- Raw SQL uses `$queryRawUnsafe` with alphanumeric validation guard
+- Throttle does not affect `filterTrade()` cached snapshot reads

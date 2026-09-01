@@ -30,7 +30,7 @@ import type { SentimentFilterResult, SentimentTrend } from './sentiment-filter'
 // Fix #17: Integrate with indicator-pool for real technical data
 // Fix 1 (Task 7): Added missing OHLCVBar type import
 import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic, calculateEMA, type OHLCVBar } from './indicator-pool'
-import { isMarketOpen } from './mt5-connection'
+import { isMarketOpen, getTradingPhase } from './mt5-connection'
 
 // ============================================================================
 // SECTION 1: TYPES & INTERFACES
@@ -167,6 +167,9 @@ const DEFAULT_ATR_PCT = 0.015 // 1.5% estimated ATR for SL/TP calc
 // Breaking news cache (shared across symbols within the same minute)
 let breakingNewsCache: { items: Awaited<ReturnType<typeof detectBreakingNews>>; cachedAt: number } | null = null
 const BREAKING_NEWS_CACHE_TTL_MS = 60_000 // 1 minute
+// Fix 4 (Task 2-b): Time-based cache for per-symbol news fetches (avoids redundant API calls)
+let lastNewsFetchTime: Record<string, number> = {}
+const NEWS_FETCH_CACHE_MS = 5 * 60 * 1000 // 5 minutes
 const MATCHING_WINDOW_MS = 5 * 60 * 1000 // 5 minutes to match decision to trade
 const ESTIMATED_ACCOUNT_VALUE = 100_000_000 // 100M IDR estimate
 const RISK_PER_TRADE_PCT = 0.01 // 1% risk per trade
@@ -180,7 +183,7 @@ const RISK_PER_TRADE_PCT = 0.01 // 1% risk per trade
  * Returns a value in [0, 1) that is consistent for the same symbol on the same day.
  */
 function seededRandom(symbol: string, index: number): number {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
   const seed = `${symbol}:${today}:${index}`
   let hash = 0
   for (let i = 0; i < seed.length; i++) {
@@ -502,7 +505,13 @@ function analyzeTechnicalFactorsMock(symbol: string, timeframe: string = DEFAULT
  */
 export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
   try {
-    const result = await fetchNews({ symbols: [symbol], maxArticles: 20, forceRefresh: isMarketOpen() })
+    const nowMs = Date.now()
+    const lastFetch = lastNewsFetchTime[symbol] ?? 0
+    const shouldRefresh = (nowMs - lastFetch) > NEWS_FETCH_CACHE_MS
+    const result = await fetchNews({ symbols: [symbol], maxArticles: 20, forceRefresh: shouldRefresh })
+    if (result.newArticles > 0 || shouldRefresh) {
+      lastNewsFetchTime[symbol] = nowMs
+    }
     const articles = result.articles
 
     const factors = defaultNewsFactors()
@@ -667,16 +676,21 @@ export async function analyzeRiskFactors(): Promise<RiskFactors> {
     }
 
     // Fix #20: Get base equity from account data or risk config
+    // Fix 3 (Task 2-b): Single query for both baseEquity and dailyLossPct
     let baseEquity = 100_000_000
+    const todayWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
     try {
-      const todayWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
-      const dailyPerf = await db.dailyPerformance.findFirst({ where: { date: todayWib } })
+      const dailyPerf = await db.dailyPerformance.findUnique({
+        where: { date: todayWib },
+      })
       if (dailyPerf) {
         baseEquity = Math.max(dailyPerf.startBalance, 100_000_000)
+        factors.dailyLossPct = Math.abs(dailyPerf.pnlPercent)
+        factors.consecutiveLosses = dailyPerf.consecutiveLosses
       }
     } catch {
-    // Use default estimate
-  }
+      // Use default estimate
+    }
 
     // Fix: Compute margin usage percentage
     factors.marginUsagePct = baseEquity > 0
@@ -688,19 +702,7 @@ export async function analyzeRiskFactors(): Promise<RiskFactors> {
       ? Math.round((totalRiskAmount / baseEquity) * 100)
       : 0
 
-    // --- Daily performance ---
-    const todayWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
-    try {
-      const dailyPerf = await db.dailyPerformance.findUnique({
-        where: { date: todayWib },
-      })
-      if (dailyPerf) {
-        factors.dailyLossPct = Math.abs(dailyPerf.pnlPercent)
-        factors.consecutiveLosses = dailyPerf.consecutiveLosses
-      }
-    } catch {
-      // No daily perf record yet
-    }
+    // --- Daily performance --- (merged into single query above)
 
     // --- Determine volatility regime ---
     // Check recent closed trades for volatility clues
@@ -997,19 +999,9 @@ export async function makeDecision(
       // Continue with decision if cooldown check fails
     }
 
-    // --- Step 3: Run all analyzers in parallel ---
-    // Fix #17: Use async technical analysis (real data from indicator-pool)
-    // Fix 5 (Task 7): Use pre-computed risk factors if provided (batch optimization)
-    const [technicalFactors, newsFactors, sentimentFactors, riskFactors] = await Promise.all([
-      analyzeTechnicalFactorsAsync(symbol, timeframe),
-      analyzeNewsFactors(symbol),
-      analyzeSentimentFactors(symbol),
-      precomputedRiskFactors ?? analyzeRiskFactors(),
-    ])
-
+    // --- Step 3: Check market phase BEFORE running expensive analyzers ---
     // Fix #22: Check market hours before making decisions
     try {
-      const { getTradingPhase } = await import('./mt5-connection')
       const phase = getTradingPhase()
       if (phase === 'CLOSED') {
         const closedDecision: AiDecision = {
@@ -1018,9 +1010,9 @@ export async function makeDecision(
           confidence: 0,
           reasoning: `Market is currently CLOSED (phase: ${phase}). No decisions made outside trading hours.`,
           technicalFactors: defaultTechnicalFactors(),
-          newsFactors,
-          sentimentFactors,
-          riskFactors,
+          newsFactors: defaultNewsFactors(),
+          sentimentFactors: defaultSentimentFactors(),
+          riskFactors: defaultRiskFactors(),
           suggestedLotSize: 0,
           suggestedSl: 0,
           suggestedTp: 0,
@@ -1035,6 +1027,16 @@ export async function makeDecision(
     } catch {
       // If phase check fails, continue with decision
     }
+
+    // --- Step 3.5: Run all analyzers in parallel ---
+    // Fix #17: Use async technical analysis (real data from indicator-pool)
+    // Fix 5 (Task 7): Use pre-computed risk factors if provided (batch optimization)
+    const [technicalFactors, newsFactors, sentimentFactors, riskFactors] = await Promise.all([
+      analyzeTechnicalFactorsAsync(symbol, timeframe),
+      analyzeNewsFactors(symbol),
+      analyzeSentimentFactors(symbol),
+      precomputedRiskFactors ?? analyzeRiskFactors(),
+    ])
 
     // --- Step 4: Weighted composite scoring ---
     // Self-learning: use adaptive weights if enabled and sufficient data exists

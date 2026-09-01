@@ -185,13 +185,21 @@ export const FOREX_OVERLAPS: Omit<SessionOverlap, 'isActive'>[] = [
 // IDX SESSION DEFINITIONS (WIB = UTC+7)
 // ============================================
 
-/** IDX session boundaries in WIB */
+/** IDX session boundaries in WIB (matches PHASE_BOUNDARIES_UTC in mt5-connection.ts)
+ *  Pre-market: 09:00-09:05 WIB
+ *  Session 1:  09:05-11:30 WIB
+ *  Lunch:     11:30-13:00 WIB
+ *  Session 2:  13:00-16:15 WIB
+ *  Post-close: 16:15-17:00 WIB
+ */
 export const IDX_SESSIONS_WIB = {
-  preOpenStart: { hour: 8, minute: 45 },    // 08:45 WIB
-  morningOpen: { hour: 9, minute: 0 },      // 09:00 WIB
-  preCloseStart: { hour: 11, minute: 30 },   // 11:30 WIB
-  afternoonOpen: { hour: 13, minute: 30 },   // 13:30 WIB
-  marketClose: { hour: 15, minute: 0 },      // 15:00 WIB
+  preOpenStart: { hour: 9, minute: 0 },       // 09:00 WIB — pre-market order queuing
+  morningOpen: { hour: 9, minute: 5 },         // 09:05 WIB — Session 1 open
+  preCloseStart: { hour: 11, minute: 29 },     // 11:29 WIB — 1 min before Session 1 close
+  preCloseEnd: { hour: 11, minute: 30 },       // 11:30 WIB — Session 1 close / lunch start
+  afternoonOpen: { hour: 13, minute: 0 },      // 13:00 WIB — Session 2 open
+  marketClose: { hour: 16, minute: 15 },       // 16:15 WIB — market close
+  postCloseEnd: { hour: 17, minute: 0 },       // 17:00 WIB — post-close period end
 } as const
 
 /** Map TradingPhase to IDX sub-session */
@@ -202,8 +210,8 @@ export function getIdxSubSession(phase: TradingPhase): IdxSubSession {
     case 'OPEN': {
       // Determine if morning or afternoon by current UTC time
       const utcHour = new Date().getUTCHours()
-      // Morning: 02:00-04:30 UTC = 09:00-11:30 WIB
-      // Afternoon: 06:30-08:00 UTC = 13:30-15:00 WIB
+      // Morning: 02:05-04:30 UTC = 09:05-11:30 WIB
+      // Afternoon: 06:00-09:15 UTC = 13:00-16:15 WIB
       return utcHour < 5 ? 'MORNING' : 'AFTERNOON'
     }
     case 'PRE_CLOSE':
@@ -277,11 +285,12 @@ function getNextPhaseTransition(now: Date): { nextPhase: TradingPhase; secondsUn
   const utcDecimal = now.getUTCHours() + now.getUTCMinutes() / 60 + now.getUTCSeconds() / 3600
 
   const transitions: Array<{ phase: TradingPhase; utcDecimal: number }> = [
-    { phase: 'PRE_OPEN', utcDecimal: wibToUtcDecimal(8, 45) },
-    { phase: 'OPEN', utcDecimal: wibToUtcDecimal(9, 0) },
+    { phase: 'PRE_OPEN', utcDecimal: wibToUtcDecimal(9, 0) },
+    { phase: 'OPEN', utcDecimal: wibToUtcDecimal(9, 5) },
+    { phase: 'PRE_CLOSE', utcDecimal: wibToUtcDecimal(11, 29) },
     { phase: 'CLOSED', utcDecimal: wibToUtcDecimal(11, 30) },
-    { phase: 'OPEN', utcDecimal: wibToUtcDecimal(13, 30) },
-    { phase: 'AFTER_HOURS', utcDecimal: wibToUtcDecimal(15, 0) },
+    { phase: 'OPEN', utcDecimal: wibToUtcDecimal(13, 0) },
+    { phase: 'AFTER_HOURS', utcDecimal: wibToUtcDecimal(16, 15) },
   ]
 
   // Find the next transition that is in the future
@@ -296,7 +305,7 @@ function getNextPhaseTransition(now: Date): { nextPhase: TradingPhase; secondsUn
 
   // If no transition found today, next is tomorrow's PRE_OPEN
   if (!nextTransition) {
-    const nextDayPreOpen = wibToUtcDecimal(8, 45) + 24
+    const nextDayPreOpen = wibToUtcDecimal(9, 0) + 24
     const secondsUntil = (nextDayPreOpen - utcDecimal) * 3600
     return { nextPhase: 'PRE_OPEN', secondsUntil: Math.max(0, Math.round(secondsUntil)) }
   }
@@ -483,7 +492,7 @@ export async function trackSessionPerformance(params: {
   pnl?: number
 }): Promise<void> {
   const now = new Date()
-  const today = params.date || now.toISOString().split('T')[0] // YYYY-MM-DD
+  const today = params.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now)
   const phase = getTradingPhase(now)
   const subSession = params.sessionType || getIdxSubSession(phase)
 
@@ -553,7 +562,7 @@ export async function getTodaySessionPerformance(): Promise<{
   afternoon: SessionPerformanceRecord | null
   fullDay: SessionPerformanceRecord | null
 }> {
-  const today = new Date().toISOString().split('T')[0]
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
 
   try {
     const records = await db.sessionPerformance.findMany({
@@ -624,16 +633,17 @@ export async function getSessionRiskBudget(equity: number): Promise<SessionRiskB
   const totalBudget = equity * (sessionRiskLimitPct / 100)
 
   // Calculate used budget (session losses from today's closed trades)
-  const today = new Date().toISOString().split('T')[0]
+  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
   let usedBudget = 0
   let tradesThisSession = 0
 
   try {
-    // Get morning session trades (02:00-04:30 UTC = 09:00-11:30 WIB)
-    const todayStart = new Date(today)
-    todayStart.setUTCHours(0, 0, 0, 0)
-    const todayEnd = new Date(today)
-    todayEnd.setUTCHours(23, 59, 59, 999)
+    // Get today's trades using WIB date boundaries
+    // WIB midnight (00:00 WIB) = 17:00 UTC previous day
+    // WIB end-of-day (23:59:59 WIB) = 16:59:59 UTC same day
+    const [y, m, d] = todayStr.split('-').map(Number)
+    const todayStart = new Date(Date.UTC(y, m - 1, d - 1, 17, 0, 0, 0))  // 00:00 WIB
+    const todayEnd = new Date(Date.UTC(y, m - 1, d, 16, 59, 59, 999))   // 23:59:59 WIB
 
     const closedTrades = await db.trade.findMany({
       where: {
@@ -672,11 +682,11 @@ export function checkSessionTradingRules(): { allowed: boolean; reason?: string 
   const phase = getTradingPhase()
 
   if (phase === 'CLOSED') {
-    return { allowed: false, reason: 'Market is closed (lunch break 11:30-13:30 WIB)' }
+    return { allowed: false, reason: 'Market is closed (lunch break 11:30-13:00 WIB)' }
   }
 
   if (phase === 'AFTER_HOURS') {
-    return { allowed: false, reason: 'Market is closed (after hours, opens 09:00 WIB)' }
+    return { allowed: false, reason: 'Market is closed (after hours, opens 09:05 WIB)' }
   }
 
   if (phase === 'PRE_CLOSE') {
@@ -746,13 +756,23 @@ export function getSessionQualityScore(): number {
   if (utcHour >= 7 && utcHour < 9) score += 10  // Tokyo-London overlap
   if (utcHour >= 12 && utcHour < 16) score += 15 // London-NY overlap
 
-  // Penalty for first/last 15 minutes of session
+  // Penalty for first 15 minutes of session (opening volatility)
   const utcMinute = new Date().getUTCMinutes()
-  if ((subSession === 'MORNING' && utcMinute < 15) || (subSession === 'AFTERNOON' && utcMinute < 15)) {
+  // Morning: UTC 02:05-02:20 = WIB 09:05-09:20
+  if (subSession === 'MORNING' && utcHour === 2 && utcMinute < 15) {
     score -= 10 // Opening volatility
   }
-  if (subSession === 'AFTERNOON' && utcHour >= 7 && utcMinute > 25) {
-    score -= 15 // Approaching close
+  // Afternoon: UTC 06:00-06:15 = WIB 13:00-13:15
+  if (subSession === 'AFTERNOON' && utcHour === 6 && utcMinute < 15) {
+    score -= 10 // Opening volatility
+  }
+  // Approaching close (last 30 min: UTC 08:45-09:15 = WIB 15:45-16:15)
+  if (subSession === 'AFTERNOON' && utcHour >= 8 && utcMinute >= 45) {
+    score -= 15
+  }
+  // Last 5 min urgency (UTC 09:10-09:15 = WIB 16:10-16:15)
+  if (subSession === 'AFTERNOON' && utcHour >= 9 && utcMinute >= 10) {
+    score -= 10
   }
 
   return Math.max(0, Math.min(100, score))

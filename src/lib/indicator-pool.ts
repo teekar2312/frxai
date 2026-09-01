@@ -89,7 +89,10 @@ export interface StrategySignal {
 const DEFAULT_MIN_BARS = 200
 
 /** Default cache TTL in milliseconds */
-const DEFAULT_CACHE_TTL_MS = 60_000
+export const DEFAULT_CACHE_TTL_MS = 60_000
+
+/** Default maximum cache entries to prevent unbounded memory growth */
+const DEFAULT_MAX_CACHE_ENTRIES = 500
 
 /** Fibonacci retracement levels for pivot point variants */
 const FIB_LEVELS = {
@@ -119,14 +122,15 @@ function standardDeviation(values: number[]): number {
   return Math.sqrt(variance)
 }
 
-/** Generate a cache key from indicator name and params */
-function cacheKey(name: IndicatorName, params?: Record<string, number>): string {
-  if (!params || Object.keys(params).length === 0) return name
+/** Generate a cache key from indicator name, params, and optional scope */
+function cacheKey(name: IndicatorName, params?: Record<string, number>, scope?: string): string {
+  let key = scope ? `${scope}:` : ''
+  if (!params || Object.keys(params).length === 0) return `${key}${name}`
   const sorted = Object.entries(params)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${k}=${v}`)
     .join(',')
-  return `${name}:${sorted}`
+  return `${key}${name}:${sorted}`
 }
 
 // ============================================
@@ -309,6 +313,13 @@ export function calculateMACD(
   for (let i = 0; i < slowPeriod; i++) slowEma += closes[i]
   slowEma /= slowPeriod
 
+  // Warm up fast EMA for bars between fastPeriod and slowPeriod
+  // Without this, fastEma at i=slowPeriod is the SMA of closes[0..fastPeriod-1]
+  // missing updates for closes[fastPeriod..slowPeriod-1]
+  for (let i = fastPeriod; i < slowPeriod; i++) {
+    fastEma = closes[i] * fastK + fastEma * (1 - fastK)
+  }
+
   // Build MACD line series starting from slowPeriod-1
   const macdLineSeries: number[] = []
 
@@ -472,7 +483,7 @@ export function calculateStochastic(
 
   // %D = SMA of last dPeriod %K values
   const lastK = kSeries[kSeries.length - 1]
- const kSlice = kSeries.slice(-dPeriod)
+  const kSlice = kSeries.slice(-dPeriod)
   const d = kSlice.reduce((acc, v) => acc + v, 0) / dPeriod
 
   return { k: lastK, d }
@@ -691,6 +702,8 @@ export function calculatePivotPoints(
 export class IndicatorPool {
   private cache: Map<string, { result: IndicatorResult; computedAt: Date }> = new Map()
   private cacheTtlMs: number
+  private maxCacheEntries: number
+  private scope: string
   private hits = 0
   private misses = 0
 
@@ -708,9 +721,11 @@ export class IndicatorPool {
     PIVOT_POINTS: [],
   }
 
-  constructor(cacheTtlMs: number = DEFAULT_CACHE_TTL_MS) {
+  constructor(cacheTtlMs: number = DEFAULT_CACHE_TTL_MS, scope: string = 'global') {
     this.cacheTtlMs = cacheTtlMs
-    logger.info('IndicatorPool initialized', { source: 'IndicatorPool', details: `cacheTtl=${cacheTtlMs}ms` })
+    this.maxCacheEntries = DEFAULT_MAX_CACHE_ENTRIES
+    this.scope = scope
+    logger.info('IndicatorPool initialized', { source: 'IndicatorPool', details: `cacheTtl=${cacheTtlMs}ms, scope=${scope}` })
   }
 
   /** Returns the dependency graph for all indicators */
@@ -763,7 +778,7 @@ export class IndicatorPool {
 
     // Compute in order
     for (const config of ordered) {
-      const key = cacheKey(config.name, config.params)
+      const key = cacheKey(config.name, config.params, this.scope)
 
       // Check cache
       const cached = this.cache.get(key)
@@ -783,6 +798,12 @@ export class IndicatorPool {
       this.misses++
       const result = this.computeSingle(config.name, bars, config.params)
       this.cache.set(key, { result, computedAt: new Date() })
+
+      // Evict oldest entries if over limit
+      while (this.cache.size > this.maxCacheEntries) {
+        const firstKey = this.cache.keys().next().value
+        if (firstKey) this.cache.delete(firstKey)
+      }
       results.set(config.name, result)
       computed.add(key)
     }
@@ -1026,11 +1047,12 @@ export async function fetchCandles(
   try {
     const rows = await db.candleData.findMany({
       where: { symbol, timeframe },
-      orderBy: { openTime: 'asc' },
+      orderBy: { openTime: 'desc' },
       take: limit,
     })
 
-    const bars: OHLCVBar[] = rows.map((row) => ({
+    // Reverse to ASC order (oldest first) as required by indicators
+    const bars: OHLCVBar[] = rows.reverse().map((row) => ({
       openTime: row.openTime,
       open: row.open,
       high: row.high,
@@ -1150,9 +1172,8 @@ export function generateMockCandles(
   count: number = 200
 ): OHLCVBar[] {
   // Determine base price from SYMBOL_MAP or use default
-  const basePrice = SYMBOL_MAP[symbol]?.lotSize
-    ? 5000 // Use a reasonable IDX stock price as default even if symbol is known
-    : 5000
+  // Default base price for unknown symbols (known symbols use knownPrices below)
+  const basePrice = 5000
 
   // For well-known stocks, use approximate real-world base prices
   const knownPrices: Record<string, number> = {

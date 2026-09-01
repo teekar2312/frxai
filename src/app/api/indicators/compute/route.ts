@@ -1,11 +1,30 @@
 import { NextRequest, NextResponse } from "next/server"
-import { IndicatorPool, fetchCandles, generateMockCandles, storeCandles, captureIndicatorSnapshot, parseIndicatorSnapshot } from "@/lib/indicator-pool"
+import { IndicatorPool, fetchCandles, generateMockCandles, storeCandles, captureIndicatorSnapshot, parseIndicatorSnapshot, DEFAULT_CACHE_TTL_MS } from "@/lib/indicator-pool"
 import type { IndicatorName } from "@/lib/indicator-pool"
 
 const ALL_INDICATORS: IndicatorName[] = [
   'SMA', 'EMA', 'RSI', 'MACD', 'ATR',
   'BOLLINGER', 'STOCHASTIC', 'ADX', 'VWAP', 'PIVOT_POINTS',
 ]
+
+// Module-level pool cache keyed by symbol:timeframe to persist across requests
+const poolCache = new Map<string, IndicatorPool>()
+const MAX_POOLS = 50
+
+function getPool(symbol: string, timeframe: string): IndicatorPool {
+  const key = `${symbol}:${timeframe}`
+  let pool = poolCache.get(key)
+  if (!pool) {
+    pool = new IndicatorPool(DEFAULT_CACHE_TTL_MS, key)
+    poolCache.set(key, pool)
+    // Evict oldest if over limit
+    while (poolCache.size > MAX_POOLS) {
+      const firstKey = poolCache.keys().next().value
+      if (firstKey) poolCache.delete(firstKey)
+    }
+  }
+  return pool
+}
 
 /**
  * GET /api/indicators/compute?symbol=BBCA&timeframe=H1&indicators=RSI,MACD,ATR&refresh=true
@@ -41,7 +60,7 @@ export async function GET(request: Request) {
       ? indicatorsParam.split(',').filter(i => ALL_INDICATORS.includes(i as IndicatorName)) as IndicatorName[]
       : ALL_INDICATORS
 
-    const pool = new IndicatorPool()
+    const pool = getPool(symbol, timeframe)
     const result = await pool.compute(
       requestedIndicators.map(name => ({ name })),
       candles,

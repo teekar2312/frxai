@@ -19,6 +19,7 @@ import { executeOrderWithRetry, type OrderExecutionResult } from '@/lib/mt5-conn
 import { getTradingPhase, isMarketOpen, validateSymbol } from '@/lib/mt5-connection'
 import type { TradingPhase } from '@/lib/mt5-connection'
 import { updateDailyPerformance } from '@/lib/money-management'
+import { trackSessionPerformance } from '@/lib/session-manager'
 import { logAuditTrail } from '@/lib/risk-engine'
 
 // ============================================
@@ -310,8 +311,9 @@ export async function processSlTpForAllOpenTrades(
   let errors = 0
 
   try {
+    const symbols = Array.from(priceUpdate.keys())
     const openTrades = await db.trade.findMany({
-      where: { status: 'OPEN' },
+      where: { status: 'OPEN', symbol: { in: symbols } },
     })
 
     logger.info('TRADE_EXECUTION', `Checking SL/TP for ${openTrades.length} open trades`, {
@@ -442,17 +444,20 @@ export async function closeTrade(
     }
 
     const finalClosePrice = closePrice ?? trade.currentPrice
+    const exitCommission = trade.lotSize * 1 // $1/lot exit commission (FINEX spec)
+    const totalCommission = trade.commission + exitCommission
     const pnl = calculatePnl(
       trade.direction,
       trade.entryPrice,
       finalClosePrice,
       trade.lotSize,
-      trade.commission,
+      totalCommission,
     )
     const pnlPercent = calculatePnlPercent(pnl, trade.margin)
 
-    const updatedTrade = await db.trade.update({
-      where: { id: tradeId },
+    // Atomic update with status precondition to prevent double-close
+    const updateResult = await db.trade.updateMany({
+      where: { id: tradeId, status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
       data: {
         status: 'CLOSED',
         executionState: 'CANCELLED',
@@ -460,10 +465,18 @@ export async function closeTrade(
         currentPrice: finalClosePrice,
         pnl,
         pnlPercent,
+        commission: totalCommission,
         reason,
         closeTime: new Date(),
       },
     })
+
+    if (updateResult.count === 0) {
+      return { success: false, error: `Trade ${tradeId} was already closed or in an invalid state (race condition prevented double-close)` }
+    }
+
+    // Construct the updated trade object for event emission and return
+    const updatedTrade = { ...trade, status: 'CLOSED' as const, closePrice: finalClosePrice, currentPrice: finalClosePrice, pnl, pnlPercent, commission: totalCommission, reason, closeTime: new Date(), executionState: 'CANCELLED' as const }
 
     // Emit trade closed event
     await tradeEventBus.emit({
@@ -489,10 +502,13 @@ export async function closeTrade(
       type: 'CLOSE',
       pnl,
       isWin: pnl > 0,
-      commission: trade.commission,
+      commission: totalCommission,
       slippage: trade.slippage,
       sizingMethod: trade.sizingMethod ?? undefined,
     })
+
+    // Track session performance
+    await trackSessionPerformance({ isClose: true, pnl })
 
     // Audit trail
     await logAuditTrail({
@@ -928,10 +944,12 @@ export async function processTrailingStopsForAllTrades(
   const now = new Date()
 
   try {
+    const symbols = Array.from(priceUpdate.keys())
     const trailingTrades = await db.trade.findMany({
       where: {
         status: 'OPEN',
         trailingStop: true,
+        symbol: { in: symbols },
       },
     })
 
@@ -1284,6 +1302,9 @@ export async function executePartialClose(
       sizingMethod: trade.sizingMethod ?? undefined,
     })
 
+    // Track session performance
+    await trackSessionPerformance({ isClose: true, pnl })
+
     // Audit trail
     await logAuditTrail({
       action: 'PARTIAL_CLOSE_EXECUTED',
@@ -1335,10 +1356,12 @@ export async function checkPartialCloseTriggers(
   let errors = 0
 
   try {
+    const symbols = Array.from(priceUpdate.keys())
     const eligibleTrades = await db.trade.findMany({
       where: {
         status: { in: ['OPEN', 'PARTIAL_FILLED'] },
         lotSize: { gt: 0 },
+        symbol: { in: symbols },
       },
     })
 
@@ -1488,6 +1511,17 @@ export async function syncPositionsWithBroker(
         extra.push(localTrade.id)
         // Mark the local trade as closed — broker has closed it
         try {
+          const exitCommission = localTrade.lotSize * 1 // $1/lot exit commission (FINEX spec)
+          const totalCommission = localTrade.commission + exitCommission
+          const syncPnl = calculatePnl(
+            localTrade.direction,
+            localTrade.entryPrice,
+            // Note: Using local currentPrice as broker doesn't provide close price for synced-out positions.
+            // The price may be slightly stale if no recent price updates were received.
+            localTrade.currentPrice,
+            localTrade.lotSize,
+            totalCommission,
+          )
           await db.trade.update({
             where: { id: localTrade.id },
             data: {
@@ -1496,13 +1530,8 @@ export async function syncPositionsWithBroker(
               closePrice: localTrade.currentPrice,
               reason: 'BROKER_SYNC',
               closeTime: new Date(),
-              pnl: calculatePnl(
-                localTrade.direction,
-                localTrade.entryPrice,
-                localTrade.currentPrice,
-                localTrade.lotSize,
-                localTrade.commission,
-              ),
+              pnl: syncPnl,
+              commission: totalCommission,
             },
           })
           synced++
@@ -1515,6 +1544,15 @@ export async function syncPositionsWithBroker(
             toStatus: 'CLOSED',
             reason: 'BROKER_SYNC',
             timestamp: new Date(),
+          })
+
+          // Update daily performance for broker-synced close
+          await updateDailyPerformance({
+            type: 'CLOSE',
+            pnl: syncPnl,
+            isWin: syncPnl > 0,
+            commission: totalCommission,
+            sizingMethod: localTrade.sizingMethod ?? undefined,
           })
 
           logger.warn('TRADE_EXECUTION', `Broker sync: closing extra local trade ${localTrade.id}`, {
@@ -1748,6 +1786,21 @@ export async function processPriceUpdate(
     // Stage 4: Evaluate price alerts
     const alertResult = await evaluatePriceAlerts(currentPrices, previousPrices)
     triggeredAlerts = alertResult.triggered
+
+    // Stage 5: Update currentPrice on open trades to prevent stale values
+    try {
+      for (const [symbol, price] of currentPrices) {
+        await db.trade.updateMany({
+          where: { status: 'OPEN', symbol },
+          data: { currentPrice: price },
+        })
+      }
+    } catch (err) {
+      errors++
+      logger.error('TRADE_EXECUTION', 'Failed to update currentPrice on open trades', {
+        details: err instanceof Error ? err.message : String(err),
+      })
+    }
   } catch (err) {
     errors++
     logger.error('TRADE_EXECUTION', 'Price update pipeline error', {
@@ -1831,28 +1884,40 @@ export async function emergencyCloseAll(
     for (const trade of openTrades) {
       try {
         const fromStatus = trade.status as TradeStatus
+        const exitCommission = trade.lotSize * 1 // $1/lot exit commission (FINEX spec)
+        const totalCommission = trade.commission + exitCommission
         const pnl = calculatePnl(
           trade.direction,
           trade.entryPrice,
           trade.currentPrice,
           trade.lotSize,
-          trade.commission,
+          totalCommission,
         )
         const pnlPercent = calculatePnlPercent(pnl, trade.margin)
 
-        // Update trade to CLOSED status via CANCELLED execution state
-        await db.trade.update({
-          where: { id: trade.id },
+        // Atomic update with status precondition to prevent races
+        const updateResult = await db.trade.updateMany({
+          where: { id: trade.id, status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
           data: {
             status: 'CLOSED',
             executionState: 'CANCELLED',
             closePrice: trade.currentPrice,
+            currentPrice: trade.currentPrice,
             pnl,
             pnlPercent,
+            commission: totalCommission,
             reason,
             closeTime: new Date(),
           },
         })
+
+        if (updateResult.count === 0) {
+          logger.warn('TRADE_EXECUTION', `Emergency close skipped for ${trade.id} — already closed`, {
+            tradeId: trade.id,
+            symbol: trade.symbol,
+          })
+          continue // skip this trade but continue with others
+        }
 
         totalPnl += pnl
         closed++
@@ -1880,7 +1945,7 @@ export async function emergencyCloseAll(
           type: 'CLOSE',
           pnl,
           isWin: pnl > 0,
-          commission: trade.commission,
+          commission: totalCommission,
           slippage: trade.slippage,
           sizingMethod: trade.sizingMethod ?? undefined,
         })
@@ -2225,7 +2290,14 @@ export async function executeTrade(
   const slippage = Math.abs(fillPrice - price) * fillLot * PIP_VALUE_PER_LOT
 
   // Calculate margin: (entryPrice * lotSize * 100000) / leverage
-  const leverage = 25 // Default leverage
+  // Try to get leverage from risk config, fallback to 25
+  let leverage = 25
+  try {
+    const config = await db.riskConfig.findFirst({ where: { name: 'default' } })
+    if (config?.leverage) leverage = config.leverage
+  } catch {
+    // use default
+  }
   const margin = (fillPrice * fillLot * PIP_VALUE_PER_LOT) / leverage
 
   // Create the Trade record
@@ -2249,7 +2321,7 @@ export async function executeTrade(
         marketCond: marketCond ?? null,
         aiConfidence: aiConfidence ?? null,
         leverage,
-        commission: 0, // Commission applied at close
+        commission: fillLot * 1, // $1 per lot entry commission (FINEX spec)
         slippage,
         margin,
         openTime: new Date(),
@@ -2348,6 +2420,9 @@ export async function executeTrade(
 
   // Update daily performance (OPEN)
   await updateDailyPerformance({ type: 'OPEN' })
+
+  // Track session performance (trade opened)
+  await trackSessionPerformance({ isClose: false })
 
   // Audit trail
   await logAuditTrail({

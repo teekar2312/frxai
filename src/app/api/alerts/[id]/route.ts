@@ -55,6 +55,12 @@ export async function PATCH(
       updateData.active = Boolean(body.active)
     }
 
+    // Reset triggered state when reactivating a triggered alert
+    if (body.active === true && existing.triggered) {
+      updateData.triggered = false
+      updateData.triggeredAt = null
+    }
+
     // Acknowledge / mark as triggered
     if (body.acknowledged === true || body.triggered === true) {
       updateData.triggered = true

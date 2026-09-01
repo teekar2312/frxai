@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
@@ -21,21 +21,6 @@ interface Stock {
   volume: number
   marketCap: number
 }
-
-const defaultStocks: Stock[] = [
-  { symbol: 'BBCA', price: 9875, change: 125, changePercent: 1.28, volume: 15234567, marketCap: 1175000000000000 },
-  { symbol: 'BBRI', price: 5425, change: -50, changePercent: -0.91, volume: 28765432, marketCap: 821000000000000 },
-  { symbol: 'TLKM', price: 3450, change: 30, changePercent: 0.88, volume: 19876543, marketCap: 341000000000000 },
-  { symbol: 'ASII', price: 5125, change: -25, changePercent: -0.49, volume: 8765432, marketCap: 199000000000000 },
-  { symbol: 'UNVR', price: 4210, change: 60, changePercent: 1.45, volume: 5432109, marketCap: 163000000000000 },
-  { symbol: 'BMRI', price: 6250, change: 75, changePercent: 1.22, volume: 12345678, marketCap: 590000000000000 },
-  { symbol: 'GOTO', price: 82, change: 3, changePercent: 3.80, volume: 98765432, marketCap: 96000000000000 },
-  { symbol: 'BRIS', price: 8850, change: -100, changePercent: -1.12, volume: 7654321, marketCap: 117000000000000 },
-  { symbol: 'ICBP', price: 11250, change: 200, changePercent: 1.81, volume: 4321098, marketCap: 270000000000000 },
-  { symbol: 'ARTO', price: 2650, change: -15, changePercent: -0.56, volume: 6543210, marketCap: 63000000000000 },
-  { symbol: 'EXCL', price: 2340, change: 45, changePercent: 1.96, volume: 3456789, marketCap: 67000000000000 },
-  { symbol: 'TBIG', price: 3150, change: -30, changePercent: -0.94, volume: 2345678, marketCap: 92000000000000 },
-]
 
 function formatIDR(value: number): string {
   if (value >= 1_000_000_000_000) {
@@ -65,19 +50,24 @@ function formatPrice(price: number): string {
 }
 
 export default function StockWatchlist() {
-  const [stocks, setStocks] = useState<Stock[]>(defaultStocks)
+  const [stocks, setStocks] = useState<Stock[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
 
+  const abortRef = useRef<AbortController | null>(null)
+
   const fetchStocks = useCallback(async () => {
     try {
-      const res = await fetch('/api/stocks')
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+      const res = await fetch('/api/stocks', { signal: controller.signal })
       if (res.ok) {
         const json = await res.json()
-        setStocks(Array.isArray(json) ? json : json.stocks ?? defaultStocks)
+        setStocks(Array.isArray(json) ? json : json.stocks ?? [])
       }
     } catch {
-      // use default
+      // use stale data
     } finally {
       setLoading(false)
     }
@@ -86,7 +76,20 @@ export default function StockWatchlist() {
   useEffect(() => {
     fetchStocks()
     const interval = setInterval(fetchStocks, 10000)
-    return () => clearInterval(interval)
+    const handleVisibility = () => {
+      if (document.hidden) {
+        clearInterval(interval)
+      } else {
+        fetchStocks()
+        // Need to restart interval — handle by re-running effect
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      clearInterval(interval)
+      abortRef.current?.abort()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [fetchStocks])
 
   const filtered = stocks.filter(

@@ -10,24 +10,23 @@ const PERIOD_MAP: Record<string, number> = {
 
 const VALID_GROUP_BY = ['symbol', 'strategy', 'session'] as const
 
-function getWibHours(date: Date): number {
+function getSessionFromTime(date: Date): string {
   const str = new Intl.DateTimeFormat('en-US', {
     timeZone: 'Asia/Jakarta',
     hour: 'numeric',
     hour12: false,
     minute: 'numeric',
   }).format(date)
-  // Format is "HH:MM" or "H:MM"; Intl may return '24' for midnight
-  return parseInt(str.split(':')[0], 10) % 24
-}
-
-function getSessionFromTime(date: Date): string {
-  const hours = getWibHours(date)
-  // IDX sessions in WIB
-  if (hours < 9) return 'PRE_MARKET'
-  if (hours < 11) return 'MORNING'
-  if (hours < 13) return 'MIDDAY_BREAK'
-  if (hours < 16) return 'AFTERNOON'
+  const parts = str.split(':')
+  const hours = parseInt(parts[0], 10) % 24
+  const minutes = parseInt(parts[1], 10)
+  const totalMinutes = hours * 60 + minutes
+  if (totalMinutes < 9 * 60) return 'PRE_MARKET'
+  if (totalMinutes < 9 * 60 + 5) return 'PRE_OPEN'
+  if (totalMinutes < 11 * 60 + 30) return 'SESSION_1'
+  if (totalMinutes < 13 * 60) return 'LUNCH_BREAK'
+  if (totalMinutes < 16 * 60 + 15) return 'SESSION_2'
+  if (totalMinutes < 17 * 60) return 'POST_CLOSE'
   return 'AFTER_HOURS'
 }
 
@@ -70,15 +69,16 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Calculate date range
+    // Calculate date range using WIB timezone
     let startDate: Date
     const endDate = endDateStr ? new Date(endDateStr) : new Date()
-
     if (startDateStr) {
       startDate = new Date(startDateStr)
     } else {
+      // Use WIB date for period calculation
       const days = PERIOD_MAP[period]
-      startDate = new Date()
+      const wibNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))
+      startDate = new Date(wibNow)
       startDate.setDate(startDate.getDate() - days)
       startDate.setHours(0, 0, 0, 0)
     }
@@ -97,8 +97,9 @@ export async function GET(request: NextRequest) {
     })
 
     // Get initial balance before the period for equity-based drawdown
+    const wibStartDateStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(startDate)
     const prePeriodPerf = await db.dailyPerformance.findFirst({
-      where: { date: { lt: startDate.toISOString().slice(0, 10) } },
+      where: { date: { lt: wibStartDateStr } },
       orderBy: { date: 'desc' },
     })
     const initialBalance = prePeriodPerf ? prePeriodPerf.endBalance : (trades.length > 0 ? 10000 : 0)

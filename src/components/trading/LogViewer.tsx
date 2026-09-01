@@ -63,6 +63,8 @@ export default function LogViewer() {
   const [loading, setLoading] = useState(true)
   const [levelFilter, setLevelFilter] = useState('ALL')
   const [categoryFilter, setCategoryFilter] = useState('ALL')
+  const [startDate, setStartDate] = useState('')
+  const [endDate, setEndDate] = useState('')
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [showAnalytics, setShowAnalytics] = useState(false)
 
@@ -71,6 +73,8 @@ export default function LogViewer() {
       const params = new URLSearchParams({ limit: '100' })
       if (levelFilter !== 'ALL') params.set('level', levelFilter)
       if (categoryFilter !== 'ALL') params.set('category', categoryFilter)
+      if (startDate) params.set('startDate', startDate)
+      if (endDate) params.set('endDate', endDate)
       if (showAnalytics) params.set('analytics', 'true')
 
       const res = await fetch(`/api/logs?${params}`)
@@ -85,7 +89,7 @@ export default function LogViewer() {
     } finally {
       setLoading(false)
     }
-  }, [levelFilter, categoryFilter, showAnalytics])
+  }, [levelFilter, categoryFilter, startDate, endDate, showAnalytics])
 
   useEffect(() => {
     fetchLogs()
@@ -253,6 +257,20 @@ export default function LogViewer() {
               ))}
             </SelectContent>
           </Select>
+          <input
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="h-8 text-xs border rounded px-2 bg-background"
+            placeholder="Start date"
+          />
+          <input
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="h-8 text-xs border rounded px-2 bg-background"
+            placeholder="End date"
+          />
         </div>
         <span className="text-xs text-muted-foreground self-center">{logs.length} entries</span>
       </div>

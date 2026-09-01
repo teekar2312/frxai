@@ -57,10 +57,9 @@ function formatCurrency(value: number): string {
   }).format(value)
 }
 
-export default function AccountSummary() {
+export default function AccountSummary({ isMarketOpen }: { isMarketOpen: boolean }) {
   const [data, setData] = useState<AccountData>(defaultData)
   const [loading, setLoading] = useState(true)
-  const [marketOpen, setMarketOpen] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
@@ -70,10 +69,7 @@ export default function AccountSummary() {
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
-      const [accountRes, mt5Res] = await Promise.all([
-        fetch('/api/account', { signal: controller.signal }),
-        fetch('/api/mt5/status', { signal: controller.signal }),
-      ])
+      const accountRes = await fetch('/api/account', { signal: controller.signal })
 
       if (!active) return
       // Process account data
@@ -97,13 +93,6 @@ export default function AccountSummary() {
           commission: d.commission ?? '$1/lot',
         })
       }
-
-      if (!active) return
-      // Process MT5 status for market awareness
-      if (mt5Res.ok) {
-        const mt5Json = await mt5Res.json()
-        setMarketOpen(mt5Json.data?.isMarketOpen ?? false)
-      }
     } catch {
       // Keep previous data on error
     } finally {
@@ -116,7 +105,7 @@ export default function AccountSummary() {
     let active = true
 
     const scheduleNext = () => {
-      const delay = marketOpen ? 10000 : 60000
+      const delay = isMarketOpen ? 10000 : 60000
       timerRef.current = setTimeout(async () => {
         if (!active) return
         await fetchData(active)
@@ -132,7 +121,7 @@ export default function AccountSummary() {
       abortRef.current?.abort()
       if (timerRef.current) clearTimeout(timerRef.current)
     }
-  }, [fetchData, marketOpen])
+  }, [fetchData, isMarketOpen])
 
   const isProfit = data.dailyPnL >= 0
   const isMarginLow = data.marginLevel > 0 && data.marginLevel < 150

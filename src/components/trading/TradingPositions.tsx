@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Plus, X, Wind } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface Trade {
   id: string
@@ -46,51 +47,6 @@ interface Trade {
   trailingStop: boolean
   trailingDist: number | null
 }
-
-const defaultTrades: Trade[] = [
-  {
-    id: 'T001',
-    symbol: 'BBCA',
-    direction: 'BUY',
-    lotSize: 0.5,
-    entryPrice: 9750,
-    currentPrice: 9875,
-    sl: 9650,
-    tp: 10100,
-    pnl: 62.5,
-    strategy: 'Momentum Breakout',
-    trailingStop: true,
-    trailingDist: 50,
-  },
-  {
-    id: 'T002',
-    symbol: 'BBRI',
-    direction: 'SELL',
-    lotSize: 1.0,
-    entryPrice: 5500,
-    currentPrice: 5425,
-    sl: 5650,
-    tp: 5300,
-    pnl: 75.0,
-    strategy: 'Mean Reversion',
-    trailingStop: false,
-    trailingDist: null,
-  },
-  {
-    id: 'T003',
-    symbol: 'GOTO',
-    direction: 'BUY',
-    lotSize: 2.0,
-    entryPrice: 79,
-    currentPrice: 82,
-    sl: 74,
-    tp: 95,
-    pnl: 6.0,
-    strategy: 'Scalping',
-    trailingStop: false,
-    trailingDist: null,
-  },
-]
 
 const SYMBOLS = [
   'BBCA', 'BBRI', 'TLKM', 'ASII', 'UNVR', 'BMRI', 'GOTO', 'BRIS', 'ICBP', 'ARTO', 'EXCL',
@@ -109,7 +65,7 @@ function formatIDR(value: number): string {
 }
 
 export default function TradingPositions() {
-  const [trades, setTrades] = useState<Trade[]>(defaultTrades)
+  const [trades, setTrades] = useState<Trade[]>([])
   const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
 
@@ -128,7 +84,7 @@ export default function TradingPositions() {
       const res = await fetch('/api/trades')
       if (res.ok) {
         const json = await res.json()
-        setTrades(Array.isArray(json) ? json : json.trades ?? defaultTrades)
+        setTrades(Array.isArray(json) ? json : json.trades ?? [])
       }
     } catch {
       // use default
@@ -144,7 +100,14 @@ export default function TradingPositions() {
   }, [fetchTrades])
 
   const handleCloseTrade = async (id: string) => {
-    setTrades((prev) => prev.filter((t) => t.id !== id))
+    try {
+      const res = await fetch(`/api/trades/${id}`, { method: 'DELETE' })
+      if (res.ok) {
+        setTrades((prev) => prev.filter((t) => t.id !== id))
+      }
+    } catch {
+      // Keep trade in list on failure
+    }
   }
 
   const handleToggleTrailingStop = async (id: string) => {
@@ -176,23 +139,35 @@ export default function TradingPositions() {
   }
 
   const handleSubmitNewTrade = async () => {
-    const trade: Trade = {
-      id: `T${Date.now()}`,
-      symbol: newSymbol,
-      direction: newDirection,
-      lotSize: parseFloat(newLotSize) || 0.1,
-      entryPrice: 0,
-      currentPrice: 0,
-      sl: newSL ? parseFloat(newSL) : null,
-      tp: newTP ? parseFloat(newTP) : null,
-      pnl: 0,
-      strategy: newStrategy,
-      trailingStop: newTrailingStop,
-      trailingDist: newTrailingDist ? parseFloat(newTrailingDist) : null,
+    if (!newSymbol) return
+    try {
+      const res = await fetch('/api/trades', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: newSymbol,
+          direction: newDirection,
+          lotSize: parseFloat(newLotSize) || 0.1,
+          sl: newSL ? parseFloat(newSL) : null,
+          tp: newTP ? parseFloat(newTP) : null,
+          strategy: newStrategy,
+          trailingStop: newTrailingStop,
+          trailingDistance: newTrailingDist ? parseFloat(newTrailingDist) : null,
+        }),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        const created = json.data ?? json
+        setDialogOpen(false)
+        resetForm()
+        // Re-fetch to get server-side trade with real ID
+        fetchTrades()
+      } else {
+        toast.error('Failed to open trade')
+      }
+    } catch {
+      toast.error('Failed to open trade')
     }
-    setTrades((prev) => [...prev, trade])
-    setDialogOpen(false)
-    resetForm()
   }
 
   const resetForm = () => {

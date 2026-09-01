@@ -25,9 +25,10 @@ export async function GET(request: NextRequest) {
     const total = await db.riskEvent.count({ where })
     const unresolved = await db.riskEvent.count({ where: { ...where, resolved: false } })
     const critical = await db.riskEvent.count({ where: { ...where, severity: "CRITICAL" } })
-    const today = new Date().toISOString().split("T")[0]
+    // Deep Audit Fix #25: Use WIB date instead of UTC for "today" count
+    const todayWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
     const todayEvents = await db.riskEvent.count({
-      where: { ...where, createdAt: { gte: new Date(today) } },
+      where: { ...where, createdAt: { gte: new Date(todayWib + 'T00:00:00+07:00') } },
     })
 
     return NextResponse.json({

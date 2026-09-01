@@ -44,7 +44,7 @@ export default function EquityChart({ isMarketOpen }: EquityChartProps) {
   const [loading, setLoading] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
-  const fetchEquityData = useCallback((range: TimeRange) => {
+  const fetchEquityData = useCallback((range: TimeRange, open: boolean) => {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -65,33 +65,12 @@ export default function EquityChart({ isMarketOpen }: EquityChartProps) {
       })
   }, [])
 
-  // Initial fetch + refetch on range change
-  useEffect(() => {
-    const controller = new AbortController()
-    abortRef.current = controller
-    fetch(`/api/account/equity-curve?range=${timeRange}`, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch')
-        return res.json()
-      })
-      .then((json) => {
-        setData(json.data ?? [])
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (err.name !== 'AbortError') {
-          setData([])
-          setLoading(false)
-        }
-      })
-    return () => { controller.abort() }
-  }, [timeRange])
-
-  // Auto-refresh: 60s during market hours, 5min outside
+  // Initial fetch + auto-refresh: 60s during market hours, 5min outside
   useEffect(() => {
     const delay = isMarketOpen === true ? 60000 : 300000
+    fetchEquityData(timeRange, isMarketOpen === true)
     const interval = setInterval(() => {
-      fetchEquityData(timeRange)
+      fetchEquityData(timeRange, isMarketOpen === true)
     }, delay)
     return () => clearInterval(interval)
   }, [timeRange, isMarketOpen, fetchEquityData])

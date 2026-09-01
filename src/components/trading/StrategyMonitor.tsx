@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -155,18 +155,23 @@ function getConfidenceColor(confidence: number): string {
 }
 
 export default function StrategyMonitor() {
-  const [strategies, setStrategies] = useState<StrategyInfo[]>(defaultStrategies)
+  const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [loading, setLoading] = useState(true)
+
+  const abortRef = useRef<AbortController | null>(null)
 
   const fetchStrategies = useCallback(async () => {
     try {
-      const res = await fetch('/api/strategies')
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+      const res = await fetch('/api/strategies', { signal: controller.signal })
       if (res.ok) {
         const json = await res.json()
-        setStrategies(Array.isArray(json) ? json : json.strategies ?? defaultStrategies)
+        setStrategies(Array.isArray(json) ? json : json.strategies ?? [])
       }
     } catch {
-      // use default
+      // use stale data
     } finally {
       setLoading(false)
     }
@@ -175,7 +180,20 @@ export default function StrategyMonitor() {
   useEffect(() => {
     fetchStrategies()
     const interval = setInterval(fetchStrategies, 10000)
-    return () => clearInterval(interval)
+    const handleVisibility = () => {
+      if (document.hidden) {
+        clearInterval(interval)
+      } else {
+        fetchStrategies()
+        // Need to restart interval — handle by re-running effect
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      clearInterval(interval)
+      abortRef.current?.abort()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [fetchStrategies])
 
   const activeCount = strategies.filter((s) => s.status === 'Active').length

@@ -228,7 +228,7 @@ export default function TradingDashboard() {
           </div>
 
           <TabsContent value="dashboard" className="space-y-6">
-            <AccountSummary />
+            <AccountSummary isMarketOpen={isMarketOpen} />
             <EquityChart isMarketOpen={isMarketOpen} />
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <StockWatchlist />

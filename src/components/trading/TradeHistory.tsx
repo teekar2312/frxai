@@ -186,6 +186,8 @@ export default function TradeHistory() {
   const totalPnl = aggregates?.totalPnl ?? 0
   const winRate = aggregates?.winRate ?? 0
   const avgPnl = aggregates?.avgPnl ?? 0
+  const totalCommission = aggregates?.totalCommission ?? 0
+  const totalSlippage = aggregates?.totalSlippage ?? 0
 
   function renderPagination() {
     if (totalPages <= 1) return null
@@ -243,7 +245,7 @@ export default function TradeHistory() {
   return (
     <div className="space-y-6">
       {/* Summary Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <Card className="p-4">
           <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
             <TrendingUp className="h-4 w-4" />
@@ -269,6 +271,22 @@ export default function TradeHistory() {
           </div>
           <p className={`text-xl font-bold ${avgPnl >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
             ${avgPnl >= 0 ? '+' : ''}{avgPnl.toFixed(2)}
+          </p>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+            Commission
+          </div>
+          <p className="text-xl font-bold text-amber-600">
+            -${totalCommission.toFixed(2)}
+          </p>
+        </Card>
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+            Slippage
+          </div>
+          <p className="text-xl font-bold text-red-600">
+            -${totalSlippage.toFixed(2)}
           </p>
         </Card>
       </div>

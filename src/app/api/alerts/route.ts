@@ -5,15 +5,18 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const activeOnly = searchParams.get('active') === 'true'
+    const symbol = searchParams.get('symbol')
 
     const rawLimit = parseInt(searchParams.get('limit') ?? '100', 10)
     const limit = (Number.isFinite(rawLimit) && rawLimit >= 1) ? Math.min(rawLimit, 500) : 100
 
-    const where = activeOnly ? { active: true } : undefined
+    const where: Record<string, unknown> = {}
+    if (activeOnly) where.active = true
+    if (symbol) where.symbol = symbol.toUpperCase()
 
     const alerts = await db.priceAlert.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       take: limit,
     })
     return NextResponse.json({ success: true, data: alerts })
@@ -58,6 +61,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, error: `condition must be one of: ${validConditions.join(", ")}` },
         { status: 400 }
+      )
+    }
+
+    // Check for duplicate alert
+    const existing = await db.priceAlert.findFirst({
+      where: {
+        symbol: symbol.toUpperCase(),
+        condition: normalizedCondition,
+        price: parsedPrice,
+        triggered: false,
+      },
+    })
+    if (existing) {
+      return NextResponse.json(
+        { success: false, error: 'An active alert with the same symbol, condition, and price already exists' },
+        { status: 409 },
       )
     }
 

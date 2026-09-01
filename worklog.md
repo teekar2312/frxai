@@ -2393,3 +2393,107 @@ Stage Summary:
 - **Auto Trailing Stop (7 fixes)**: Always-update peaks, PARTIAL_FILLED inclusion, atomic DB updates, pipeline reorder, commission-aware break-even, unified tick rounding, JSON parse warning
 - **Backtesting (5 fixes)**: O(n) RunningAtr, mark-to-market equity curve, SMA intraday truncation fix, EMA double-seed removal, IDX bars-per-year
 - **Self-Learning ML (5 fixes)**: SystemConfig table migration, raw vs weighted counts, staleness warning, LRU cache eviction, closest-match trade selection
+
+## Dashboard Components Deep Audit — 7 Fixes Applied
+
+**Task ID**: 3a
+**Status**: Completed
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/components/trading/EquityChart.tsx` | FIX 1: Eliminated double-fetch on mount |
+| `src/components/trading/TradingPositions.tsx` | FIX 2-4: API calls for close/submit, removed mock fallback |
+| `src/components/trading/StockWatchlist.tsx` | FIX 5: Visibility-aware polling, AbortController, removed mock fallback |
+| `src/components/trading/StrategyMonitor.tsx` | FIX 6: Visibility-aware polling, AbortController, removed mock fallback |
+| `src/components/trading/AccountSummary.tsx` | FIX 7: Accept isMarketOpen prop, removed redundant MT5 status fetch |
+| `src/app/page.tsx` | Pass isMarketOpen prop to AccountSummary |
+
+### Fixes Applied
+
+| # | Fix | Severity | File | Description |
+|---|-----|----------|------|-------------|
+| 1 | EquityChart double-fetch | CRITICAL | EquityChart.tsx | Removed duplicate initial-fetch useEffect (was 69-88). Modified fetchEquityData to accept isMarketOpen param. Merged initial fetch + interval into single useEffect. All fetches now share single abortRef. |
+| 2 | handleCloseTrade no API call | CRITICAL | TradingPositions.tsx | handleCloseTrade now calls DELETE /api/trades/${id} and only removes from state on success. Trade remains in list on failure. |
+| 3 | handleSubmitNewTrade no API call | CRITICAL | TradingPositions.tsx | handleSubmitNewTrade now calls POST /api/trades with full trade payload. On success, re-fetches from server for real ID. On failure, shows toast.error. Added `import { toast } from 'sonner'`. |
+| 4 | Mock data fallback masks errors | HIGH | TradingPositions.tsx | Removed defaultTrades fallback in fetchTrades (was `json.trades ?? defaultTrades`). Initial state changed from defaultTrades to empty array. Errors now show empty state. |
+| 5 | StockWatchlist no visibility/abort | HIGH | StockWatchlist.tsx | Added useRef for AbortController, visibilitychange listener that stops polling when hidden. Changed initial state from defaultStocks to empty array. Removed defaultStocks fallback. Import useRef. |
+| 6 | StrategyMonitor no visibility/abort | HIGH | StrategyMonitor.tsx | Same pattern as StockWatchlist — AbortController ref, visibilitychange listener, removed defaultStrategies fallback, empty initial state. Import useRef. |
+| 7 | AccountSummary redundant MT5 fetch | MEDIUM | AccountSummary.tsx | Added isMarketOpen prop. Removed /api/mt5/status fetch from fetchData. Removed marketOpen state. Polling delay now uses prop directly. Updated page.tsx to pass isMarketOpen. |
+
+## NOTIFICATIONS + PRICE ALERTS AUDIT — 8 Fixes Applied (Task 3b)
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Context
+Deep audit of notification hooks, PriceAlerts component, Alerts API routes, and price-update route.
+Focused on visibility-aware polling, missing severity levels, memory management, API filtering,
+duplicate detection, and triggered state handling.
+
+---
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/lib/notification-hooks.ts` | 3 fixes (visibility polling, MEDIUM severity, batch pruning) |
+| `src/components/trading/PriceAlerts.tsx` | 1 fix (AbortController + visibility-aware polling) |
+| `src/app/api/alerts/route.ts` | 2 fixes (symbol filter, duplicate detection) |
+| `src/app/api/alerts/[id]/route.ts` | 1 fix (reset triggered on reactivation) |
+| `src/app/api/execution/price-update/route.ts` | 1 fix (JSDoc limitation note) |
+
+---
+
+### Fixes Applied
+
+| # | Fix | Severity | File | Description |
+|---|-----|----------|------|-------------|
+| 8 | Visibility-aware polling | HIGH | notification-hooks.ts | Added `document.visibilitychange` listener. Stops 15s interval when tab hidden, restarts + immediate fetch when visible. Prevents wasted resources. |
+| 9 | MEDIUM severity toasts | MEDIUM | notification-hooks.ts | Added `else if (event.severity === 'MEDIUM')` block with `toast.info` (5000ms duration). Previously only HIGH/CRITICAL showed toasts. |
+| 10 | Batch ID pruning (50) | LOW | notification-hooks.ts | Changed from pruning 2 IDs at a time to batch-pruning 50. Keeps up with sustained event streams when size > 200. |
+| 11 | PriceAlerts visibility + abort | HIGH | PriceAlerts.tsx | Added `abortRef` for AbortController on fetch calls. Added `visibilitychange` listener. Combined initial fetch + auto-refresh into single useEffect. Cleans up interval, abort, and listener on unmount. |
+| 12 | Alerts GET symbol filter | MEDIUM | alerts/route.ts | Added `?symbol=XXX` query param support. Builds dynamic `where` clause with `activeOnly` and `symbol.toUpperCase()`. |
+| 13 | Alerts POST duplicate detection | MEDIUM | alerts/route.ts | Before creating, checks for existing active (non-triggered) alert with same symbol + condition + price. Returns 409 Conflict if duplicate found. |
+| 14 | PATCH reset triggered state | HIGH | alerts/[id]/route.ts | When `body.active === true` and `existing.triggered` is true, resets `triggered = false` and `triggeredAt = null`. Prevents stale "Triggered" display after reactivation. |
+| 15 | Price-update in-memory note | MEDIUM | price-update/route.ts | Expanded JSDoc to document that `previousPricesMap` resets on server restart and CROSS_UP/CROSS_DOWN alerts won't fire on first update after restart. |
+
+## REPORTING + AUDIT DEEP AUDIT — 5 Fixes Applied (Task 3c)
+
+**Task ID**: 3c
+**Status**: Completed
+
+### Context
+Deep audit of performance report route, log export route, and LogViewer component. Focused on IDX session boundary accuracy, WIB timezone consistency in date calculations, and missing date range filter UI.
+
+---
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/app/api/reports/performance/route.ts` | 3 fixes (FIX 16, 17, 18: session boundaries, WIB startDate, WIB prePeriodPerf) |
+| `src/app/api/logs/export/route.ts` | 1 fix (FIX 19: WIB default startDate) |
+| `src/components/trading/LogViewer.tsx` | 1 fix (FIX 20: date range filter UI) |
+
+---
+
+### Fixes Applied
+
+| # | Fix | Severity | File | Description |
+|---|-----|----------|------|-------------|
+| 16 | getSessionFromTime wrong boundaries | CRITICAL | performance/route.ts | Replaced hour-only boundaries with minute-level precision. Old: `<9→PRE_MARKET, <11→MORNING, <13→MIDDAY_BREAK, <16→AFTERNOON, else→AFTER_HOURS`. New: `<540→PRE_MARKET, <545→PRE_OPEN, <690→SESSION_1, <780→LUNCH_BREAK, <975→SESSION_2, <1020→POST_CLOSE, else→AFTER_HOURS`. Removed separate `getWibHours` function; inlined WIB time parsing into `getSessionFromTime`. Matches actual IDX sessions (09:00-09:05, 09:05-11:30, 11:30-13:00, 13:00-16:15, 16:15-17:00). |
+| 17 | startDate timezone shift | HIGH | performance/route.ts | Default period calculation (`startDate = new Date(); startDate.setDate(...)`) used server local time. If server runs in UTC, a 7-day WIB window was shifted 7 hours. Fixed by computing `wibNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))` and deriving startDate from that. |
+| 18 | prePeriodPerf UTC date comparison | MEDIUM | performance/route.ts | `startDate.toISOString().slice(0, 10)` gave UTC date string for `dailyPerformance` query. Changed to `new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(startDate)` for correct WIB date comparison. |
+| 19 | Log export default startDate UTC | MEDIUM | logs/export/route.ts | `new Date(); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)` used server local time. Fixed to use WIB-based calculation with `toLocaleString('en-US', { timeZone: 'Asia/Jakarta' })`. |
+| 20 | LogViewer missing date filter | MEDIUM | LogViewer.tsx | Added `startDate`/`endDate` state variables and two `<input type="date">` fields after the category Select. Updated `fetchLogs` to pass `startDate`/`endDate` as query params. Added both to `useCallback` dependency array. |
+
+---
+
+### Backward Compatibility
+- Session group names changed (MORNING→SESSION_1, MIDDAY_BREAK→LUNCH_BREAK, AFTERNOON→SESSION_2) + 2 new names (PRE_OPEN, POST_CLOSE). Frontend charts using `groupBy=session` will show new labels.
+- LogViewer date inputs are optional — empty values produce no filter params, preserving existing behavior.
+- All other changes are internal timezone corrections with no API signature changes.
+
+---
+
+### Verification
+- `npx tsc --noEmit` — 0 new errors in modified files (1 pre-existing error in performance/route.ts:195 `Date | null` is unrelated)

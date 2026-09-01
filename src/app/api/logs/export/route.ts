@@ -55,10 +55,12 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    // Default startDate to 7 days ago if not provided
+    // Default startDate to 7 days ago (WIB) if not provided
     if (!startDateStr) {
-      const sevenDaysAgo = new Date()
+      const wibNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta' }))
+      const sevenDaysAgo = new Date(wibNow)
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7)
+      sevenDaysAgo.setHours(0, 0, 0, 0)
       startDateStr = sevenDaysAgo.toISOString()
     }
 

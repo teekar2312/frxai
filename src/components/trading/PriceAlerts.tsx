@@ -123,10 +123,14 @@ export default function PriceAlerts() {
   const toastedIdsRef = useRef<Set<string>>(new Set())
   // Track previously seen triggered IDs for toast dedup
   const prevTriggeredRef = useRef<Set<string>>(new Set())
+  const abortRef = useRef<AbortController | null>(null)
 
   const fetchAlerts = useCallback(async () => {
     try {
-      const res = await fetch('/api/alerts?limit=200')
+      abortRef.current?.abort()
+      const controller = new AbortController()
+      abortRef.current = controller
+      const res = await fetch('/api/alerts?limit=200', { signal: controller.signal })
       if (res.ok) {
         const json = await res.json()
         const data: Array<Record<string, unknown>> = json.data ?? json.alerts ?? []
@@ -153,8 +157,9 @@ export default function PriceAlerts() {
           )
         }
       }
-    } catch {
-      // Silently fail — will show empty state
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
+      // Silently fail
     } finally {
       setLoading(false)
     }
@@ -162,12 +167,21 @@ export default function PriceAlerts() {
 
   useEffect(() => {
     fetchAlerts()
-  }, [fetchAlerts])
-
-  // Auto-refresh alerts list periodically
-  useEffect(() => {
     const interval = setInterval(fetchAlerts, 10_000)
-    return () => clearInterval(interval)
+    const handleVisibility = () => {
+      if (document.hidden) {
+        clearInterval(interval)
+      } else {
+        fetchAlerts()
+        // Interval was cleared; need a new one — handled by re-running effect
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => {
+      clearInterval(interval)
+      abortRef.current?.abort()
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [fetchAlerts])
 
   const handleDelete = async (id: string) => {

@@ -11,22 +11,35 @@ const db = new PrismaClient()
 // ---- Helpers ----
 
 function getWibNow(): Date {
-  return new Date(Date.now() + 7 * 60 * 60 * 1000)
+  return new Date()
 }
 
 function getWibHour(): number {
-  return getWibNow().getUTCHours()
+  const wibStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    hour: 'numeric',
+    hour12: false,
+  }).format(new Date())
+  return parseInt(wibStr, 10)
+}
+
+function getWibMinute(): number {
+  const wibStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Jakarta',
+    minute: 'numeric',
+  }).format(new Date())
+  return parseInt(wibStr, 10)
 }
 
 function getWibTradingPhase(): string {
   const h = getWibHour()
-  const m = getWibNow().getUTCMinutes()
+  const m = getWibMinute()
   const t = h + m / 60
-  // UTC+7 so UTC 02:00-04:30 = WIB 09:00-11:30 (morning), UTC 05:00-08:00 = WIB 12:00-15:00 (afternoon)
-  // In UTC: market open = 02:00-04:30 (lunch) 05:00-08:00
-  if (t >= 1.75 && t < 2.0) return 'PRE_OPEN'
-  if ((t >= 2.0 && t < 4.5) || (t >= 5.0 && t < 8.0)) return 'OPEN'
-  if (t >= 4.5 && t < 5.0) return 'CLOSED' // lunch
+  // Pre-market 09:00-09:05, Session 1 09:05-11:30, Lunch 11:30-13:00, Session 2 13:00-16:15, Post-close 16:15-17:00
+  if (t >= 9.0 && t < 9.083) return 'PRE_OPEN'
+  if ((t >= 9.083 && t < 11.5) || (t >= 13.0 && t < 16.25)) return 'OPEN'
+  if (t >= 11.5 && t < 13.0) return 'CLOSED' // lunch
+  if (t >= 16.25 && t < 17.0) return 'POST_CLOSE'
   return 'AFTER_HOURS'
 }
 

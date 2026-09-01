@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 export async function GET() {
   try {
@@ -97,7 +98,7 @@ export async function GET() {
 
     return NextResponse.json({ success: true, data: account })
   } catch (error) {
-    console.error("Error fetching account data:", error)
+    logger.error('API', 'Error fetching account data', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch account data" },
       { status: 500 }

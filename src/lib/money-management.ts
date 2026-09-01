@@ -18,6 +18,7 @@ import { db } from "./db"
 import logger from "./trading-logger"
 import { getRiskConfig } from "./risk-engine"
 import { isMarketOpen } from "./mt5-connection"
+import { BASE_BALANCE } from "./config"
 
 export type SizingMethod = "FIXED_FRACTIONAL" | "KELLY" | "FIXED_DOLLAR" | "ANTI_MARTINGALE"
 
@@ -590,7 +591,6 @@ export async function getDailyPerformance(): Promise<DailyPerformanceData> {
   NINETY_DAYS_AGO.setDate(NINETY_DAYS_AGO.getDate() - 90)
 
   // Use upsert to avoid race condition between findUnique and create
-  const BASE_BALANCE = 10000
   const allClosed = await db.trade.findMany({ where: { status: "CLOSED", closeTime: { gte: NINETY_DAYS_AGO } } })
   const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
   const startBalance = Math.round((BASE_BALANCE + totalClosedPnl) * 100) / 100

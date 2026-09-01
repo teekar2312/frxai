@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { preTradeCheck } from "@/lib/risk-engine"
 import { calculatePositionSize, updateDailyPerformance, calculateScalingFactor } from "@/lib/money-management"
+import { BASE_BALANCE } from "@/lib/config"
 import logger from "@/lib/trading-logger"
 import { SYMBOL_SECTORS } from "@/lib/risk-engine"
 
@@ -45,6 +46,9 @@ export async function POST(request: NextRequest) {
       expectedSlippage,
     } = body
 
+    // Guard: skipRiskCheck is only allowed in non-production environments
+    const effectiveSkipRiskCheck = process.env.NODE_ENV !== 'production' && !!skipRiskCheck
+
     // Basic Validation
     if (!symbol || !direction || lotSize == null || entryPrice == null) {
       return NextResponse.json(
@@ -69,7 +73,6 @@ export async function POST(request: NextRequest) {
     }
 
     // Calculate equity
-    const BASE_BALANCE = 10000
     const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
     const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
     const openTrades = await db.trade.findMany({ where: { status: "OPEN" } })
@@ -92,7 +95,7 @@ export async function POST(request: NextRequest) {
       expectedSlippage: expectedSlippage ?? null,
     })
 
-    if (!riskCheck.approved && !skipRiskCheck) {
+    if (!riskCheck.approved && !effectiveSkipRiskCheck) {
       logger.warn("RISK_MANAGEMENT", `Trade rejected by risk engine: ${riskCheck.reason}`, {
         symbol,
         metadata: { direction, lotSize, entryPrice, sl, riskCheck },
@@ -136,7 +139,6 @@ export async function POST(request: NextRequest) {
       entryPrice,
       sl: sl ?? null,
       equity,
-      scalingFactor,
     })
 
     // Apply position size reduction from risk engine (e.g. PROACTIVE_60 zone)
@@ -145,7 +147,7 @@ export async function POST(request: NextRequest) {
       effectiveSuggestedLot = Math.max(0.01, Math.floor(effectiveSuggestedLot * riskCheck.positionSizeReduction * 100) / 100)
     }
 
-    const finalLotSize = skipRiskCheck ? lotSize : Math.min(lotSize, riskCheck.suggestedLotSize, effectiveSuggestedLot)
+    const finalLotSize = effectiveSkipRiskCheck ? lotSize : Math.min(lotSize, riskCheck.suggestedLotSize, effectiveSuggestedLot)
 
     if (finalLotSize < 0.01) {
       return NextResponse.json({

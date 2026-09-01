@@ -114,7 +114,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: result })
   } catch (error) {
-    console.error('Error adjusting trailing stop:', error)
+    logger.error('API', 'Error adjusting trailing stop', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to adjust trailing stop' },
       { status: 500 },

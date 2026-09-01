@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { IndicatorPool, fetchCandles, generateMockCandles, storeCandles, captureIndicatorSnapshot, parseIndicatorSnapshot, DEFAULT_CACHE_TTL_MS } from "@/lib/indicator-pool"
 import type { IndicatorName } from "@/lib/indicator-pool"
+import logger from "@/lib/trading-logger"
 
 const ALL_INDICATORS: IndicatorName[] = [
   'SMA', 'EMA', 'RSI', 'MACD', 'ATR',
@@ -93,7 +94,7 @@ export async function GET(request: Request) {
       },
     })
   } catch (error) {
-    console.error('Error computing indicators:', error)
+    logger.error('API', 'Error computing indicators', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to compute indicators' },
       { status: 500 },
@@ -131,7 +132,7 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('Error capturing indicator snapshot:', error)
+    logger.error('API', 'Error capturing indicator snapshot', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to capture indicator snapshot' },
       { status: 500 },

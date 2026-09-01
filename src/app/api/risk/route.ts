@@ -13,7 +13,7 @@ const lastRiskEventTime = new Map<string, number>()
 
 async function logThrottledRiskEvent(params: {
   eventType: string
-  severity: string
+  severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
   message: string
   details?: string
   actionTaken?: string

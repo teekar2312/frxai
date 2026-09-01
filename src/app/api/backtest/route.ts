@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 // ---------- Timeframe normalisation ----------
 // UI sends "1m", "5m", "1H", "1D" etc.  DB stores "M1", "M5", "H1", "D1"
@@ -704,7 +705,7 @@ export async function GET() {
     })
     return NextResponse.json({ success: true, data: results })
   } catch (error) {
-    console.error("Error fetching backtest results:", error)
+    logger.error('API', 'Error fetching backtest results', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch backtest results" },
       { status: 500 },
@@ -868,7 +869,7 @@ export async function POST(request: NextRequest) {
       { status: 201 },
     )
   } catch (error) {
-    console.error("Error running backtest:", error)
+    logger.error('API', 'Error running backtest', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to run backtest" },
       { status: 500 },
@@ -889,7 +890,7 @@ export async function DELETE(request: NextRequest) {
     await db.backtestResult.delete({ where: { id } })
     return NextResponse.json({ success: true, data: { id } })
   } catch (error) {
-    console.error("Error deleting backtest:", error)
+    logger.error('API', 'Error deleting backtest', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to delete backtest result" },
       { status: 500 },

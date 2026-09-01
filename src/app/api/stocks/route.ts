@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import logger from "@/lib/trading-logger"
 
 // Indonesian stock watchlist with realistic IDR prices
 interface StockData {
@@ -335,7 +336,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: live })
   } catch (error) {
-    console.error("Error fetching stocks:", error)
+    logger.error('API', 'Error fetching stocks', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch stocks" },
       { status: 500 }

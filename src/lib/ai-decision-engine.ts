@@ -380,7 +380,7 @@ function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: s
   // --- ADX ---
   const adx = calculateADX(bars, 14)
   if (adx) {
-    factors.adxValue = Math.round(adx.adx)
+    factors.adxValue = adx.adx !== null ? Math.round(adx.adx) : 0
   }
 
   // --- ATR ---
@@ -1092,7 +1092,7 @@ export async function makeDecision(
 
     // Fix #24 / Fix 2 (Task 7): Adjust confidence based on sentiment trend direction
     // Sentiment should SUPPORT the signal direction, not contradict it
-    const sentTrendDir = (sentimentFactors as Record<string, unknown>).trendDirection as string | undefined
+    const sentTrendDir = (sentimentFactors as unknown as Record<string, unknown>).trendDirection as string | undefined
     if (sentTrendDir === 'DECLINING' && compositeScore > 0) {
       // Declining sentiment contradicts bullish signal → reduce confidence
       confidence = Math.max(20, Math.round(confidence * 0.85))

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
-import { updateDailyPerformance } from "/home/z/my-project/src/lib/money-management"
-import logger from "/home/z/my-project/src/lib/trading-logger"
+import { updateDailyPerformance } from "@/lib/money-management"
+import logger from "@/lib/trading-logger"
 
 export async function PATCH(
   request: NextRequest,

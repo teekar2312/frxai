@@ -778,7 +778,7 @@ export function adjustTrailingStop(
       logger.warn('TRADE_EXECUTION', `Invalid trailingSteps JSON for trade, falling back to simple trailing`, {
         tradeId: trade.id,
         symbol: trade.symbol,
-        details: { rawTrailingSteps: trade.trailingSteps?.slice(0, 100) },
+        details: trade.trailingSteps?.slice(0, 100) ?? 'N/A',
       })
     }
   }
@@ -1099,7 +1099,7 @@ export async function processTrailingStopsForAllTrades(
           action: 'TRAILING_STOP_ADJUSTED',
           category: 'TRADE_EXECUTION',
           fieldName: 'sl',
-          oldValue: trade.sl !== null ? String(trade.sl) : null,
+          oldValue: trade.sl !== null ? String(trade.sl) : undefined,
           newValue: String(result.newSl),
           reason: result.reason,
           performedBy: 'SYSTEM',
@@ -1816,6 +1816,9 @@ export async function processPriceUpdate(
   let partialCloses = 0
   let errors = 0
   let triggeredAlerts: Array<{ id: string; symbol: string; condition: string; price: number; triggeredAt: Date }> = []
+  let _trailingCooldownBlocked = 0
+  let _trailingPhaseBlocked = 0
+  let _trailingMaxCapHit = 0
 
   try {
     // Stage 1: Update currentPrice on open trades so all subsequent stages use fresh prices
@@ -1838,9 +1841,9 @@ export async function processPriceUpdate(
     trailingAdjusted = trailingResult.adjusted
     errors += trailingResult.errors
     // Track new telemetry (used in log but not in return type to maintain backward compat)
-    const _trailingCooldownBlocked = trailingResult.cooldownBlocked
-    const _trailingPhaseBlocked = trailingResult.phaseBlocked
-    const _trailingMaxCapHit = trailingResult.maxCapHit
+    _trailingCooldownBlocked = trailingResult.cooldownBlocked
+    _trailingPhaseBlocked = trailingResult.phaseBlocked
+    _trailingMaxCapHit = trailingResult.maxCapHit
 
     // Stage 3: SL/TP triggers — close trades that hit their stops or targets
     const slTpResult = await processSlTpForAllOpenTrades(currentPrices)
@@ -2345,14 +2348,8 @@ export async function executeTrade(
   const slippage = Math.abs(fillPrice - price) * fillLot * PIP_VALUE_PER_LOT
 
   // Calculate margin: (entryPrice * lotSize * 100000) / leverage
-  // Try to get leverage from risk config, fallback to 25
-  let leverage = 25
-  try {
-    const config = await db.riskConfig.findFirst({ where: { name: 'default' } })
-    if (config?.leverage) leverage = config.leverage
-  } catch {
-    // use default
-  }
+  // Leverage defaults to 25 (not stored in RiskConfig)
+  const leverage = 25
   const margin = (fillPrice * fillLot * PIP_VALUE_PER_LOT) / leverage
 
   // Create the Trade record

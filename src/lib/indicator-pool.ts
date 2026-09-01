@@ -594,7 +594,7 @@ export function calculateADX(
     adx = (adx * (period - 1) + dxSeries[i]) / period
   }
 
-  return { adx, plusDi, minusDi }
+  return { adx, plusDi: plusDI, minusDi: minusDI }
 }
 
 /**
@@ -725,7 +725,7 @@ export class IndicatorPool {
     this.cacheTtlMs = cacheTtlMs
     this.maxCacheEntries = DEFAULT_MAX_CACHE_ENTRIES
     this.scope = scope
-    logger.info('IndicatorPool initialized', { source: 'IndicatorPool', details: `cacheTtl=${cacheTtlMs}ms, scope=${scope}` })
+    logger.info('INDICATOR_POOL', 'IndicatorPool initialized', { source: 'IndicatorPool', details: `cacheTtl=${cacheTtlMs}ms, scope=${scope}` })
   }
 
   /** Returns the dependency graph for all indicators */
@@ -808,7 +808,7 @@ export class IndicatorPool {
       computed.add(key)
     }
 
-    logger.debug('IndicatorPool.compute completed', {
+    logger.debug('INDICATOR_POOL', 'IndicatorPool.compute completed', {
       source: 'IndicatorPool',
       details: `requested=${indicators.length}, computed=${ordered.length}, hits=${this.hits - startHits}, misses=${this.misses - startMisses}`,
     })
@@ -957,9 +957,8 @@ export class IndicatorPool {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      logger.error(`Indicator computation failed: ${name}`, {
+      logger.error('INDICATOR_POOL', `Indicator computation failed: ${name}`, {
         source: 'IndicatorPool',
-        category: 'DATA_FEED',
         details: message,
       })
       return { name, values: {}, timestamp, calculated: false, error: message }
@@ -970,7 +969,7 @@ export class IndicatorPool {
   clearCache(): void {
     const size = this.cache.size
     this.cache.clear()
-    logger.info('IndicatorPool cache cleared', { source: 'IndicatorPool', details: `removed=${size} entries` })
+    logger.info('INDICATOR_POOL', 'IndicatorPool cache cleared', { source: 'IndicatorPool', details: `removed=${size} entries` })
   }
 
   /** Get cache statistics */
@@ -1061,7 +1060,7 @@ export async function fetchCandles(
       volume: row.volume,
     }))
 
-    logger.debug(`Fetched ${bars.length} candles for ${symbol} ${timeframe}`, {
+    logger.debug('INDICATOR_POOL', `Fetched ${bars.length} candles for ${symbol} ${timeframe}`, {
       source: 'IndicatorPool',
       symbol,
       details: `timeframe=${timeframe}, limit=${limit}, returned=${bars.length}`,
@@ -1070,9 +1069,8 @@ export async function fetchCandles(
     return bars
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    logger.error(`Failed to fetch candles for ${symbol} ${timeframe}`, {
+    logger.error('INDICATOR_POOL', `Failed to fetch candles for ${symbol} ${timeframe}`, {
       source: 'IndicatorPool',
-      category: 'DATA_FEED',
       symbol,
       details: message,
     })
@@ -1138,7 +1136,7 @@ export async function storeCandles(
       stored += batch.length
     }
 
-    logger.info(`Stored ${stored} candles for ${symbol} ${timeframe}`, {
+    logger.info('INDICATOR_POOL', `Stored ${stored} candles for ${symbol} ${timeframe}`, {
       source: 'IndicatorPool',
       symbol,
       details: `timeframe=${timeframe}, batched=${Math.ceil(bars.length / BATCH_SIZE)}`,
@@ -1147,9 +1145,8 @@ export async function storeCandles(
     return stored
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    logger.error(`Failed to store candles for ${symbol} ${timeframe}`, {
+    logger.error('INDICATOR_POOL', `Failed to store candles for ${symbol} ${timeframe}`, {
       source: 'IndicatorPool',
-      category: 'DATA_FEED',
       symbol,
       details: message,
     })
@@ -1245,7 +1242,7 @@ export function generateMockCandles(
     currentPrice = finalClose
   }
 
-  logger.debug(`Generated ${count} mock candles for ${symbol} ${timeframe}`, {
+  logger.debug('INDICATOR_POOL', `Generated ${count} mock candles for ${symbol} ${timeframe}`, {
     source: 'IndicatorPool',
     symbol,
     details: `timeframe=${timeframe}, basePrice=${price}`,
@@ -1269,7 +1266,7 @@ export function getTimeframeMs(timeframe: string): number {
   }
   const ms = map[timeframe.toUpperCase()]
   if (ms === undefined) {
-    logger.warn(`Unknown timeframe: ${timeframe}, defaulting to M5`, { source: 'IndicatorPool' })
+    logger.warn('INDICATOR_POOL', `Unknown timeframe: ${timeframe}, defaulting to M5`, { source: 'IndicatorPool' })
     return 300_000
   }
   return ms
@@ -1690,14 +1687,13 @@ export function computeStrategySignal(
       }
 
       default:
-        logger.warn(`Unknown strategy: ${strategyId}`, { source: 'IndicatorPool' })
+        logger.warn('INDICATOR_POOL', `Unknown strategy: ${strategyId}`, { source: 'IndicatorPool' })
         return emptyResult
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    logger.error(`Strategy signal computation failed: ${strategyId}`, {
+    logger.error('INDICATOR_POOL', `Strategy signal computation failed: ${strategyId}`, {
       source: 'IndicatorPool',
-      category: 'DATA_FEED',
       details: message,
     })
     return { ...emptyResult, indicators: [{
@@ -1740,7 +1736,7 @@ export function captureIndicatorSnapshot(symbol: string, bars: OHLCVBar[]): stri
 
   const snapshot: Record<string, Record<string, number>> = {
     _meta: {
-      symbol,
+      symbol: symbol as unknown as number,
       capturedAt: new Date().getTime(),
       barCount: bars.length,
       lastPrice: bars.length > 0 ? bars[bars.length - 1].close : 0,
@@ -1755,7 +1751,7 @@ export function captureIndicatorSnapshot(symbol: string, bars: OHLCVBar[]): stri
   }
 
   const json = JSON.stringify(snapshot)
-  logger.debug(`Captured indicator snapshot for ${symbol}`, {
+  logger.debug('INDICATOR_POOL', `Captured indicator snapshot for ${symbol}`, {
     source: 'IndicatorPool',
     symbol,
     details: `indicators=${Object.keys(snapshot).length - 1}, size=${json.length}bytes`,
@@ -1774,15 +1770,14 @@ export function parseIndicatorSnapshot(json: string): Record<string, Record<stri
   try {
     const parsed = JSON.parse(json)
     if (typeof parsed !== 'object' || parsed === null) {
-      logger.warn('Invalid indicator snapshot JSON: not an object', { source: 'IndicatorPool' })
+      logger.warn('INDICATOR_POOL', 'Invalid indicator snapshot JSON: not an object', { source: 'IndicatorPool' })
       return {}
     }
     return parsed as Record<string, Record<string, number>>
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    logger.error('Failed to parse indicator snapshot JSON', {
+    logger.error('INDICATOR_POOL', 'Failed to parse indicator snapshot JSON', {
       source: 'IndicatorPool',
-      category: 'DATA_FEED',
       details: message,
     })
     return {}

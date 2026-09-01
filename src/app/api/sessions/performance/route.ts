@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getTodaySessionPerformance, getSessionRiskBudget } from "@/lib/session-manager"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 /**
  * GET /api/sessions/performance
@@ -28,7 +29,7 @@ export async function GET() {
 
     return NextResponse.json({ success: true, data: { performance, riskBudget, equity } })
   } catch (error) {
-    console.error('Error fetching session performance:', error)
+    logger.error('API', 'Error fetching session performance', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to fetch session performance' },
       { status: 500 },

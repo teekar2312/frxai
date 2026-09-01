@@ -1,35 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { db } from '@/lib/db'
 
-const CONFIG_PATH = join(process.cwd(), 'data', 'trading-enabled.json')
+const CONFIG_KEY = 'trading-enabled'
 
-function readState(): boolean {
+async function readState(): Promise<boolean> {
   try {
-    if (existsSync(CONFIG_PATH)) {
-      const raw = readFileSync(CONFIG_PATH, 'utf-8')
-      const parsed = JSON.parse(raw)
-      return typeof parsed.enabled === 'boolean' ? parsed.enabled : false
+    const row = await db.systemConfig.findUnique({ where: { key: CONFIG_KEY } })
+    if (row) {
+      const parsed = JSON.parse(row.value)
+      return parsed.enabled === true
     }
   } catch { /* ignore */ }
   return false
 }
 
-function writeState(enabled: boolean) {
-  const dir = join(process.cwd(), 'data')
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  writeFileSync(CONFIG_PATH, JSON.stringify({ enabled }), 'utf-8')
+async function writeState(enabled: boolean) {
+  await db.systemConfig.upsert({
+    where: { key: CONFIG_KEY },
+    create: { key: CONFIG_KEY, value: JSON.stringify({ enabled }) },
+    update: { value: JSON.stringify({ enabled }) },
+  })
 }
 
 export async function GET() {
-  return NextResponse.json({ success: true, data: { enabled: readState() } })
+  const enabled = await readState()
+  return NextResponse.json({ success: true, data: { enabled } })
 }
 
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json()
     const enabled = typeof body.enabled === 'boolean' ? body.enabled : false
-    writeState(enabled)
+    await writeState(enabled)
     return NextResponse.json({ success: true, data: { enabled } })
   } catch {
     return NextResponse.json({ success: false, error: 'Failed to update' }, { status: 500 })

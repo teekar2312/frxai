@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { processPriceUpdate } from "@/lib/trade-execution-engine"
+import logger from "@/lib/trading-logger"
 
 /**
  * POST /api/execution/price-update
@@ -49,7 +50,7 @@ export async function POST(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('Error processing price update:', error)
+    logger.error('API', 'Error processing price update', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to process price update' },
       { status: 500 },

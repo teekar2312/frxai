@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { IndicatorPool, computeStrategySignal, fetchCandles, generateMockCandles, storeCandles } from "@/lib/indicator-pool"
 import { checkSessionTradingRules, getSessionSizingMultiplier, getSessionQualityScore } from "@/lib/session-manager"
+import logger from "@/lib/trading-logger"
 
 const STRATEGY_DEFINITIONS = [
   {
@@ -184,7 +185,7 @@ export async function GET(request: Request) {
       },
     })
   } catch (error) {
-    console.error("Error fetching strategies:", error)
+    logger.error('API', 'Error fetching strategies', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch strategies" },
       { status: 500 },

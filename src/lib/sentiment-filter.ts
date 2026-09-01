@@ -308,7 +308,7 @@ const sentimentCache = new Map<string, { data: Awaited<ReturnType<typeof db.sent
 const SENTIMENT_CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes (shorter than DB stale threshold of 30 min)
 
 // In-memory lock to prevent concurrent computeSymbolSentiment/computeMarketSentiment for same key
-const computeLocks = new Map<string, Promise<unknown>>() // symbol -> ongoing computation promise
+const computeLocks = new Map<string, Promise<Record<string, unknown>>>() // symbol -> ongoing computation promise
 
 // Time-based throttle to prevent rapid redundant recomputations
 let lastMarketComputeAt = 0
@@ -668,7 +668,7 @@ export function detectRegime(score: number, confidence: number): SentimentRegime
  * @param symbol - Ticker symbol (e.g. "BBCA") or "MARKET"
  * @returns The created/updated SentimentSnapshot
  */
-export async function computeSymbolSentiment(symbol: string) {
+export async function computeSymbolSentiment(symbol: string): Promise<NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>> {
   // Fix 5: Time-based throttle to prevent rapid redundant recomputations
   if (symbol !== "MARKET") {
     const lastAt = lastSymbolComputeAt.get(symbol) ?? 0
@@ -681,7 +681,7 @@ export async function computeSymbolSentiment(symbol: string) {
   // Fix 2: Check lock FIRST (before any DB queries)
   const existingLock = computeLocks.get(symbol)
   if (existingLock) {
-    return existingLock as Awaited<ReturnType<typeof computeSymbolSentiment>>
+    return existingLock as unknown as Awaited<ReturnType<typeof computeSymbolSentiment>>
   }
 
   const computationPromise = (async () => {
@@ -956,7 +956,7 @@ export async function computeSymbolSentiment(symbol: string) {
  *
  * @returns SentimentSnapshot for the "MARKET" symbol
  */
-export async function computeMarketSentiment() {
+export async function computeMarketSentiment(): Promise<NonNullable<Awaited<ReturnType<typeof db.sentimentSnapshot.findFirst>>>> {
   // Fix 5: Time-based throttle to prevent rapid redundant recomputations
   if (Date.now() - lastMarketComputeAt < MARKET_COMPUTE_MIN_INTERVAL_MS) {
     const cached = getCachedSentiment('MARKET')
@@ -966,7 +966,7 @@ export async function computeMarketSentiment() {
   // Fix 2: Check lock FIRST (before any DB queries)
   const existingLock = computeLocks.get('MARKET')
   if (existingLock) {
-    return existingLock as Awaited<ReturnType<typeof computeMarketSentiment>>
+    return existingLock as unknown as Awaited<ReturnType<typeof computeMarketSentiment>>
   }
 
   const computationPromise = (async () => {

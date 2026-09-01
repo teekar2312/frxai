@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Newspaper, ThumbsUp, ThumbsDown, Minus, ExternalLink, RefreshCw, AlertTriangle, Zap, Clock } from 'lucide-react'
+import { Newspaper, ThumbsUp, ThumbsDown, Minus, RefreshCw, AlertTriangle, Zap, Clock } from 'lucide-react'
 
 type Sentiment = 'Positive' | 'Negative' | 'Neutral'
 type Category =

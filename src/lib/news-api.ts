@@ -411,7 +411,7 @@ export async function checkRateLimit(provider: NewsProvider): Promise<RateLimitC
 
     // If no in-memory entry or stale (>60s), sync from DB
     if (!entry || (now - entry.lastCallAt) > IN_MEMORY_STALE_MS) {
-      entry = await syncRateLimitFromDb(provider)
+      entry = (await syncRateLimitFromDb(provider)) ?? undefined
       if (!entry || !entry.enabled) {
         return { allowed: false, waitMs: 0, reason: `Provider ${provider} not configured or disabled` }
       }
@@ -537,7 +537,7 @@ export async function checkCircuitBreaker(provider: NewsProvider): Promise<{ all
 
     // Load from DB if not in memory or stale
     if (!state || (now - state.lastDbSyncAt) > 120_000) {
-      state = await syncCircuitFromDb(provider)
+      state = (await syncCircuitFromDb(provider)) ?? undefined
       if (!state) return { allowed: false, reason: `Provider ${provider} not configured` }
     }
 
@@ -580,7 +580,7 @@ export async function updateCircuitBreaker(provider: NewsProvider, success: bool
   try {
     let state = inMemoryCircuitBreaker.get(provider)
     if (!state) {
-      state = await syncCircuitFromDb(provider)
+      state = (await syncCircuitFromDb(provider)) ?? undefined
       if (!state) return
     }
 

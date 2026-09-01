@@ -29,6 +29,9 @@ export type LogCategory =
   | "SYSTEM"
   | "NOTIFICATION"
   | "API_RATE_LIMIT"
+  | "INDICATOR_POOL"
+  | "SESSION_MANAGER"
+  | "API"
 
 export interface Mt5ErrorResult {
   shouldRetry: boolean

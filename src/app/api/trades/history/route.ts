@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import logger from '@/lib/trading-logger'
 
 const VALID_SORT_FIELDS = ['closeTime', 'pnl', 'pnlPercent'] as const
 const VALID_SORT_DIRS = ['asc', 'desc'] as const
@@ -103,7 +104,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('Trade history error:', error)
+    logger.error('API', 'Trade history error', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to fetch trade history' },
       { status: 500 },

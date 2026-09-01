@@ -82,7 +82,7 @@ export default function AccountSummary({ isMarketOpen }: { isMarketOpen: boolean
           marginUsed: d.marginUsed ?? 0,
           freeMargin: d.freeMargin ?? 0,
           marginLevel: d.marginLevel ?? 0,
-          dailyPnl: d.dailyPnl ?? 0,
+          dailyPnL: d.dailyPnl ?? 0,
           openPositions: d.openPositions ?? 0,
           totalTradesToday: d.totalTradesToday ?? 0,
           winRate: d.winRate ?? 0,

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 export async function PATCH(
   request: NextRequest,
@@ -74,7 +75,7 @@ export async function PATCH(
 
     return NextResponse.json({ success: true, data: updated })
   } catch (error) {
-    console.error("Error updating alert:", error)
+    logger.error('API', 'Error updating alert', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to update alert" },
       { status: 500 }
@@ -100,7 +101,7 @@ export async function DELETE(
       throw error
     }
   } catch (error) {
-    console.error('Error deleting alert:', error)
+    logger.error('API', 'Error deleting alert', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to delete alert' },
       { status: 500 },

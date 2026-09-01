@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 export async function GET(request: NextRequest) {
   try {
@@ -21,7 +22,7 @@ export async function GET(request: NextRequest) {
     })
     return NextResponse.json({ success: true, data: alerts })
   } catch (error) {
-    console.error("Error fetching alerts:", error)
+    logger.error('API', 'Error fetching alerts', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch alerts" },
       { status: 500 }
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: alert }, { status: 201 })
   } catch (error) {
-    console.error("Error creating alert:", error)
+    logger.error('API', 'Error creating alert', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to create alert" },
       { status: 500 }

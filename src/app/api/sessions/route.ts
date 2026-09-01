@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getSessionState, checkAndRecordTransition, getTodaySessionPerformance, getRecentSessionEvents } from "@/lib/session-manager"
+import logger from "@/lib/trading-logger"
 
 /**
  * GET /api/sessions
@@ -56,7 +57,7 @@ export async function GET(request: Request) {
       },
     })
   } catch (error) {
-    console.error('Error fetching sessions:', error)
+    logger.error('API', 'Error fetching sessions', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to fetch sessions' },
       { status: 500 }

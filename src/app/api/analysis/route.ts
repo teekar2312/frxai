@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: analyses })
   } catch (error) {
-    console.error("Error fetching analysis:", error)
+    logger.error('API', 'Error fetching analysis', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch analysis" },
       { status: 500 }
@@ -116,7 +117,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: analysis }, { status: 201 })
   } catch (error) {
-    console.error("Error creating analysis:", error)
+    logger.error('API', 'Error creating analysis', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to create analysis" },
       { status: 500 }

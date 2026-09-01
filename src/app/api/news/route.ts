@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
+import logger from "@/lib/trading-logger"
 
 export async function GET(request: NextRequest) {
   try {
@@ -23,7 +24,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ success: true, data: articles })
   } catch (error) {
-    console.error("Error fetching news:", error)
+    logger.error('API', 'Error fetching news', { details: String(error) })
     return NextResponse.json(
       { success: false, error: "Failed to fetch news" },
       { status: 500 }

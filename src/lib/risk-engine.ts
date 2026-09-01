@@ -20,6 +20,7 @@
 import { db } from "./db"
 import logger from "./trading-logger"
 import { isMarketOpen } from "./mt5-connection"
+import { BASE_BALANCE } from "./config"
 
 // ---- Types ----
 
@@ -501,7 +502,6 @@ export async function getRiskSnapshot(): Promise<RiskSnapshot> {
   const NINETY_DAYS_AGO = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
   const allClosed = await db.trade.findMany({ where: { status: "CLOSED", closeTime: { gte: NINETY_DAYS_AGO } } })
 
-  const BASE_BALANCE = 10000
   const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
   const currentBalance = Math.round((BASE_BALANCE + totalClosedPnl) * 100) / 100
   const totalOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
@@ -1052,7 +1052,7 @@ export async function preTradeCheck(params: {
     }
   }
 
-  const riskPercent = snapshot.equity > 0 ? (riskAmount / snapshot.equity) * 100 : 0
+  let riskPercent = snapshot.equity > 0 ? (riskAmount / snapshot.equity) * 100 : 0
 
   // ---- 6. Risk per trade limit ----
   const maxRiskDollar = (config.maxRiskPerTrade / 100) * snapshot.equity

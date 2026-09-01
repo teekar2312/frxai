@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import logger from '@/lib/trading-logger'
 
 const PERIOD_MAP: Record<string, number> = {
   '7d': 7,
@@ -192,7 +193,7 @@ export async function GET(request: NextRequest) {
     // === Daily P&L time series (computed from trades for consistency) ===
     const dailyMap = new Map<string, { pnl: number; wins: number; total: number }>()
     for (const trade of trades) {
-      const day = toWibDateStr(trade.closeTime)
+      const day = toWibDateStr(trade.closeTime ?? new Date())
       const entry = dailyMap.get(day) || { pnl: 0, wins: 0, total: 0 }
       entry.pnl += trade.pnl
       entry.total++
@@ -222,7 +223,7 @@ export async function GET(request: NextRequest) {
       },
     })
   } catch (error) {
-    console.error('Performance report error:', error)
+    logger.error('API', 'Performance report error', { details: String(error) })
     return NextResponse.json(
       { success: false, error: 'Failed to generate performance report' },
       { status: 500 },

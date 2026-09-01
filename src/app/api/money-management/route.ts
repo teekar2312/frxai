@@ -136,7 +136,6 @@ export async function POST(request: NextRequest) {
         equity: Number(equity),
         method: resolvedMethod,
         fixedDollarRisk: fixedDollarRisk ? Number(fixedDollarRisk) : undefined,
-        scalingFactor: scalingFactor ? Number(scalingFactor) : undefined,
       })
       return NextResponse.json({ success: true, data: result })
     }

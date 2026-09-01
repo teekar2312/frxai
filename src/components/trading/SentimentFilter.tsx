@@ -73,6 +73,10 @@ function scoreBarColor(score: number): string {
   return 'bg-red-500'
 }
 
+function safeJsonParse<T>(str: string | null | undefined, fallback: T): T {
+  try { return str ? JSON.parse(str) : fallback } catch { return fallback }
+}
+
 export default function SentimentFilter() {
   const [stats, setStats] = useState<MarketStats | null>(null)
   const [snapshots, setSnapshots] = useState<SentimentSnapshot[]>([])
@@ -281,8 +285,8 @@ export default function SentimentFilter() {
           {snapshots.filter(s => s.symbol !== 'MARKET').length > 0 ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
               {snapshots.filter(s => s.symbol !== 'MARKET').map(snap => {
-                const positiveWords: string[] = JSON.parse(snap.topPositiveWords || '[]')
-                const negativeWords: string[] = JSON.parse(snap.topNegativeWords || '[]')
+                const positiveWords: string[] = safeJsonParse(snap.topPositiveWords, [])
+                const negativeWords: string[] = safeJsonParse(snap.topNegativeWords, [])
                 return (
                   <div key={snap.id} className={`rounded-lg border p-3 ${regimeColor(snap.sentimentRegime)}`}>
                     <div className="flex items-center justify-between mb-2">

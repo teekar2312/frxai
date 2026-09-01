@@ -29,7 +29,8 @@ import {
 import type { SentimentFilterResult, SentimentTrend } from './sentiment-filter'
 // Fix #17: Integrate with indicator-pool for real technical data
 // Fix 1 (Task 7): Added missing OHLCVBar type import
-import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic, type OHLCVBar } from './indicator-pool'
+import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic, calculateEMA, type OHLCVBar } from './indicator-pool'
+import { isMarketOpen } from './mt5-connection'
 
 // ============================================================================
 // SECTION 1: TYPES & INTERFACES
@@ -393,8 +394,8 @@ function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: s
 
   // --- Trend Direction from EMA crossover ---
   if (closes.length >= 50) {
-    const ema20 = closes.slice(-20).reduce((s, c) => s + c, 0) / Math.min(20, closes.length)
-    const ema50 = closes.slice(-50).reduce((s, c) => s + c, 0) / Math.min(50, closes.length)
+    const ema20 = calculateEMA(closes, 20) ?? closes.slice(-20).reduce((s, c) => s + c, 0) / Math.min(20, closes.length)
+    const ema50 = calculateEMA(closes, 50) ?? closes.slice(-50).reduce((s, c) => s + c, 0) / Math.min(50, closes.length)
     if (ema20 > ema50 * 1.002) {
       factors.trendDirection = 'UP'
       factors.trendStrength = Math.min(100, Math.round(((ema20 / ema50) - 1) * 10000))
@@ -501,7 +502,7 @@ function analyzeTechnicalFactorsMock(symbol: string, timeframe: string = DEFAULT
  */
 export async function analyzeNewsFactors(symbol: string): Promise<NewsFactors> {
   try {
-    const result = await fetchNews({ symbols: [symbol], maxArticles: 20, forceRefresh: false })
+    const result = await fetchNews({ symbols: [symbol], maxArticles: 20, forceRefresh: isMarketOpen() })
     const articles = result.articles
 
     const factors = defaultNewsFactors()
@@ -668,7 +669,8 @@ export async function analyzeRiskFactors(): Promise<RiskFactors> {
     // Fix #20: Get base equity from account data or risk config
     let baseEquity = 100_000_000
     try {
-      const dailyPerf = await db.dailyPerformance.findFirst({ where: { date: new Date().toISOString().slice(0, 10) } })
+      const todayWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
+      const dailyPerf = await db.dailyPerformance.findFirst({ where: { date: todayWib } })
       if (dailyPerf) {
         baseEquity = Math.max(dailyPerf.startBalance, 100_000_000)
       }
@@ -687,10 +689,10 @@ export async function analyzeRiskFactors(): Promise<RiskFactors> {
       : 0
 
     // --- Daily performance ---
-    const today = new Date().toISOString().slice(0, 10)
+    const todayWib = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date())
     try {
       const dailyPerf = await db.dailyPerformance.findUnique({
-        where: { date: today },
+        where: { date: todayWib },
       })
       if (dailyPerf) {
         factors.dailyLossPct = Math.abs(dailyPerf.pnlPercent)
@@ -1488,7 +1490,7 @@ export async function getDecisionAccuracy(days: number = 30): Promise<DecisionAc
       allClosedTrades = await db.trade.findMany({
         where: {
           status: 'CLOSED',
-          openTime: { gte: tradeWindowStart },
+          openTime: { gte: tradeWindowStart, lte: new Date() },
         },
         select: {
           symbol: true,
@@ -2273,7 +2275,7 @@ export async function updateSelfLearningState(days: number = 30): Promise<SelfLe
     const allClosedTrades = await db.trade.findMany({
       where: {
         status: 'CLOSED',
-        openTime: { gte: tradeWindowStart },
+        openTime: { gte: tradeWindowStart, lte: new Date() },
       },
       select: {
         symbol: true,

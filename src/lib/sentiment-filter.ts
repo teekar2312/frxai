@@ -664,19 +664,20 @@ export function detectRegime(score: number, confidence: number): SentimentRegime
 export async function computeSymbolSentiment(symbol: string) {
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
 
+  const symbolTake = symbol === "MARKET" ? 100 : 50
   let articles
   if (symbol === "MARKET") {
     articles = await db.newsArticle.findMany({
       where: { publishedAt: { gte: since } },
       orderBy: { publishedAt: "desc" },
-      take: 200,
+      take: symbolTake,
     })
   } else {
     // Fetch all recent articles and filter by JSON symbols field
     articles = await db.newsArticle.findMany({
       where: { publishedAt: { gte: since } },
       orderBy: { publishedAt: "desc" },
-      take: 200,
+      take: symbolTake,
     })
     articles = articles.filter((a) => symbolInJsonSymbols(a.symbols as string, symbol))
   }
@@ -778,8 +779,9 @@ export async function computeSymbolSentiment(symbol: string) {
   const overallScore = totalWeight > 0 ? Math.round(totalScore / totalWeight) : 0
   const clampedScore = clamp(overallScore, -100, 100)
 
-  // Confidence: based on article count and agreement
-  const articleRatio = Math.min(articles.length / 5, 1) // More articles → higher confidence
+  // Confidence: based on scored article count and agreement (exclude unscored)
+  const scoredCount = positiveCount + negativeCount + neutralCount
+  const articleRatio = scoredCount > 0 ? Math.min(scoredCount / 5, 1) : 0
   const totalLabeled = positiveCount + negativeCount + neutralCount
   const dominantCount = Math.max(positiveCount, negativeCount, neutralCount)
   const agreementRatio = totalLabeled > 0 ? dominantCount / totalLabeled : 0

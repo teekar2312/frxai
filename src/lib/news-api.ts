@@ -114,6 +114,7 @@ export interface NewsFetchResult {
   provider: string
   responseTimeMs: number
   cached: boolean
+  lastError?: string
 }
 
 /** In-memory cache entry */
@@ -282,7 +283,7 @@ export function getCacheStats(): CacheStats {
 function buildCacheKey(options: NewsFetchOptions, provider: NewsProvider): string {
   const symbols = (options.symbols ?? DEFAULT_SYMBOLS).sort().join(',')
   const categories = (options.categories ?? []).sort().join(',')
-  const today = new Date().toISOString().slice(0, 10) // Date component prevents cross-day stale hits
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(new Date()) // WIB date prevents cross-day stale hits
   const maxArticles = options.maxArticles ?? 50
   return `news:${provider}:${today}:${symbols}:${categories}:${maxArticles}`
 }
@@ -987,6 +988,7 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
       provider: 'FINNHUB',
       responseTimeMs: Date.now() - startTime,
       cached: false,
+      lastError: rateCheck.reason,
     }
   }
 
@@ -1005,6 +1007,7 @@ export async function fetchFromFinnhub(options: NewsFetchOptions): Promise<NewsF
       provider: 'FINNHUB',
       responseTimeMs: Date.now() - startTime,
       cached: false,
+      lastError: circuitCheck.reason,
     }
   }
 
@@ -1190,6 +1193,7 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
       provider: 'MARKETAUX',
       responseTimeMs: Date.now() - startTime,
       cached: false,
+      lastError: rateCheck.reason,
     }
   }
 
@@ -1208,6 +1212,7 @@ export async function fetchFromMarketaux(options: NewsFetchOptions): Promise<New
       provider: 'MARKETAUX',
       responseTimeMs: Date.now() - startTime,
       cached: false,
+      lastError: circuitCheck.reason,
     }
   }
 
@@ -1537,7 +1542,10 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
 
     const recentArticles = await db.newsArticle.findMany({
       where: {
-        publishedAt: { gte: windowStart },
+        OR: [
+          { publishedAt: { gte: windowStart } },
+          { publishedAt: null, createdAt: { gte: windowStart } },
+        ],
       },
       orderBy: { publishedAt: 'desc' },
       take: 100,
@@ -1626,13 +1634,16 @@ export async function detectBreakingNews(): Promise<BreakingNewsItem[]> {
  */
 export async function getNewsStats(): Promise<NewsStats> {
   try {
+    // Cleanup old fetch logs before computing stats
+    await cleanupFetchLogs(30)
+
     // Total articles
     const totalArticles = await db.newsArticle.count()
 
-    // Articles from last 24 hours
+    // Articles from last 24 hours (by publishedAt, not fetchedAt)
     const last24hDate = new Date(Date.now() - 24 * 60 * 60 * 1000)
     const last24h = await db.newsArticle.count({
-      where: { fetchedAt: { gte: last24hDate } },
+      where: { publishedAt: { gte: last24hDate } },
     })
 
     // Breakdown by source

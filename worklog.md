@@ -1,3 +1,48 @@
+## NEWS API DEEP AUDIT — 12 Critical Fixes Applied
+
+**Date**: 2025-01-15 (continued)
+**Status**: Completed
+
+### Context
+Focused deep audit on the News API module, News Fetch API route, News Sentiment API route,
+AI Decision Engine, and Sentiment Filter. Identified and fixed 12 issues related to timezone
+correctness, stale data, missing error propagation, performance, and data integrity.
+
+---
+
+### Files Modified
+| File | Changes |
+|------|----------|
+| `src/lib/news-api.ts` | 6 fixes (WIB date, publishedAt, cleanup, null handling, lastError) |
+| `src/app/api/news/sentiment/route.ts` | 1 fix (auto-seed) |
+| `src/lib/ai-decision-engine.ts` | 5 fixes (EMA, forceRefresh, WIB date, date filter) |
+| `src/lib/sentiment-filter.ts` | 2 fixes (take limit, confidence) |
+
+---
+
+### Fixes Applied
+
+| # | Fix | Severity | File | Description |
+|---|-----|----------|------|-------------|
+| 1 | buildCacheKey WIB date | HIGH | news-api.ts:286 | UTC date → `Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' })` |
+| 2 | getNewsStats 24h count | HIGH | news-api.ts:1645 | `fetchedAt` → `publishedAt` for accurate 24h article count |
+| 3 | getNewsStats cleanup | HIGH | news-api.ts:1638 | Added `await cleanupFetchLogs(30)` at start of getNewsStats() |
+| 4 | detectBreakingNews null | HIGH | news-api.ts:1543-1551 | Added `OR { publishedAt: null, createdAt: { gte: windowStart } }` |
+| 5 | Empty fetch lastError | MEDIUM | news-api.ts:991,1010,1196,1215 | Added `lastError` to NewsFetchResult interface + early returns |
+| 6 | Sentiment route seed | MEDIUM | news/sentiment/route.ts:13 | Added `await seedNewsSourceConfigs()` before scoring |
+| 7 | forceRefresh market open | MEDIUM | ai-decision-engine.ts:505 | `forceRefresh: isMarketOpen()` instead of hardcoded false |
+| 8 | EMA vs SMA | HIGH | ai-decision-engine.ts:397-398 | Replaced simple SMA with `calculateEMA()` (null-safe fallback) |
+| 9 | Risk factors WIB date | HIGH | ai-decision-engine.ts:672,692 | Two UTC date lookups → WIB date for DailyPerformance |
+| 10 | Decision accuracy date filter | HIGH | ai-decision-engine.ts:1493,2278 | Added `lte: new Date()` upper bound to trade queries |
+| 11 | Sentiment take limit | MEDIUM | sentiment-filter.ts:667,673,680 | MARKET: 200→100, symbol: 200→50 |
+| 12 | Confidence scored only | MEDIUM | sentiment-filter.ts:783-784 | Confidence based on scored article count, not total |
+
+---
+
+### Verification
+- TypeScript compilation: No new errors introduced (5 pre-existing errors in unrelated lines remain unchanged)
+- All changes are backward-compatible (optional `lastError` field, existing consumers unaffected)
+
 ## DEEP AUDIT PHASE 2 — 25 Additional Critical Gaps Fixed
 
 **Date**: 2025-01-15 (continued)

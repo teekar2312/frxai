@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { scoreArticle } from '@/lib/sentiment-filter'
+import { seedNewsSourceConfigs } from '@/lib/news-api'
 import logger from '@/lib/trading-logger'
 
 /**
@@ -9,6 +10,8 @@ import logger from '@/lib/trading-logger'
  */
 export async function POST(request: Request) {
   try {
+    await seedNewsSourceConfigs()
+
     const body = await request.json().catch(() => ({}))
     const { unscoredOnly = true } = body
 

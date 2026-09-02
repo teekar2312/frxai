@@ -559,6 +559,34 @@ model AiDecisionConfig {
 }
 
 // ============================================
+// MULTI-PROVIDER AI CONFIGURATION
+// ============================================
+
+model AiProviderConfig {
+  id                String   @id @default(cuid())
+  provider          String   @unique  // 'groq', 'openai', 'together', 'tinyfish', 'local'
+  name              String
+  enabled           Boolean  @default(false)
+  apiKey            String   @default("")
+  baseUrl           String
+  model             String
+  temperature       Float    @default(0.3)
+  maxTokens         Int      @default(4096)
+  topP              Float    @default(0.9)
+  frequencyPenalty  Float    @default(0)
+  presencePenalty   Float    @default(0)
+  systemPrompt      String   @default("")
+  roles             String   @default("[]") // JSON: ['analysis', 'sentiment', 'news_summary']
+  priority          Int      @default(10) // lower = higher priority for fallback
+  timeoutMs         Int      @default(60000)
+  lastTestedAt      DateTime?
+  lastTestResult    String?  // 'success' | 'failure'
+  lastLatencyMs     Int?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// ============================================
 // SYSTEM CONFIGURATION (generic key-value store)
 // ============================================
 

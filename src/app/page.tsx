@@ -42,6 +42,7 @@ import TradeHistory from '@/components/trading/TradeHistory'
 import SentimentFilter from '@/components/trading/SentimentFilter'
 import AiEnginePanel from '@/components/trading/AiEnginePanel'
 import AutoTradingDashboard from '@/components/trading/AutoTradingDashboard'
+import AiProviderSettings from '@/components/trading/AiProviderSettings'
 import { useLiveNotifications } from '@/lib/notification-hooks'
 
 const NAV_ITEMS = [
@@ -247,6 +248,7 @@ export default function TradingDashboard() {
           </TabsContent>
 
           <TabsContent value="ai" className="space-y-6">
+            <AiProviderSettings />
             <AiAnalysisPanel />
             <AiEnginePanel />
             <SentimentFilter />

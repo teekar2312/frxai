@@ -1,0 +1,6 @@
+{
+  "name": "mt5-bridge",
+  "scripts": {
+    "dev": "bun --hot index.ts"
+  }
+}

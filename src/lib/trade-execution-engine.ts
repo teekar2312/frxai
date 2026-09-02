@@ -15,7 +15,7 @@
 
 import { db } from '@/lib/db'
 import logger from '@/lib/trading-logger'
-import { executeOrderWithRetry, type OrderExecutionResult } from '@/lib/mt5-connection'
+import { executeOrderWithRetry, closePositionAtBridge, closeAllPositionsAtBridge, type OrderExecutionResult } from '@/lib/mt5-connection'
 import { getTradingPhase, validateSymbol } from '@/lib/mt5-connection'
 import type { TradingPhase } from '@/lib/mt5-connection'
 import { updateDailyPerformance } from '@/lib/money-management'
@@ -444,6 +444,20 @@ export async function closeTrade(
     }
 
     const finalClosePrice = closePrice ?? trade.currentPrice
+
+    // Attempt to close position on the broker via MT5 bridge
+    try {
+      const bridgeResult = await closePositionAtBridge(tradeId)
+      if (!bridgeResult.success) {
+        logger.warn('TRADE_EXECUTION', `Bridge close failed for ${tradeId}: ${bridgeResult.error}, proceeding with DB close`)
+      } else if (bridgeResult.closePrice) {
+        // Use bridge-reported close price if available
+        closePrice = bridgeResult.closePrice
+      }
+    } catch (err) {
+      logger.warn('TRADE_EXECUTION', `Bridge close error for ${tradeId}: ${err instanceof Error ? err.message : String(err)}, proceeding with DB close`)
+    }
+
     const exitCommission = trade.lotSize * 1 // $1/lot exit commission (FINEX spec)
     const totalCommission = trade.commission + exitCommission
     const pnl = calculatePnl(
@@ -1935,6 +1949,16 @@ export async function emergencyCloseAll(
   })
 
   try {
+    // Attempt broker-side close-all via MT5 bridge
+    try {
+      const bridgeResult = await closeAllPositionsAtBridge()
+      if (bridgeResult.success) {
+        logger.info('TRADE_EXECUTION', `Bridge closed ${bridgeResult.closed} positions`)
+      }
+    } catch (err) {
+      logger.warn('TRADE_EXECUTION', `Bridge close-all error: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
     const openTrades = await db.trade.findMany({
       where: { status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
     })

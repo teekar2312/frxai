@@ -574,7 +574,7 @@ export default function TradingSessions() {
           <div className="flex flex-wrap gap-3 pt-2">
             {overlaps.map((overlap) => {
               const isActive = currentHour >= overlap.startHourUtc && currentHour < overlap.endHourUtc
-              const isEnabled = sessionConfig?.forexOverlaps.some(
+              const isEnabled = sessionConfig?.forexOverlaps.find(
                 o =>
                   (o.key === 'overlap_tokyo_london' && overlap.name === 'Tokyo-London') ||
                   (o.key === 'overlap_ny_london' && overlap.name === 'New York - London') ||

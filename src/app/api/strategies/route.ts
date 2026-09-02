@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { IndicatorPool, computeStrategySignal, fetchCandles, generateMockCandles, storeCandles } from "@/lib/indicator-pool"
+import { IndicatorPool, computeStrategySignal, fetchCandles, storeCandles } from "@/lib/indicator-pool"
 import { checkSessionTradingRules, getSessionSizingMultiplier, getSessionQualityScore } from "@/lib/session-manager"
 import logger from "@/lib/trading-logger"
 
@@ -112,21 +112,12 @@ export async function GET(request: Request) {
     const qualityScore = getSessionQualityScore()
 
     // Get candle data
-    let candles = await fetchCandles(symbol, timeframe, 200)
-
-    // If no candles or refresh requested, generate mock data
-    if (candles.length < 50 || refresh) {
-      const mockCandles = generateMockCandles(symbol, timeframe, 200)
-      if (candles.length < 50) {
-        await storeCandles(symbol, timeframe, mockCandles)
-      }
-      candles = mockCandles
-    }
+    const candles = await fetchCandles(symbol, timeframe, 200)
 
     if (candles.length < 50) {
       return NextResponse.json({
         success: false,
-        error: "Insufficient candle data. Generate mock data first.",
+        error: `Insufficient candle data for ${symbol} ${timeframe}: ${candles.length} bars (need 50+)`,
       }, { status: 400 })
     }
 
@@ -144,11 +135,16 @@ export async function GET(request: Request) {
           lastUpdated: new Date().toISOString(),
           indicatorCount: result.indicators.length,
           // Per-symbol signals (using same candles for demo)
-          symbols: DEFAULT_SYMBOLS.map((sym) => ({
-            symbol: sym,
-            signal: sym === symbol ? result.signal : computeStrategySignal(strategy.id, candles).signal,
-            confidence: sym === symbol ? result.confidence : Math.round((50 + Math.random() * 40) * 100) / 100,
-          })),
+          symbols: DEFAULT_SYMBOLS.map((sym) => {
+            const symSignal = sym === symbol
+              ? result
+              : { signal: 'NEUTRAL' as const, confidence: 0, strength: 0, indicators: [] }
+            return {
+              symbol: sym,
+              signal: symSignal.signal,
+              confidence: symSignal.confidence,
+            }
+          }),
         }
       })
     )

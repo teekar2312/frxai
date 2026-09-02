@@ -24,6 +24,26 @@ import { db } from "./db"
 import logger, { type LogCategory } from "./trading-logger"
 
 // ============================================
+// MT5 BRIDGE CLIENT
+// ============================================
+
+const MT5_BRIDGE_URL = process.env.MT5_BRIDGE_URL || 'http://localhost:3001'
+
+async function bridgeRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const url = `${MT5_BRIDGE_URL}${path}`
+  const res = await fetch(url, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) {
+    const body = await res.text().catch(() => '')
+    throw new Error(`Bridge ${res.status}: ${body}`)
+  }
+  return res.json() as Promise<T>
+}
+
+// ============================================
 // EXPORTED TYPES
 // ============================================
 
@@ -929,6 +949,8 @@ class Mt5ConnectionManager {
 
   async disconnect(): Promise<void> {
     this.isShuttingDown = true
+    // Notify bridge of disconnect
+    try { await bridgeRequest('/disconnect', { method: 'POST' }) } catch { /* bridge may be down */ }
     this.clearTimers()
     await this.setStatus("DISCONNECTED")
     await this.persistState()
@@ -982,22 +1004,26 @@ class Mt5ConnectionManager {
       return { success: false, error: "No configuration provided" }
     }
 
-    // Simulate connection latency
-    const startMs = Date.now()
-    const latency = Math.floor(20 + Math.random() * 80)
-    await new Promise((r) => setTimeout(r, latency))
-    this.metrics.latencyMs = latency
-
-    // Validate credentials format
-    if (!this.config.login || this.config.login <= 0) {
-      return { success: false, error: "Invalid login credentials" }
+    try {
+      const startMs = Date.now()
+      const result = await bridgeRequest<{ success: boolean; account?: Record<string, unknown>; error?: string }>('/connect', {
+        method: 'POST',
+        body: JSON.stringify({
+          login: this.config.login,
+          password: this.config.password,
+          server: this.config.server,
+        }),
+      })
+      this.metrics.latencyMs = Date.now() - startMs
+      if (!result.success) {
+        return { success: false, error: result.error || 'Connection rejected by bridge' }
+      }
+      return { success: true }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      this.metrics.latencyMs = 5000
+      return { success: false, error: `Bridge unreachable: ${msg}` }
     }
-
-    if (!this.config.password || this.config.password.length < 1) {
-      return { success: false, error: "Password is required" }
-    }
-
-    return { success: true }
   }
 
   private async onConnected(): Promise<void> {
@@ -1285,8 +1311,8 @@ class Mt5ConnectionManager {
 
     try {
       const start = Date.now()
-      await new Promise((r) => setTimeout(r, 5 + Math.random() * 15))
-      const latency = Date.now() - start
+      const result = await bridgeRequest<{ latency?: number; account?: Record<string, unknown> }>('/heartbeat').catch(() => ({ latency: Date.now() - start }))
+      const latency = result.latency ?? (Date.now() - start)
       this.metrics.latencyMs = latency
       this.metrics.lastHeartbeat = new Date()
 
@@ -1853,33 +1879,30 @@ export async function executeOrderWithRetry(params: {
     try {
       const result = await withTimeout(
         cb.execute(async () => {
-          // ---- SIMULATED EXECUTION ----
-          // In production, replace this block with a real MT5 order_send call.
-          // Example:
-          //   const ticket = await mt5Connection.runExclusive(() => mt5.order_send({
-          //     symbol, type: direction === 'BUY' ? mt5.ORDER_TYPE_BUY : mt5.ORDER_TYPE_SELL,
-          //     volume: lotSize, price, sl, tp, comment,
-          //   }))
-          //   if (ticket.retcode !== mt5.TRADE_RETCODE_DONE) throw { retcode: ticket.retcode }
-          //   return ticket
-
-          logger.info("TRADE_EXECUTION", `[SIMULATED] Order attempt ${attempts}/${totalRetries + 1}`, {
+          // ---- MT5 BRIDGE EXECUTION ----
+          logger.info("TRADE_EXECUTION", `Order attempt ${attempts}/${totalRetries + 1} via bridge`, {
             symbol,
             metadata: { direction, lotSize, price, sl, tp, comment, attempt: attempts },
           })
 
-          // Simulate network latency (50-150ms)
-          await new Promise((r) => setTimeout(r, 50 + Math.random() * 100))
+          const bridgeResult = await bridgeRequest<{
+            success: boolean; orderId?: string; fillPrice?: number; fillLot?: number; error?: string; mt5ErrorCode?: number
+          }>('/order', {
+            method: 'POST',
+            body: JSON.stringify({ symbol, direction, lotSize, price, sl, tp, comment }),
+          })
 
-          // Simulate a successful fill
-          const simulatedTicket = `SIM-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`
-          const simulatedFillPrice = price + (Math.random() - 0.5) * 2 // slight slippage
+          if (!bridgeResult.success) {
+            const err: Record<string, unknown> = { message: bridgeResult.error || 'Order rejected' }
+            if (bridgeResult.mt5ErrorCode) err.retcode = bridgeResult.mt5ErrorCode
+            throw err
+          }
 
           return {
             success: true,
-            orderId: simulatedTicket,
-            fillPrice: Math.round(simulatedFillPrice * 100) / 100,
-            fillLot: lotSize,
+            orderId: bridgeResult.orderId!,
+            fillPrice: bridgeResult.fillPrice!,
+            fillLot: bridgeResult.fillLot!,
           }
         }),
         10_000,
@@ -1959,6 +1982,35 @@ export async function executeOrderWithRetry(params: {
     attempts,
     totalLatencyMs: Date.now() - startTime,
   }
+}
+
+// ============================================
+// MT5 BRIDGE HELPER FUNCTIONS (exported for trade-execution-engine)
+// ============================================
+
+/** Close a position via the MT5 bridge */
+export async function closePositionAtBridge(ticket: string): Promise<{ success: boolean; closePrice?: number; error?: string }> {
+  return bridgeRequest('/close', { method: 'POST', body: JSON.stringify({ ticket }) })
+}
+
+/** Close all positions via the MT5 bridge */
+export async function closeAllPositionsAtBridge(): Promise<{ success: boolean; closed: number; error?: string }> {
+  return bridgeRequest('/close-all', { method: 'POST' })
+}
+
+/** Get account info from the MT5 bridge */
+export async function getAccountInfoFromBridge(): Promise<Record<string, unknown>> {
+  return bridgeRequest('/account')
+}
+
+/** Get current prices from the MT5 bridge */
+export async function getPricesFromBridge(): Promise<Record<string, { bid: number; ask: number }>> {
+  return bridgeRequest('/prices')
+}
+
+/** Get open positions from the MT5 bridge */
+export async function getPositionsFromBridge(): Promise<Array<Record<string, unknown>>> {
+  return bridgeRequest('/positions')
 }
 
 // ---- Singleton instance ----

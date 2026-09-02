@@ -1,6 +1,6 @@
 # FINEX AI Trader
 
-> **Automated AI Trading System for Indonesian Stock Market (IDX) via MetaTrader 5**
+> **Sistem Trading Otomatis AI untuk Pasar Saham Indonesia (IDX) via MetaTrader 5**
 
 FINEX AI Trader adalah sistem trading otomatis yang terintegrasi dengan broker **FINEX Indonesia** melalui **MetaTrader 5 (MT5)**. Sistem ini menggabungkan analisis teknikal, AI decision engine, sentimen berita, dan manajemen risiko dalam satu platform yang komprehensif.
 
@@ -9,10 +9,12 @@ FINEX AI Trader adalah sistem trading otomatis yang terintegrasi dengan broker *
 ![Bun](https://img.shields.io/badge/Bun-1.3-orange?logo=bun)
 ![Prisma](https://img.shields.io/badge/Prisma-6-green?logo=prisma)
 ![SQLite](https://img.shields.io/badge/SQLite-3-blue?logo=sqlite)
+![License](https://img.shields.io/badge/License-Private-red)
+![Platform](https://img.shields.io/badge/Platform-Windows_11-0078D4?logo=windows)
 
 ---
 
-## 📋 Daftar Isi
+## Daftar Isi
 
 - [Fitur Utama](#-fitur-utama)
 - [Tech Stack](#-tech-stack)
@@ -21,50 +23,66 @@ FINEX AI Trader adalah sistem trading otomatis yang terintegrasi dengan broker *
 - [Konfigurasi Environment](#-konfigurasi-environment)
 - [Menjalankan Aplikasi](#-menjalankan-aplikasi)
 - [Struktur Proyek](#-struktur-proyek)
-- [Dokumentasi](#-dokumentasi)
+- [Dokumentasi Lengkap](#-dokumentasi-lengkap)
 - [Spesifikasi Broker FINEX](#-spesifikasi-broker-finex)
+- [Statistik Proyek](#-statistik-proyek)
 - [Lisensi](#-lisensi)
 
 ---
 
-## ✨ Fitur Utama
+## Fitur Utama
 
-### 🤖 AI & Analisis
-- **AI Decision Engine** — Sintesis 4 faktor (teknikal 50%, sentimen 25%, berita 25%, risiko) dengan confidence scoring
-- **Self-Learning ML** — Feedback loop adaptif, kalibrasi confidence, dan weight adjustment otomatis
-- **Sentiment Analysis** — NLP lexicon 140+ kata (EN + ID), 5 regime (Bullish/Extreme Greed/Neutral/Extreme Fear/Bearish)
-- **News Integration** — Finnhub & MARKETAUX dengan rate limiting, circuit breaker, deduplication, breaking news detection
+### AI & Analisis
 
-### 📊 Trading & Eksekusi
-- **7 Strategi Trading** — MA Ribbon, Momentum Scalping, Pivot Point, EMA Crossover, RMI Trend Sync, Linear Regression Channels, EMA/RSI Filter
-- **10 Technical Indicators** — SMA, EMA, RSI, MACD, ATR, Bollinger Bands, Stochastic, ADX, VWAP, Pivot Points
-- **Trade Execution Engine** — State machine, atomic updates, SL/TP otomatis, trailing stop tiered, partial close
-- **Position Sizing** — 4 metode: Fixed Fractional, Kelly Criterion, Fixed Dollar, Anti-Martingale
+| Fitur | Deskripsi |
+|-------|----------|
+| **AI Decision Engine** | Sintesis 4 faktor (teknikal 50%, sentimen 25%, berita 25%, risiko) dengan confidence scoring |
+| **Self-Learning ML** | Feedback loop adaptif, kalibrasi confidence, dan weight adjustment otomatis |
+| **Sentiment Analysis** | NLP lexicon 140+ kata (EN + ID), 5 regime (Bullish/Extreme Greed/Neutral/Extreme Fear/Bearish) |
+| **News Integration** | Finnhub & MARKETAUX dengan rate limiting, circuit breaker, deduplication, breaking news detection |
 
-### 🛡️ Risk Management
-- **Multi-Layer Risk** — Pre-trade check, margin monitoring, daily/weekly/monthly loss limits
-- **Proactive Margin Call** — Warning zone 70%, strong warning 60% (reduce 50%)
-- **Gap Risk Analysis** — Assessment risiko overnight gap
-- **Volatility Regime** — Dynamic risk scaling berdasarkan volatilitas pasar
-- **Consecutive Loss Halt** — Auto-halt setelah N kerugian beruntun
-- **Equity Curve Monitoring** — Halt trading saat equity di bawah moving average
+### Trading & Eksekusi
 
-### 📈 Monitoring & Reporting
-- **Real-time Dashboard** — Account summary, equity chart, watchlist 20 saham IDX
-- **Session Manager** — IDX trading sessions (Pre-market, S1, Lunch, S2, Post-close) WIB
-- **Performance Reports** — Win rate, profit factor, Sharpe ratio, max drawdown, commission tracking
-- **Audit Trail** — Lengkap dengan escalation pipeline dan compliance reporting
-- **Backtesting** — Simulasi strategi dengan data historis candle
+| Fitur | Deskripsi |
+|-------|----------|
+| **7 Strategi Trading** | MA Ribbon, Momentum Scalping, Pivot Point, EMA Crossover, RMI Trend Sync, Linear Regression Channels, EMA/RSI Filter |
+| **10 Technical Indicators** | SMA, EMA, RSI, MACD, ATR, Bollinger Bands, Stochastic, ADX, VWAP, Pivot Points |
+| **Trade Execution Engine** | State machine, atomic updates, SL/TP otomatis, trailing stop tiered, partial close |
+| **Position Sizing** | 4 metode: Fixed Fractional, Kelly Criterion, Fixed Dollar, Anti-Martingale |
 
-### 🔗 Koneksi Broker
-- **MT5 Integration** — MetaTrader 5 via Python bridge
-- **Async Mutex** — Serialisasi semua MT5 API calls (thread-safety)
-- **Circuit Breaker** — Auto-reconnect dengan exponential backoff (1s → 30s)
-- **Error Code Mapping** — MT5 codes 10004-10036 dengan auto-remediation
+### Risk Management
+
+| Fitur | Deskripsi |
+|-------|----------|
+| **Multi-Layer Risk** | Pre-trade check, margin monitoring, daily/weekly/monthly loss limits |
+| **Proactive Margin Call** | Warning zone 70%, strong warning 60% (reduce 50%) |
+| **Gap Risk Analysis** | Assessment risiko overnight gap |
+| **Volatility Regime** | Dynamic risk scaling berdasarkan volatilitas pasar |
+| **Consecutive Loss Halt** | Auto-halt setelah N kerugian beruntun |
+| **Equity Curve Monitoring** | Halt trading saat equity di bawah moving average |
+
+### Monitoring & Reporting
+
+| Fitur | Deskripsi |
+|-------|----------|
+| **Real-time Dashboard** | Account summary, equity chart, watchlist 20 saham IDX |
+| **Session Manager** | IDX trading sessions (Pre-market, S1, Lunch, S2, Post-close) WIB |
+| **Performance Reports** | Win rate, profit factor, Sharpe ratio, max drawdown, commission tracking |
+| **Audit Trail** | Lengkap dengan escalation pipeline dan compliance reporting |
+| **Backtesting** | Simulasi strategi dengan data historis candle |
+
+### Koneksi Broker
+
+| Fitur | Deskripsi |
+|-------|----------|
+| **MT5 Integration** | MetaTrader 5 via Python bridge |
+| **Async Mutex** | Serialisasi semua MT5 API calls (thread-safety) |
+| **Circuit Breaker** | Auto-reconnect dengan exponential backoff (1s → 30s) |
+| **Error Code Mapping** | MT5 codes 10004-10036 dengan auto-remediation |
 
 ---
 
-## 🛠 Tech Stack
+## Tech Stack
 
 | Komponen | Teknologi | Versi |
 |----------|-----------|-------|
@@ -82,9 +100,9 @@ FINEX AI Trader adalah sistem trading otomatis yang terintegrasi dengan broker *
 
 ---
 
-## 📋 Prasyarat
+## Prasyarat
 
-### Software yang Diperlukan
+### Software yang Diperlukan (Windows 11)
 
 | Software | Versi Minimum | Download |
 |----------|---------------|----------|
@@ -95,110 +113,115 @@ FINEX AI Trader adalah sistem trading otomatis yang terintegrasi dengan broker *
 | **MetaTrader 5** | Build 4000+ | Dari broker FINEX Indonesia |
 | **Python** | 3.10+ | [python.org](https://www.python.org/) |
 
-### VS Code Extensions yang Direkomendasikan
+### VS Code Extensions (Direkomendasikan)
 
-```text
-- Tailwind CSS IntelliSense        (bradlc.vscode-tailwindcss)
-- Prisma                         (prisma.prisma-vscode)
-- ESLint                        (dbaeumer.vscode-eslint)
-- TypeScript Import Sorter       (mitermayer.sort-imports)
-- Prettier - Code formatter     (esbenp.prettier-vscode)
-- Error Lens                     (usernamehw.errorlens)
-- GitLens — Git supercharged     (eamodio.gitlens)
-- Thunder Client                 (rangav.vscode-thunder-client)
+Buka VS Code → Extensions (`Ctrl+Shift+X`) → install:
+
+```
+Tailwind CSS IntelliSense        (bradlc.vscode-tailwindcss)
+Prisma                         (prisma.prisma-vscode)
+ESLint                        (dbaeumer.vscode-eslint)
+TypeScript Import Sorter       (mitermayer.sort-imports)
+Prettier - Code formatter     (esbenp.prettier-vscode)
+Error Lens                     (usernamehw.errorlens)
+GitLens — Git supercharged     (eamodio.gitlens)
+Thunder Client                 (rangav.vscode-thunder-client)
 ```
 
 ### Akun & API Keys
 
 - Akun trading **FINEX Indonesia** (Real atau Demo)
-- **Finnhub API Key** — Untuk news feed ([finnhub.io](https://finnhub.io/))
-- **MARKETAUX API Key** — Untuk news alternatif ([marketaux.com](https://www.marketaux.com/))
+- **Finnhub API Key** — [finnhub.io](https://finnhub.io/) (Free tier: 60 calls/min)
+- **MARKETAUX API Key** — [marketaux.com](https://www.marketaux.com/) (Free tier: 100 calls/day)
 
 ---
 
-## 🚀 Instalasi Cepat
+## Instalasi Cepat
 
-### 1. Clone Repository
+### Langkah 1: Clone Repository
+
+Buka **VS Code** → Terminal (`Ctrl+```) → jalankan:
 
 ```bash
 git clone https://github.com/teekar2312/frxai.git
 cd frxai
+code .
 ```
 
-### 2. Install Dependencies
+### Langkah 2: Install Dependencies
 
 ```bash
 bun install
 ```
 
-### 3. Setup Environment
+### Langkah 3: Setup Environment
 
 ```bash
 copy .env.example .env
 ```
 
-Edit `.env` sesuai konfigurasi anda (lihat [Konfigurasi Environment](#-konfigurasi-environment)).
+Buka file `.env` di VS Code dan isi sesuai konfigurasi Anda:
 
-### 4. Setup Database
+```env
+DATABASE_URL="file:./db/custom.db"
+MT5_LOGIN="your_mt5_account_number"
+MT5_PASSWORD="your_mt5_account_password"
+MT5_SERVER="FINEX-Server"
+FINNHUB_API_KEY="your_finnhub_api_key"
+MARKETAUX_API_KEY="your_marketaux_api_key"
+BASE_BALANCE="10000"
+NODE_ENV="development"
+```
+
+> **PENTING**: Jangan pernah commit file `.env` ke repository. File ini sudah ada di `.gitignore`.
+
+### Langkah 4: Setup Database
 
 ```bash
 bun run db:generate
 bun run db:push
-bun run prisma db seed
 ```
 
-### 5. Jalankan Development Server
+### Langkah 5: Jalankan Development Server
 
 ```bash
 bun run dev
 ```
 
-Buka [http://localhost:3000](http://localhost:3000) di browser.
+Buka browser di `http://localhost:3000`.
 
 ---
 
-## ⚙️ Konfigurasi Environment
+## Konfigurasi Environment
 
-Buat file `.env` di root project:
+Buat file `.env` di root project dengan menyalin `.env.example`:
 
-```env
-# ============================================
-# DATABASE
-# ============================================
-DATABASE_URL="file:./db/custom.db"
-
-# ============================================
-# FINEX MT5 CONNECTION
-# ============================================
-MT5_LOGIN="your_account_number"
-MT5_PASSWORD="your_account_password"
-MT5_SERVER="FINEX-Server"
-
-# ============================================
-# NEWS API PROVIDERS
-# ============================================
-FINNHUB_API_KEY="your_finnhub_api_key"
-MARKETAUX_API_KEY="your_marketaux_api_key"
-
-# ============================================
-# SYSTEM
-# ============================================
-BASE_BALANCE="10000"
-NODE_ENV="development"
+```bash
+copy .env.example .env
 ```
 
-> ⚠️ **PENTING**: Jangan pernah commit file `.env` ke repository. File ini sudah ada di `.gitignore`.
+| Variable | Wajib | Default | Deskripsi |
+|----------|-------|---------|-----------|
+| `DATABASE_URL` | Ya | `file:./db/custom.db` | Path database SQLite |
+| `MT5_LOGIN` | Ya | — | Nomor akun MT5 FINEX |
+| `MT5_PASSWORD` | Ya | — | Password akun MT5 FINEX |
+| `MT5_SERVER` | Ya | `FINEX-Server` | Nama server broker |
+| `FINNHUB_API_KEY` | Ya | — | API key Finnhub |
+| `MARKETAUX_API_KEY` | Ya | — | API key MARKETAUX |
+| `BASE_BALANCE` | Tidak | `10000` | Saldo dasar (USD) |
+| `NODE_ENV` | Tidak | `development` | `development` atau `production` |
 
 ---
 
-## ▶️ Menjalankan Aplikasi
+## Menjalankan Aplikasi
 
 ### Development Mode
 
 ```bash
 bun run dev
 ```
-Server berjalan di `http://localhost:3000` dengan hot-reload.
+
+Server berjalan di `http://localhost:3000` dengan hot-reload. Log output tersimpan di `dev.log`.
 
 ### Production Build
 
@@ -206,7 +229,8 @@ Server berjalan di `http://localhost:3000` dengan hot-reload.
 bun run build
 bun run start
 ```
-Server produksi berjalan di port 3000.
+
+Server produksi berjalan di port 3000. Log output tersimpan di `server.log`.
 
 ### Database Commands
 
@@ -214,10 +238,10 @@ Server produksi berjalan di port 3000.
 # Generate Prisma Client
 bun run db:generate
 
-# Push schema ke database (dev)
+# Push schema ke database (development)
 bun run db:push
 
-# Migrate database
+# Create migration
 bun run db:migrate
 
 # Reset database (hapus semua data)
@@ -232,7 +256,7 @@ bun run lint
 
 ---
 
-## 📁 Struktur Proyek
+## Struktur Proyek
 
 ```
 frxai/
@@ -243,36 +267,36 @@ frxai/
 │   └── custom.db              # SQLite database
 ├── src/
 │   ├── app/
-│   │   ├── layout.tsx         # Root layout
-│   │   ├── page.tsx           # Main trading dashboard (SPA)
-│   │   ├── globals.css        # Global styles
-│   │   └── api/               # API Routes (37 files, 62 handlers)
-│   │       ├── account/       # Account summary & equity curve
-│   │       ├── ai/            # AI decision engine & accuracy
-│   │       ├── alerts/        # Price alerts CRUD
-│   │       ├── analysis/      # AI market analysis
-│   │       ├── audit/         # Compliance audit report
-│   │       ├── backtest/      # Strategy backtesting
-│   │       ├── execution/     # Trade execution, trailing, emergency
-│   │       ├── indicators/    # Technical indicator computation
-│   │       ├── logs/          # Trading logs & export
-│   │       ├── money-management/ # Position sizing & daily performance
-│   │       ├── mt5/           # MT5 connection & status
-│   │       ├── news/          # News fetching & sentiment scoring
-│   │       ├── reports/       # Performance reports
-│   │       ├── risk/          # Risk management & gap risk
-│   │       ├── risk-events/   # Risk event management
-│   │       ├── sentiment/     # Sentiment snapshot & filter
-│   │       ├── sessions/      # Trading sessions & performance
-│   │       ├── stocks/        # Stock watchlist
-│   │       ├── strategies/    # Strategy signals
-│   │       ├── system/        # System configuration
-│   │       └── trades/        # Trade CRUD & history
+│   │   ├── layout.tsx            # Root layout
+│   │   ├── page.tsx              # Main trading dashboard (SPA)
+│   │   ├── globals.css           # Global styles
+│   │   └── api/                  # 38 API route files, 58 handlers
+│   │       ├── account/             # Account & equity curve
+│   │       ├── ai/                  # AI decision & accuracy
+│   │       ├── alerts/              # Price alerts CRUD
+│   │       ├── analysis/            # AI market analysis
+│   │       ├── audit/               # Compliance audit
+│   │       ├── backtest/            # Strategy backtesting
+│   │       ├── execution/           # Trade execution pipeline
+│   │       ├── indicators/          # Technical computation
+│   │       ├── logs/                # Trading logs & export
+│   │       ├── money-management/    # Position sizing
+│   │       ├── mt5/                 # MT5 connection
+│   │       ├── news/                # News fetching
+│   │       ├── reports/             # Performance reports
+│   │       ├── risk/                # Risk management
+│   │       ├── risk-events/         # Risk event management
+│   │       ├── sentiment/            # Sentiment analysis
+│   │       ├── sessions/            # Trading sessions
+│   │       ├── stocks/              # Stock watchlist
+│   │       ├── strategies/          # Strategy signals
+│   │       ├── system/              # System configuration
+│   │       └── trades/              # Trade CRUD & history
 │   ├── components/
-│   │   ├── trading/           # 15 trading UI components
-│   │   └── ui/                # 50+ shadcn/ui components
+│   │   ├── trading/              # 15 trading UI components
+│   │   └── ui/                   # 50+ shadcn/ui components
 │   ├── hooks/                 # Custom React hooks
-│   └── lib/                   # Core business logic (10 modules)
+│   └── lib/                   # 10 core business modules
 │       ├── ai-decision-engine.ts     # AI 4-factor decision synthesis
 │       ├── config.ts                 # Centralized configuration
 │       ├── db.ts                     # Prisma database client
@@ -290,32 +314,33 @@ frxai/
 ├── public/
 │   ├── logo.svg
 │   └── robots.txt
-├── next.config.ts                 # Next.js configuration
-├── tailwind.config.ts             # Tailwind CSS configuration
-├── tsconfig.json                  # TypeScript configuration
-├── eslint.config.mjs              # ESLint configuration
-├── package.json                   # Dependencies & scripts
-├── Caddyfile                      # Reverse proxy config
-└── README.md                      # This file
+├── next.config.ts
+├── tailwind.config.ts
+├── tsconfig.json
+├── eslint.config.mjs
+├── package.json
+├── Caddyfile
+├── .env.example
+└── README.md
 ```
 
 ---
 
-## 📚 Dokumentasi
+## Dokumentasi Lengkap
 
 | Dokumen | Deskripsi |
 |---------|-----------|
 | [README.md](./README.md) | Overview, instalasi, dan quick start |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | Desain arsitektur sistem |
-| [API.md](./API.md) | Dokumentasi lengkap API endpoints |
-| [SECURITY.md](./SECURITY.md) | Panduan keamanan |
-| [CONTRIBUTING.md](./CONTRIBUTING.md) | Panduan kontribusi |
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | Desain arsitektur sistem, data flow, modul |
+| [API.md](./API.md) | Dokumentasi lengkap 58 API endpoints |
+| [SECURITY.md](./SECURITY.md) | Panduan keamanan dan best practices |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Panduan kontribusi dan coding standards |
 | [CHANGELOG.md](./CHANGELOG.md) | Riwayat perubahan versi |
-| [DEPLOYMENT.md](./DEPLOYMENT.md) | Panduan deployment (VS Code + Windows 11) |
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | Panduan deployment lengkap (VS Code + Windows 11) |
 
 ---
 
-## 🏦 Spesifikasi Broker FINEX
+## Spesifikasi Broker FINEX
 
 | Parameter | Nilai |
 |-----------|-------|
@@ -331,36 +356,39 @@ frxai/
 | Max Open Positions | 200 |
 | Market | IDX (Indonesian Stock Exchange) |
 
-### Jam Trading IDX (WIB/UTC+7)
+### Jam Trading IDX (WIB / UTC+7)
 
-| Sesi | Waktu | Keterangan |
-|------|-------|------------|
+| Sesi | Waktu (WIB) | Keterangan |
+|------|-------------|------------|
 | Pre-Market | 09:00 - 09:05 | Pre-open auction |
 | Session 1 | 09:05 - 11:30 | Morning session |
 | Lunch Break | 11:30 - 13:00 | Market closed |
 | Session 2 | 13:00 - 16:15 | Afternoon session |
 | Post-Close | 16:15 - 17:00 | Post-close auction |
 
-### Daftar Saham yang Didukung
+### Daftar Saham yang Didukung (20 Saham IDX)
 
-20 saham IDX populer termasuk: BBRI, BBCA, BMRI, BBNI, TLKM, ASII, UNVR, GOTO, BUKA, ACST, ADRO, ANTM, BRIS, BRPT, EMTK, INCO, MDKA, PTBA, TINS, VALE.
-
----
-
-## 📊 Stats
-
-- **27,300+** baris kode TypeScript
-- **37** file API route dengan **62** handler
-- **20** database model (Prisma)
-- **10** modul business logic
-- **15** komponen trading UI
-- **50+** komponen shadcn/ui
-- **7** strategi trading
-- **10** indikator teknikal
-- **5** fase audit & optimasi selesai
+BBRI, BBCA, BMRI, BBNI, TLKM, ASII, UNVR, GOTO, BUKA, ACST, ADRO, ANTM, BRIS, BRPT, EMTK, INCO, MDKA, PTBA, TINS, VALE
 
 ---
 
-## ⚖️ Lisensi
+## Statistik Proyek
+
+| Metrik | Jumlah |
+|--------|--------|
+| Baris kode TypeScript | 27,300+ |
+| File API route | 38 |
+| HTTP endpoint handlers | 58 |
+| Database model (Prisma) | 20 |
+| Core business modules | 10 |
+| Trading UI components | 15 |
+| shadcn/ui components | 50+ |
+| Trading strategies | 7 |
+| Technical indicators | 10 |
+| Audit & optimization phases | 8 |
+
+---
+
+## Lisensi
 
 Proyek ini bersifat **private** dan **proprietary**. Hak cipta dilindungi. Lihat file LICENSE untuk detail.

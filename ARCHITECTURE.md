@@ -4,37 +4,40 @@
 
 ---
 
-## 📋 Daftar Isi
+## Daftar Isi
 
-- [Overview Arsitektur](#-overview-arsitektur)
-- [High-Level Diagram](#-high-level-diagram)
-- [Core Modules](#-core-modules)
-- [Data Flow](#-data-flow)
-- [Database Schema](#-database-schema)
-- [API Architecture](#-api-architecture)
-- [State Management](#-state-management)
-- [Error Handling Strategy](#-error-handling-strategy)
-- [Caching Strategy](#-caching-strategy)
-- [Concurrency & Race Conditions](#-concurrency--race-conditions)
-- [Timezone Handling](#-timezone-handling)
+- [Overview Arsitektur](#overview-arsitektur)
+- [High-Level Diagram](#high-level-diagram)
+- [Core Modules](#core-modules)
+- [Data Flow](#data-flow)
+- [Database Schema](#database-schema)
+- [API Architecture](#api-architecture)
+- [State Management](#state-management)
+- [Error Handling Strategy](#error-handling-strategy)
+- [Caching Strategy](#caching-strategy)
+- [Concurrency & Race Conditions](#concurrency--race-conditions)
+- [Timezone Handling](#timezone-handling)
+- [7 Trading Strategies](#-7-trading-strategies)
 
 ---
 
-## 🏗 Overview Arsitektur
+## Overview Arsitektur
 
 FINEX AI Trader menggunakan arsitektur **monolithic Next.js App Router** dengan modular business logic. Semua komputasi berjalan di server-side (API routes) sementara frontend hanya bertanggung jawab untuk rendering dan interaksi.
 
 ### Prinsip Desain
 
-1. **Server-First** — Semua business logic, database access, dan komputasi berjalan di API routes (server-side). `z-ai-web-dev-sdk` hanya boleh digunakan di backend.
-2. **Atomic Operations** — Semua trade state changes menggunakan `updateMany` dengan precondition check untuk mencegah race conditions.
-3. **Single Source of Truth** — Database SQLite/Prisma adalah satu-satunya source of truth untuk semua state.
-4. **Event-Driven Logging** — Setiap operasi penting mencatat audit trail dan structured logs.
-5. **Graceful Degradation** — Sistem tetap berfungsi (dengan peringatan) jika MT5 tidak terhubung atau API external gagal.
+| # | Prinsip | Deskripsi |
+|---|---------|-----------|
+| 1 | **Server-First** | Semua business logic, database access, dan komputasi berjalan di API routes (server-side). `z-ai-web-dev-sdk` hanya boleh digunakan di backend. |
+| 2 | **Atomic Operations** | Semua trade state changes menggunakan `updateMany` dengan precondition check untuk mencegah race conditions. |
+| 3 | **Single Source of Truth** | Database SQLite/Prisma adalah satu-satunya source of truth untuk semua state. |
+| 4 | **Event-Driven Logging** | Setiap operasi penting mencatat audit trail dan structured logs. |
+| 5 | **Graceful Degradation** | Sistem tetap berfungsi (dengan peringatan) jika MT5 tidak terhubung atau API external gagal. |
 
 ---
 
-## 📊 High-Level Diagram
+## High-Level Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -49,7 +52,7 @@ FINEX AI Trader menggunakan arsitektur **monolithic Next.js App Router** dengan 
 ┌──────────────────────────────┼──────────────────────────────────────┐
 │                    NEXT.JS APP ROUTER (Port 3000)                   │
 │  ┌───────────────────────────┼───────────────────────────────────┐  │
-│  │                  37 API ROUTE FILES (62 handlers)             │  │
+│  │                  38 API ROUTE FILES (58 handlers)             │  │
 │  └───────────────────────────┼───────────────────────────────────┘  │
 │                              │                                      │
 │  ┌───────────────────────────┼───────────────────────────────────┐  │
@@ -76,7 +79,7 @@ FINEX AI Trader menggunakan arsitektur **monolithic Next.js App Router** dengan 
 
 ---
 
-## 🧩 Core Modules
+## Core Modules
 
 ### 1. MT5 Connection Manager (`src/lib/mt5-connection.ts`)
 
@@ -94,6 +97,7 @@ FINEX AI Trader menggunakan arsitektur **monolithic Next.js App Router** dengan 
 | Silent Failure Detection | `validateReturn()` untuk mendeteksi kegagalan tanpa error |
 
 **Key Exports:**
+
 ```typescript
 connectToMt5(login, password, server): Promise<ConnectResult>
 disconnectFromMt5(): Promise<void>
@@ -119,6 +123,7 @@ SYMBOL_MAP: Record<string, SymbolMappingEntry>
 | Position Sync | Reconcile broker ↔ local DB |
 
 **Atomic Update Pattern** (kritis untuk mencegah race conditions):
+
 ```typescript
 const count = await db.trade.updateMany({
   where: { id: tradeId, status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
@@ -157,13 +162,7 @@ if (count === 0) throw new Error('Trade already closed or not found')
 | Fixed Dollar | Risk dollar amount tetap per trade |
 | Anti-Martingale | Naikkan size setelah win, turunkan setelah loss |
 
-**Fitur Tambahan:**
-- Commission-aware sizing ($1/lot FINEX)
-- Reserve capital enforcement
-- Performance-based dynamic scaling
-- Daily performance tracking (WIB date)
-- Drawdown recovery modeling
-- Risk-of-ruin estimation
+**Fitur Tambahan:** Commission-aware sizing ($1/lot FINEX), reserve capital enforcement, performance-based dynamic scaling, daily performance tracking (WIB date), drawdown recovery modeling, risk-of-ruin estimation.
 
 ### 5. AI Decision Engine (`src/lib/ai-decision-engine.ts`)
 
@@ -211,7 +210,7 @@ if (count === 0) throw new Error('Trade already closed or not found')
 | VWAP | Volume | Intraday |
 | Pivot Points | Support/Resistance | Classic |
 
-**Fitur:** Dependency graph, FIFO cache eviction (max 500), scope-based cache keys, mock candle fallback.
+**Fitur:** Dependency graph, FIFO cache eviction (max 500 entries), scope-based cache keys, mock candle fallback.
 
 ### 7. Session Manager (`src/lib/session-manager.ts`)
 
@@ -233,8 +232,8 @@ if (count === 0) throw new Error('Trade already closed or not found')
 
 | Provider | Rate Limit | Fitur |
 |----------|------------|-------|
-| Finnhub | 60/min | US & global market news |
-| MARKETAUX | 100/day | Indonesian market coverage |
+| Finnhub | 60 calls/min | US & global market news |
+| MARKETAUX | 100 calls/day | Indonesian market coverage |
 
 **Fitur:** LRU cache, rate limiting, circuit breaker, deduplication, breaking news detection, multi-provider failover.
 
@@ -257,7 +256,7 @@ if (count === 0) throw new Error('Trade already closed or not found')
 | Fitur | Deskripsi |
 |-------|-----------|
 | 6 Level | DEBUG, INFO, WARN, ERROR, CRITICAL, FATAL |
-| 11 Category | MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT, dll |
+| 11 Category | MT5_CONNECTION, TRADE_EXECUTION, RISK_MANAGEMENT, dll. |
 | Error Dedup | Fingerprint-based deduplication |
 | Log Rotation | Configurable retention, lazy cleanup |
 | Rate Limit Tracking | Monitoring API call rates |
@@ -265,7 +264,7 @@ if (count === 0) throw new Error('Trade already closed or not found')
 
 ---
 
-## 🔄 Data Flow
+## Data Flow
 
 ### Trade Lifecycle
 
@@ -377,7 +376,7 @@ Price Update (symbol → price)
 
 ---
 
-## 🗄 Database Schema
+## Database Schema
 
 ### Model Categories
 
@@ -415,15 +414,17 @@ Mt5ConnectionState ──→ Mt5ConnectionLog (events)
 
 ---
 
-## 🌐 API Architecture
+## API Architecture
 
 ### Design Principles
 
-1. **Uniform Response Format** — Semua endpoint mengembalikan `{ success: boolean, data?: T, error?: string }`
-2. **RESTful Resources** — Standard HTTP methods: GET (read), POST (create/execute), PUT (update), PATCH (partial update), DELETE (remove)
-3. **Server-Side Only** — Semua business logic berjalan di API routes. Tidak ada client-side trading logic.
-4. **No Authentication Layer** — Sistem ini dirancang untuk single-user (personal trading). Untuk multi-user, tambahkan NextAuth.js.
-5. **Validation** — Input validation via Zod schemas dan manual checks.
+| # | Prinsip | Deskripsi |
+|---|---------|-----------|
+| 1 | **Uniform Response** | Semua endpoint mengembalikan `{ success: boolean, data?: T, error?: string }` |
+| 2 | **RESTful Resources** | Standard HTTP methods: GET (read), POST (create/execute), PUT (update), PATCH (partial update), DELETE (remove) |
+| 3 | **Server-Side Only** | Semua business logic berjalan di API routes. Tidak ada client-side trading logic. |
+| 4 | **Single-User Design** | Sistem dirancang untuk single-user (personal trading). |
+| 5 | **Input Validation** | Input validation via Zod schemas dan manual checks. |
 
 ### Rate Limiting
 
@@ -449,11 +450,11 @@ Mt5ConnectionState ──→ Mt5ConnectionLog (events)
 { success: false, error: "Risk check failed: daily limit reached" }
 ```
 
-Lihat [API.md](./API.md) untuk dokumentasi lengkap semua endpoints.
+Lihat [API.md](./API.md) untuk dokumentasi lengkap semua 58 endpoints.
 
 ---
 
-## 📦 State Management
+## State Management
 
 ### Client-Side (React)
 
@@ -475,32 +476,36 @@ Lihat [API.md](./API.md) untuk dokumentasi lengkap semua endpoints.
 
 ---
 
-## ⚠️ Error Handling Strategy
+## Error Handling Strategy
 
 ### Layer 1: Input Validation
+
 - Zod schemas untuk request body validation
 - Manual checks untuk business rules
 - Early return dengan `{ success: false, error }` pada invalid input
 
 ### Layer 2: Business Logic Errors
+
 - Risk engine rejection → 422 status code
 - Trade state machine enforcement
 - Atomic `updateMany` precondition checks
 
 ### Layer 3: External Service Errors
+
 - Circuit breaker pattern (MT5, Finnhub, Marketaux)
 - Exponential backoff retry (MT5 orders)
 - Graceful degradation (fallback ke mock data jika tidak ada candle data)
 
 ### Layer 4: Logging & Escalation
-- Structured logging ke database (6 severity levels × 11 categories)
+
+- Structured logging ke database (6 severity levels x 11 categories)
 - Error deduplication via fingerprint
 - Escalation pipeline: logged → alert → recovery → emergency action
 - Audit trail untuk semua perubahan konfigurasi
 
 ---
 
-## 💾 Caching Strategy
+## Caching Strategy
 
 ### In-Memory Caches
 
@@ -523,18 +528,19 @@ Lihat [API.md](./API.md) untuk dokumentasi lengkap semua endpoints.
 
 ---
 
-## 🔒 Concurrency & Race Conditions
+## Concurrency & Race Conditions
 
 ### Atomic Update Pattern
 
 Race condition paling kritis: double-close trade (dua request mencoba menutup trade yang sama secara bersamaan).
 
 **Solusi:**
+
 ```typescript
 // Gunakan updateMany dengan WHERE precondition
 const count = await db.trade.updateMany({
-  where: { 
-    id: tradeId, 
+  where: {
+    id: tradeId,
     status: { in: ['OPEN', 'PARTIAL_FILLED'] }  // Precondition
   },
   data: { status: 'CLOSED', closePrice, pnl, ... }
@@ -562,7 +568,7 @@ try {
 
 ---
 
-## 🕐 Timezone Handling
+## Timezone Handling
 
 ### Standard Pattern
 
@@ -591,7 +597,7 @@ const wibTime = new Intl.DateTimeFormat('en-GB', {
 
 ---
 
-## 📈 7 Trading Strategies
+## 7 Trading Strategies
 
 | # | Strategi | Indikator Utama | Sinyal |
 |---|----------|----------------|--------|

@@ -16,7 +16,7 @@
 import { db } from '@/lib/db'
 import logger from '@/lib/trading-logger'
 import { executeOrderWithRetry, type OrderExecutionResult } from '@/lib/mt5-connection'
-import { getTradingPhase, isMarketOpen, validateSymbol } from '@/lib/mt5-connection'
+import { getTradingPhase, validateSymbol } from '@/lib/mt5-connection'
 import type { TradingPhase } from '@/lib/mt5-connection'
 import { updateDailyPerformance } from '@/lib/money-management'
 import { trackSessionPerformance } from '@/lib/session-manager'
@@ -988,10 +988,10 @@ export async function processTrailingStopsForAllTrades(
     // Always update highestPrice/lowestPrice for ALL trailing trades on every tick,
     // even if SL is not adjusted (cooldown, phase block, below minImprovement).
     // This prevents stale peaks from causing premature stop-outs.
-    for (const trade of trailingTrades) {
+    const peakUpdates = trailingTrades.map(trade => {
       const newPrice = priceUpdate.get(trade.symbol)
-      if (newPrice === undefined) continue
-      const updates: Record<string, unknown> = {}
+      if (newPrice === undefined) return Promise.resolve()
+      const updates: Record<string, number> = {}
       if (trade.direction === 'BUY') {
         const newHigh = Math.max(trade.highestPrice ?? trade.currentPrice, newPrice)
         if (newHigh !== (trade.highestPrice ?? trade.currentPrice)) updates.highestPrice = newHigh
@@ -999,10 +999,11 @@ export async function processTrailingStopsForAllTrades(
         const newLow = Math.min(trade.lowestPrice ?? trade.currentPrice, newPrice)
         if (newLow !== (trade.lowestPrice ?? trade.currentPrice)) updates.lowestPrice = newLow
       }
-      if (Object.keys(updates).length > 0) {
-        await db.trade.update({ where: { id: trade.id }, data: updates })
-      }
-    }
+      return Object.keys(updates).length > 0
+        ? db.trade.update({ where: { id: trade.id }, data: updates })
+        : Promise.resolve()
+    })
+    await Promise.all(peakUpdates)
 
     for (const trade of trailingTrades) {
       const newPrice = priceUpdate.get(trade.symbol)
@@ -1045,6 +1046,7 @@ export async function processTrailingStopsForAllTrades(
           // Track why the adjustment was skipped for logging
           if (result.cooldownBlocked) cooldownBlocked++
           if (result.maxAdjustmentsHit) maxCapHit++
+          if (/phase|market|session/i.test(result.reason)) phaseBlocked++
           continue
         }
 
@@ -1823,12 +1825,14 @@ export async function processPriceUpdate(
   try {
     // Stage 1: Update currentPrice on open trades so all subsequent stages use fresh prices
     try {
-      for (const [symbol, price] of currentPrices) {
-        await db.trade.updateMany({
-          where: { status: { in: ['OPEN', 'PARTIAL_FILLED'] }, symbol },
-          data: { currentPrice: price },
-        })
-      }
+      await Promise.all(
+        Array.from(currentPrices).map(([symbol, price]) =>
+          db.trade.updateMany({
+            where: { status: { in: ['OPEN', 'PARTIAL_FILLED'] }, symbol },
+            data: { currentPrice: price },
+          })
+        )
+      )
     } catch (err) {
       errors++
       logger.error('TRADE_EXECUTION', 'Failed to update currentPrice on open trades', {

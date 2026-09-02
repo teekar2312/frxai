@@ -966,10 +966,15 @@ export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
   const sessionRiskLimitPct = 1.0 // default 1.0% of equity
 
   const now = new Date()
-  const wibOffsetMs = 7 * 60 * 60 * 1000
-  const nowWib = new Date(now.getTime() + wibOffsetMs)
-  const wibHours = nowWib.getUTCHours()
-  const wibMinutes = nowWib.getUTCMinutes()
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now)
+  const wibParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now)
+  const wibHours = parseInt(wibParts.find(p => p.type === 'hour')?.value ?? '0')
+  const wibMinutes = parseInt(wibParts.find(p => p.type === 'minute')?.value ?? '0')
   const currentWibMinutes = wibHours * 60 + wibMinutes
 
   // Session window: 09:00 (540) - 15:00 (900) WIB
@@ -988,7 +993,7 @@ export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
   }
 
   // Get today's start balance from DailyPerformance
-  const todayStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta' }).format(now)
+  const todayStr = today
   const todayPerf = await db.dailyPerformance.findUnique({ where: { date: todayStr } })
   const equity = todayPerf ? todayPerf.startBalance : 10000
   const sessionLimit = (sessionRiskLimitPct / 100) * equity

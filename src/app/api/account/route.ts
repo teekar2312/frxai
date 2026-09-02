@@ -93,7 +93,7 @@ export async function GET() {
       hasRealData,
       totalTrades: totalClosedCount,
       currency: "USD",
-      accountNumber: "FX-2024-88421",
+      accountNumber: process.env.MT5_LOGIN || '—',
     }
 
     return NextResponse.json({ success: true, data: account })

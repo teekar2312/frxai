@@ -58,7 +58,7 @@ export default function StrategyMonitor() {
       const res = await fetch('/api/strategies', { signal: controller.signal })
       if (res.ok) {
         const json = await res.json()
-        setStrategies(Array.isArray(json) ? json : json.strategies ?? [])
+        setStrategies(json.data ?? [])
       }
     } catch {
       // use stale data

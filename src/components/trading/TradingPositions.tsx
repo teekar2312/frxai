@@ -84,7 +84,7 @@ export default function TradingPositions() {
       const res = await fetch('/api/trades')
       if (res.ok) {
         const json = await res.json()
-        setTrades(Array.isArray(json) ? json : json.trades ?? [])
+        setTrades(json.data ?? [])
       }
     } catch {
       // use default

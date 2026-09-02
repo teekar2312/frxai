@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { preTradeCheck } from "@/lib/risk-engine"
-import { calculatePositionSize, updateDailyPerformance, calculateScalingFactor } from "@/lib/money-management"
-import { BASE_BALANCE } from "@/lib/config"
+import { calculatePositionSize, updateDailyPerformance } from "@/lib/money-management"
+import { BASE_BALANCE, LEVERAGE, COMMISSION_PER_LOT } from "@/lib/config"
 import logger from "@/lib/trading-logger"
 import { SYMBOL_SECTORS } from "@/lib/risk-engine"
 
@@ -72,15 +72,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Calculate equity
-    const allClosed = await db.trade.findMany({ where: { status: "CLOSED" } })
-    const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
-    const openTrades = await db.trade.findMany({ where: { status: "OPEN" } })
-    const totalOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
-    const equity = BASE_BALANCE + totalClosedPnl + totalOpenPnl
-
-    // Get dynamic scaling factor
-    const scalingFactor = await calculateScalingFactor()
+    // Efficient equity calculation (single aggregate query)
+    const [pnlAgg] = await db.trade.aggregate({
+      _sum: { pnl: true },
+      where: { status: { in: ['OPEN', 'CLOSED', 'PARTIAL_FILLED'] } },
+    })
+    const equity = BASE_BALANCE + (pnlAgg._sum.pnl ?? 0)
 
     // Pre-Trade Risk Check (with slippage and scaling)
     const riskCheck = await preTradeCheck({
@@ -116,7 +113,7 @@ export async function POST(request: NextRequest) {
           timeframe: timeframe ?? null,
           marketCond: marketCond ?? null,
           aiConfidence: aiConfidence ?? null,
-          leverage: leverage || 25,
+          leverage: leverage || LEVERAGE,
           status: "REJECTED",
           rejectReason: riskCheck.reason,
           sector: SYMBOL_SECTORS[symbol] || null,
@@ -159,9 +156,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Create Trade
-    const lev = leverage || 25
+    const lev = leverage || LEVERAGE
     const price = currentPrice || entryPrice
-    const commission = finalLotSize * 1 // $1 per lot FINEX
+    const commission = finalLotSize * COMMISSION_PER_LOT
     const slippageCost = expectedSlippage ? expectedSlippage * finalLotSize : 0
     const contractValue = price * finalLotSize * 100000
     const margin = contractValue / lev
@@ -207,7 +204,6 @@ export async function POST(request: NextRequest) {
         sl,
         tp,
         strategy,
-        scalingFactor,
         riskCheck: { riskAmount: riskCheck.riskAmount, riskPercent: riskCheck.riskPercent, positionSizeReduction: riskCheck.positionSizeReduction },
         moneyManagement: { suggestedLot: sizing.suggestedLotSize, method: sizing.method, reasoning: sizing.reasoning, commissionCost: sizing.commissionCost, netRiskAfterCommission: sizing.netRiskAfterCommission },
         commission,
@@ -227,7 +223,6 @@ export async function POST(request: NextRequest) {
         marginRequired: sizing.marginRequired,
         commissionCost: sizing.commissionCost,
         netRiskAfterCommission: sizing.netRiskAfterCommission,
-        scalingFactor,
         reasoning: sizing.reasoning,
       },
     }, { status: 201 })

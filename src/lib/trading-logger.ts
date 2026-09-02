@@ -151,7 +151,9 @@ class DedupCache {
     this.flushTimer = setInterval(() => {
       const expired = this.sweepExpired()
       for (const e of expired) {
-        console.log(`[Logger-Dedup] Flushed fingerprint=${e.fingerprint} count=${e.count}`)
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`[Logger-Dedup] Flushed fingerprint=${e.fingerprint} count=${e.count}`)
+        }
       }
     }, 5000)
   }

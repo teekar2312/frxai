@@ -64,7 +64,7 @@ export default function StockWatchlist() {
       const res = await fetch('/api/stocks', { signal: controller.signal })
       if (res.ok) {
         const json = await res.json()
-        setStocks(Array.isArray(json) ? json : json.stocks ?? [])
+        setStocks(json.data ?? [])
       }
     } catch {
       // use stale data

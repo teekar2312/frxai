@@ -1561,10 +1561,14 @@ export async function assessGapRisk(params: {
   let estimatedMaxGapPct = vol * 2.5 * 100
 
   // If near market close (within 30 min of 15:00 WIB), increase gap risk by 50%
-  const wibTimeStr = new Date().toLocaleString('en-US', { timeZone: 'Asia/Jakarta', hour12: false })
-  const [wibHourStr, wibMinStr] = wibTimeStr.split(':').map(s => s.trim())
-  const wibHour = parseInt(wibHourStr, 10) % 24
-  const wibMinute = parseInt(wibMinStr, 10)
+  const wibParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jakarta',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date())
+  const wibHour = parseInt(wibParts.find(p => p.type === 'hour')?.value ?? '0')
+  const wibMinute = parseInt(wibParts.find(p => p.type === 'minute')?.value ?? '0')
   const minutesSinceOpen = wibHour * 60 + wibMinute
   // Market closes at 15:00 WIB (900 minutes). Within 30 min = >= 870 minutes.
   const isNearClose = minutesSinceOpen >= 870 && minutesSinceOpen <= 900
@@ -1676,55 +1680,26 @@ export function detectVolatilityRegime(params: {
 export async function autoResolveStaleRiskEvents(maxAgeMinutes: number = 60): Promise<number> {
   const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000)
 
-  const staleEvents = await db.riskEvent.findMany({
+  const now = new Date()
+
+  const result = await db.riskEvent.updateMany({
     where: {
       resolved: false,
       createdAt: { lt: cutoff },
     },
+    data: {
+      resolved: true,
+      resolvedAt: now,
+    },
   })
 
-  if (staleEvents.length === 0) {
-    return 0
-  }
-
-  const now = new Date()
-  let resolvedCount = 0
-
-  for (const event of staleEvents) {
-    try {
-      await db.riskEvent.update({
-        where: { id: event.id },
-        data: {
-          resolved: true,
-          resolvedAt: now,
-          actionTaken: event.actionTaken
-            ? `${event.actionTaken}; AUTO_RESOLVED`
-            : "AUTO_RESOLVED",
-        },
-      })
-      logger.info("RISK_MANAGEMENT", `Auto-resolved stale risk event: ${event.eventType}`, {
-        metadata: {
-          eventId: event.id,
-          eventType: event.eventType,
-          severity: event.severity,
-          ageMinutes: Math.round((now.getTime() - event.createdAt.getTime()) / 60000),
-        },
-      })
-      resolvedCount++
-    } catch (err) {
-      logger.error("RISK_MANAGEMENT", `Failed to auto-resolve risk event ${event.id}`, {
-        details: err instanceof Error ? err.stack : undefined,
-      })
-    }
-  }
-
-  if (resolvedCount > 0) {
-    logger.info("RISK_MANAGEMENT", `Auto-resolved ${resolvedCount} stale risk events (max age: ${maxAgeMinutes}min)`, {
-      metadata: { resolvedCount, maxAgeMinutes },
+  if (result.count > 0) {
+    logger.info("RISK_MANAGEMENT", `Auto-resolved ${result.count} stale risk events (max age: ${maxAgeMinutes}min)`, {
+      metadata: { resolvedCount: result.count, maxAgeMinutes },
     })
   }
 
-  return resolvedCount
+  return result.count
 }
 
 // ============================================

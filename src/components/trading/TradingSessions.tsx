@@ -3,7 +3,11 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Globe, Clock, Activity, TrendingUp, TrendingDown, AlertTriangle, Timer } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
+import { Globe, Clock, Activity, TrendingUp, TrendingDown, AlertTriangle, Timer, Settings2, Zap } from 'lucide-react'
+import { toast } from 'sonner'
 
 // Import shared session config from the session manager (via API response)
 interface SessionData {
@@ -20,9 +24,9 @@ interface SessionData {
   crossesMidnight: boolean
 }
 
-const OVERLAPS = [
+const TIMELINE_OVERLAPS = [
   { name: 'Tokyo-London', startHour: 7, endHour: 9, color: '#f97316' },
-  { name: 'London-New York', startHour: 12, endHour: 16, color: '#ec4899' },
+  { name: 'New York - London', startHour: 12, endHour: 16, color: '#ec4899' },
 ]
 
 interface SessionsApiResponse {
@@ -61,6 +65,27 @@ interface SessionsApiResponse {
   }
 }
 
+interface SessionToggle {
+  key: string
+  label: string
+  enabled: boolean
+  type: 'idx' | 'forex' | 'overlap'
+}
+
+interface SessionTradingConfig {
+  idxSessions: SessionToggle[]
+  forexOverlaps: SessionToggle[]
+  updatedAt: string
+}
+
+interface SessionConfigApiResponse {
+  success: boolean
+  data: {
+    config: SessionTradingConfig
+    activeOverlaps: Array<{ key: string; label: string; name: string }>
+  }
+}
+
 function getBarStyles(session: SessionData): React.CSSProperties {
   const totalHours = session.crossesMidnight
     ? (24 - session.openHour) + session.closeHour
@@ -91,11 +116,24 @@ function formatCountdown(seconds: number): string {
   return `${m}m ${s}s`
 }
 
+// Overlap icon colors for visual distinction
+const OVERLAY_COLORS: Record<string, string> = {
+  'overlap_tokyo_london': '#f97316',
+  'overlap_ny_london': '#ec4899',
+  'overlap_sydney_tokyo': '#8b5cf6',
+}
+
 export default function TradingSessions() {
   const [data, setData] = useState<SessionsApiResponse | null>(null)
   const [currentHour, setCurrentHour] = useState<number>(new Date().getUTCHours())
   const [currentMinute, setCurrentMinute] = useState<number>(new Date().getUTCMinutes())
   const [loading, setLoading] = useState(true)
+
+  // Session config state
+  const [sessionConfig, setSessionConfig] = useState<SessionTradingConfig | null>(null)
+  const [activeOverlapKeys, setActiveOverlapKeys] = useState<Set<string>>(new Set())
+  const [configLoading, setConfigLoading] = useState(true)
+  const [updatingKey, setUpdatingKey] = useState<string | null>(null)
 
   const fetchSessions = useCallback(async () => {
     try {
@@ -111,11 +149,64 @@ export default function TradingSessions() {
     }
   }, [])
 
+  const fetchSessionConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sessions/config')
+      if (res.ok) {
+        const json: SessionConfigApiResponse = await res.json()
+        setSessionConfig(json.data.config)
+        setActiveOverlapKeys(new Set(json.data.activeOverlaps.map(o => o.key)))
+      }
+    } catch {
+      // config unavailable
+    } finally {
+      setConfigLoading(false)
+    }
+  }, [])
+
+  const handleToggleSession = useCallback(async (type: 'idx' | 'overlap', key: string, enabled: boolean) => {
+    setUpdatingKey(key)
+    try {
+      const payload: Record<string, Array<{ key: string; enabled: boolean }>> = {}
+      if (type === 'idx') {
+        payload.idxSessions = [{ key, enabled }]
+      } else {
+        payload.forexOverlaps = [{ key, enabled }]
+      }
+
+      const res = await fetch('/api/sessions/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+
+      if (res.ok) {
+        const json = await res.json()
+        setSessionConfig(json.data)
+        toast.success(
+          enabled ? 'Sesi diaktifkan' : 'Sesi dinonaktifkan',
+          { description: type === 'overlap' ? 'Overlap session diperbarui' : 'Sesi IDX diperbarui' }
+        )
+      } else {
+        toast.error('Gagal memperbarui konfigurasi sesi')
+      }
+    } catch {
+      toast.error('Gagal memperbarui konfigurasi sesi')
+    } finally {
+      setUpdatingKey(null)
+    }
+  }, [])
+
   useEffect(() => {
     fetchSessions()
-    const interval = setInterval(fetchSessions, 30000) // refresh every 30s
-    return () => clearInterval(interval)
-  }, [fetchSessions])
+    fetchSessionConfig()
+    const interval = setInterval(fetchSessions, 30000)
+    const configInterval = setInterval(fetchSessionConfig, 60000) // refresh config every 60s
+    return () => {
+      clearInterval(interval)
+      clearInterval(configInterval)
+    }
+  }, [fetchSessions, fetchSessionConfig])
 
   // Update clock every second
   useEffect(() => {
@@ -152,6 +243,144 @@ export default function TradingSessions() {
           <span>UTC {String(currentHour).padStart(2, '0')}:{String(currentMinute).padStart(2, '0')}</span>
         </div>
       </div>
+
+      {/* ============ SESSION SELECTION PANEL ============ */}
+      <Card className="border-l-4 border-l-violet-500">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Settings2 className="h-4 w-4 text-violet-500" />
+            Pemilihan Sesi Trading
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* IDX Sessions */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Sesi IDX</p>
+            <div className="space-y-3">
+              {sessionConfig?.idxSessions.map((s) => {
+                const isCurrentlyActive =
+                  (s.key === 'idx_morning' && idx?.subSession === 'MORNING' && idx?.isOpen) ||
+                  (s.key === 'idx_afternoon' && idx?.subSession === 'AFTERNOON' && idx?.isOpen)
+                return (
+                  <div key={s.key} className="flex items-center justify-between rounded-lg border p-3">
+                    <div className="flex items-center gap-3">
+                      <Activity className="h-4 w-4 text-emerald-500" />
+                      <div>
+                        <Label className="text-sm font-medium cursor-pointer" htmlFor={`toggle-${s.key}`}>
+                          {s.label}
+                        </Label>
+                        <p className="text-[10px] text-muted-foreground">
+                          Trading otomatis {s.enabled ? 'diizinkan' : 'dinonaktifkan'} selama sesi ini
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {isCurrentlyActive && (
+                        <Badge variant="default" className="bg-emerald-600 text-[10px] h-5">
+                          AKTIF
+                        </Badge>
+                      )}
+                      <Switch
+                        id={`toggle-${s.key}`}
+                        checked={s.enabled}
+                        disabled={updatingKey === s.key}
+                        onCheckedChange={(checked) => handleToggleSession('idx', s.key, checked)}
+                      />
+                    </div>
+                  </div>
+                )
+              }) ?? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="animate-pulse">Loading...</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <Separator />
+
+          {/* Forex Overlap Sessions */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+              Overlap Sesi Forex
+            </p>
+            <p className="text-[10px] text-muted-foreground mb-3">
+              Aktifkan overlap untuk menambah bonus quality score saat sesi overlap aktif.
+              Overlap memberikan likuiditas lebih tinggi dan volatilitas lebih baik.
+            </p>
+            <div className="space-y-3">
+              {sessionConfig?.forexOverlaps.map((overlap) => {
+                const isTimeActive = activeOverlapKeys.has(overlap.key)
+                const isOverlapCurrentlyActive = overlaps.some(
+                  o => o.isActive && (
+                    (overlap.key === 'overlap_tokyo_london' && o.name === 'Tokyo-London') ||
+                    (overlap.key === 'overlap_ny_london' && o.name === 'New York - London') ||
+                    (overlap.key === 'overlap_sydney_tokyo' && o.name === 'Sydney-Tokyo')
+                  )
+                )
+                const displayActive = isTimeActive || isOverlapCurrentlyActive
+                const color = OVERLAY_COLORS[overlap.key] ?? '#f97316'
+
+                return (
+                  <div
+                    key={overlap.key}
+                    className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${
+                      displayActive && overlap.enabled ? 'bg-muted/50' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                        style={{ backgroundColor: `${color}20` }}
+                      >
+                        <Zap className="h-4 w-4" style={{ color }} />
+                      </div>
+                      <div>
+                        <Label className="text-sm font-medium cursor-pointer" htmlFor={`toggle-${overlap.key}`}>
+                          {overlap.label}
+                        </Label>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <p className="text-[10px] text-muted-foreground">
+                            {overlap.key === 'overlap_ny_london' && 'Likuiditas tertinggi — bonus +15 quality score'}
+                            {overlap.key === 'overlap_tokyo_london' && 'Transisi Asia-Eropa — bonus +10 quality score'}
+                            {overlap.key === 'overlap_sydney_tokyo' && 'Sesi Asia — bonus +5 quality score'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      {displayActive && overlap.enabled && (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] h-5 animate-pulse"
+                          style={{ color, borderColor: color }}
+                        >
+                          OVERLAP AKTIF
+                        </Badge>
+                      )}
+                      {displayActive && !overlap.enabled && (
+                        <Badge variant="secondary" className="text-[10px] h-5">
+                          AKTIF (nonaktif)
+                        </Badge>
+                      )}
+                      <Switch
+                        id={`toggle-${overlap.key}`}
+                        checked={overlap.enabled}
+                        disabled={updatingKey === overlap.key}
+                        onCheckedChange={(checked) => handleToggleSession('overlap', overlap.key, checked)}
+                      />
+                    </div>
+                  </div>
+                )
+              }) ?? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span className="animate-pulse">Loading...</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* IDX Session Status Card */}
       <Card className="border-l-4 border-l-emerald-500">
@@ -283,7 +512,7 @@ export default function TradingSessions() {
                 <div key={session.name} style={getBarStyles(session)} />
               ))}
 
-              {OVERLAPS.map((overlap) => {
+              {TIMELINE_OVERLAPS.map((overlap) => {
                 const leftPct = (overlap.startHour / 24) * 100
                 const widthPct = ((overlap.endHour - overlap.startHour) / 24) * 100
                 const isActive = currentHour >= overlap.startHour && currentHour < overlap.endHour
@@ -295,7 +524,7 @@ export default function TradingSessions() {
                       left: `${leftPct}%`,
                       width: `${widthPct}%`,
                       backgroundColor: overlap.color,
-                      opacity: 0.15,
+                      opacity: isActive ? 0.25 : 0.15,
                       borderLeft: `2px solid ${overlap.color}`,
                       borderRight: `2px solid ${overlap.color}`,
                     }}
@@ -345,6 +574,13 @@ export default function TradingSessions() {
           <div className="flex flex-wrap gap-3 pt-2">
             {overlaps.map((overlap) => {
               const isActive = currentHour >= overlap.startHourUtc && currentHour < overlap.endHourUtc
+              const isEnabled = sessionConfig?.forexOverlaps.some(
+                o =>
+                  (o.key === 'overlap_tokyo_london' && overlap.name === 'Tokyo-London') ||
+                  (o.key === 'overlap_ny_london' && overlap.name === 'New York - London') ||
+                  (o.key === 'overlap_sydney_tokyo' && overlap.name === 'Sydney-Tokyo')
+              )?.enabled ?? false
+
               return (
                 <div key={overlap.name} className="flex items-center gap-2 text-xs">
                   <div
@@ -357,6 +593,11 @@ export default function TradingSessions() {
                   {isActive && (
                     <Badge variant="outline" className="h-4 text-[10px] px-1" style={{ color: overlap.color, borderColor: overlap.color }}>
                       LIVE
+                    </Badge>
+                  )}
+                  {isEnabled && !isActive && (
+                    <Badge variant="secondary" className="h-4 text-[10px] px-1">
+                      ON
                     </Badge>
                   )}
                 </div>

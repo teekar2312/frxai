@@ -172,7 +172,7 @@ export const FOREX_OVERLAPS: Omit<SessionOverlap, 'isActive'>[] = [
     description: 'Asian-European transition',
   },
   {
-    name: 'London-New York',
+    name: 'New York - London',
     sessions: ['London', 'New York'],
     startHourUtc: 12,
     endHourUtc: 16,
@@ -732,14 +732,186 @@ export function getSessionSizingMultiplier(): number {
   }
 }
 
+// ============================================
+// SESSION TRADING CONFIG (selectable sessions)
+// ============================================
+
+/** Individual session toggle for trading */
+export interface SessionToggle {
+  key: string          // e.g. 'idx_morning', 'overlap_tokyo_london'
+  label: string        // Display name
+  enabled: boolean     // Whether trading is allowed during this session
+  type: 'idx' | 'forex' | 'overlap'
+}
+
+/** Complete session trading configuration */
+export interface SessionTradingConfig {
+  idxSessions: SessionToggle[]
+  forexOverlaps: SessionToggle[]
+  updatedAt: string
+}
+
+/** All available session options with defaults */
+const DEFAULT_SESSION_CONFIG: SessionTradingConfig = {
+  idxSessions: [
+    { key: 'idx_morning', label: 'Morning Session (09:05-11:30 WIB)', enabled: true, type: 'idx' },
+    { key: 'idx_afternoon', label: 'Afternoon Session (13:00-16:15 WIB)', enabled: true, type: 'idx' },
+  ],
+  forexOverlaps: [
+    {
+      key: 'overlap_tokyo_london',
+      label: 'Overlap Tokyo - London (07:00-09:00 UTC / 14:00-16:00 WIB)',
+      enabled: false,
+      type: 'overlap',
+    },
+    {
+      key: 'overlap_ny_london',
+      label: 'Overlap New York - London (12:00-16:00 UTC / 19:00-23:00 WIB)',
+      enabled: false,
+      type: 'overlap',
+    },
+    {
+      key: 'overlap_sydney_tokyo',
+      label: 'Overlap Sydney - Tokyo (21:00-09:00 UTC / 04:00-16:00 WIB)',
+      enabled: false,
+      type: 'overlap',
+    },
+  ],
+  updatedAt: new Date().toISOString(),
+}
+
+const SESSION_CONFIG_KEY = '__trading_session_config__'
+
+/**
+ * Get the current session trading configuration.
+ * Returns defaults if nothing is stored in DB.
+ */
+export async function getSessionTradingConfig(): Promise<SessionTradingConfig> {
+  try {
+    const row = await db.systemConfig.findUnique({ where: { key: SESSION_CONFIG_KEY } })
+    if (row) {
+      const parsed = JSON.parse(row.value) as SessionTradingConfig
+      // Merge with defaults to handle new fields added after initial save
+      return {
+        idxSessions: DEFAULT_SESSION_CONFIG.idxSessions.map(ds => {
+          const saved = parsed.idxSessions?.find(s => s.key === ds.key)
+          return saved ? { ...ds, ...saved } : ds
+        }),
+        forexOverlaps: DEFAULT_SESSION_CONFIG.forexOverlaps.map(ds => {
+          const saved = parsed.forexOverlaps?.find(s => s.key === ds.key)
+          return saved ? { ...ds, ...saved } : ds
+        }),
+        updatedAt: parsed.updatedAt ?? new Date().toISOString(),
+      }
+    }
+  } catch {
+    // Fall through to defaults
+  }
+  return { ...DEFAULT_SESSION_CONFIG, updatedAt: new Date().toISOString() }
+}
+
+/**
+ * Update the session trading configuration.
+ * Accepts partial updates (only the toggles that changed).
+ */
+export async function updateSessionTradingConfig(
+  updates: { idxSessions?: Array<{ key: string; enabled: boolean }>; forexOverlaps?: Array<{ key: string; enabled: boolean }> }
+): Promise<SessionTradingConfig> {
+  const current = await getSessionTradingConfig()
+
+  // Apply IDX session updates
+  if (updates.idxSessions) {
+    for (const u of updates.idxSessions) {
+      const target = current.idxSessions.find(s => s.key === u.key)
+      if (target) target.enabled = u.enabled
+    }
+  }
+
+  // Apply overlap updates
+  if (updates.forexOverlaps) {
+    for (const u of updates.forexOverlaps) {
+      const target = current.forexOverlaps.find(s => s.key === u.key)
+      if (target) target.enabled = u.enabled
+    }
+  }
+
+  current.updatedAt = new Date().toISOString()
+
+  // Persist
+  try {
+    await db.systemConfig.upsert({
+      where: { key: SESSION_CONFIG_KEY },
+      update: { value: JSON.stringify(current) },
+      create: { key: SESSION_CONFIG_KEY, value: JSON.stringify(current) },
+    })
+
+    logger.info('SESSION_MANAGER', 'Session trading config updated', {
+      metadata: { config: current },
+    })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    logger.error('SESSION_MANAGER', `Failed to persist session config: ${msg}`)
+  }
+
+  return current
+}
+
+/**
+ * Check if a specific overlap session is enabled for trading.
+ */
+export async function isOverlapEnabled(overlapKey: string): Promise<boolean> {
+  const config = await getSessionTradingConfig()
+  return config.forexOverlaps.some(o => o.key === overlapKey && o.enabled)
+}
+
+/**
+ * Get all currently active (enabled + time-wise active) overlap sessions.
+ */
+export async function getActiveOverlapSessions(): Promise<Array<{ key: string; label: string; name: string }>> {
+  const config = await getSessionTradingConfig()
+  const utcHour = new Date().getUTCHours()
+  const utcMinute = new Date().getUTCMinutes()
+
+  const overlapMap: Record<string, string> = {
+    overlap_tokyo_london: 'Tokyo-London',
+    overlap_ny_london: 'New York - London',
+    overlap_sydney_tokyo: 'Sydney-Tokyo',
+  }
+
+  const active: Array<{ key: string; label: string; name: string }> = []
+
+  for (const overlap of config.forexOverlaps) {
+    if (!overlap.enabled) continue
+    const overlapDef = FOREX_OVERLAPS.find(o => o.name === overlapMap[overlap.key])
+    if (!overlapDef) continue
+
+    const isActive = overlapDef.startHourUtc > overlapDef.endHourUtc
+      ? (utcHour >= overlapDef.startHourUtc || utcHour < overlapDef.endHourUtc)
+      : (utcHour >= overlapDef.startHourUtc && utcHour < overlapDef.endHourUtc)
+
+    // Check minute-level precision for Tokyo-London (07:00-09:00) and NY-London (12:00-16:00)
+    if (isActive) {
+      active.push({
+        key: overlap.key,
+        label: overlap.label,
+        name: overlapDef.name,
+      })
+    }
+  }
+
+  return active
+}
+
 /**
  * Get the session quality score (0-100) for signal filtering.
- * Considers: time in session, forex overlap, volatility regime.
+ * Considers: time in session, forex overlap (if enabled), volatility regime.
  */
-export function getSessionQualityScore(): number {
+export async function getSessionQualityScoreAsync(): Promise<number> {
   const phase = getTradingPhase()
   const subSession = getIdxSubSession(phase)
   const utcHour = new Date().getUTCHours()
+  const utcMinute = new Date().getUTCMinutes()
+  const config = await getSessionTradingConfig()
 
   let score = 0
 
@@ -752,12 +924,23 @@ export function getSessionQualityScore(): number {
     default: score = 0
   }
 
-  // Bonus for forex overlap (higher liquidity)
-  if (utcHour >= 7 && utcHour < 9) score += 10  // Tokyo-London overlap
-  if (utcHour >= 12 && utcHour < 16) score += 15 // London-NY overlap
+  // Bonus for enabled forex overlap sessions (higher liquidity)
+  const tokyoLondon = config.forexOverlaps.find(o => o.key === 'overlap_tokyo_london')
+  const nyLondon = config.forexOverlaps.find(o => o.key === 'overlap_ny_london')
+  const sydneyTokyo = config.forexOverlaps.find(o => o.key === 'overlap_sydney_tokyo')
+
+  if (tokyoLondon?.enabled && utcHour >= 7 && utcHour < 9) {
+    score += 10  // Tokyo-London overlap bonus
+  }
+  if (nyLondon?.enabled && utcHour >= 12 && utcHour < 16) {
+    score += 15  // New York - London overlap bonus (highest liquidity)
+  }
+  if (sydneyTokyo?.enabled) {
+    const isActive = utcHour >= 21 || utcHour < 9
+    if (isActive) score += 5  // Sydney-Tokyo overlap (modest bonus)
+  }
 
   // Penalty for first 15 minutes of session (opening volatility)
-  const utcMinute = new Date().getUTCMinutes()
   // Morning: UTC 02:05-02:20 = WIB 09:05-09:20
   if (subSession === 'MORNING' && utcHour === 2 && utcMinute < 15) {
     score -= 10 // Opening volatility
@@ -771,6 +954,48 @@ export function getSessionQualityScore(): number {
     score -= 15
   }
   // Last 5 min urgency (UTC 09:10-09:15 = WIB 16:10-16:15)
+  if (subSession === 'AFTERNOON' && utcHour >= 9 && utcMinute >= 10) {
+    score -= 10
+  }
+
+  return Math.max(0, Math.min(100, score))
+}
+
+/**
+ * Synchronous version of getSessionQualityScore (uses defaults, no DB read).
+ * Kept for backward compatibility with callers that don't need config-aware scoring.
+ */
+export function getSessionQualityScore(): number {
+  const phase = getTradingPhase()
+  const subSession = getIdxSubSession(phase)
+  const utcHour = new Date().getUTCHours()
+  const utcMinute = new Date().getUTCMinutes()
+
+  let score = 0
+
+  // Base score from IDX session type
+  switch (subSession) {
+    case 'MORNING': score = 80; break
+    case 'AFTERNOON': score = 70; break
+    case 'PRE_OPEN': score = 30; break
+    case 'PRE_CLOSE': score = 20; break
+    default: score = 0
+  }
+
+  // Bonus for forex overlap (always applied in sync version for backward compat)
+  if (utcHour >= 7 && utcHour < 9) score += 10  // Tokyo-London overlap
+  if (utcHour >= 12 && utcHour < 16) score += 15 // New York - London overlap
+
+  // Penalty for first 15 minutes of session (opening volatility)
+  if (subSession === 'MORNING' && utcHour === 2 && utcMinute < 15) {
+    score -= 10
+  }
+  if (subSession === 'AFTERNOON' && utcHour === 6 && utcMinute < 15) {
+    score -= 10
+  }
+  if (subSession === 'AFTERNOON' && utcHour >= 8 && utcMinute >= 45) {
+    score -= 15
+  }
   if (subSession === 'AFTERNOON' && utcHour >= 9 && utcMinute >= 10) {
     score -= 10
   }

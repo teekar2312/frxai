@@ -2610,3 +2610,36 @@ Stage Summary:
 - Codebase is go-live ready with zero TypeScript errors
 - All 58 files modified, 302 insertions, 679 deletions
 - Key metrics: 0 type errors, 0 lint errors, all API routes 200
+
+---
+Task ID: 1
+Agent: main
+Task: Tambahkan Overlap New York - London dan Overlap Tokyo - London pada pemilihan sesi trading
+
+Work Log:
+- Analyzed existing session-manager.ts: FOREX_OVERLAPS already had Tokyo-London and London-New York, but no user-selectable config
+- Renamed "London-New York" to "New York - London" in FOREX_OVERLAPS to match user request
+- Added SessionToggle, SessionTradingConfig types to session-manager.ts
+- Implemented getSessionTradingConfig() (reads from SystemConfig DB, merges with defaults)
+- Implemented updateSessionTradingConfig() (partial update, persists to SystemConfig via upsert)
+- Implemented isOverlapEnabled() and getActiveOverlapSessions() helpers
+- Added async getSessionQualityScoreAsync() that respects user config (overlap bonus only when enabled)
+- Kept sync getSessionQualityScore() for backward compatibility
+- Created /api/sessions/config endpoint (GET returns config + active overlaps, PUT updates with validation)
+- Rewrote TradingSessions.tsx with new "Pemilihan Sesi Trading" panel:
+  - IDX session toggles (Morning/Afternoon) with active state badges
+  - Forex overlap toggles (Tokyo-London, New York-London, Sydney-Tokyo) with quality score descriptions
+  - Visual indicators for active overlap periods ("OVERLAP AKTIF" badge)
+  - Toast notifications on toggle (Bahasa Indonesia)
+  - Updated timeline to use "New York - London" naming
+- Updated overlap timeline references from hardcoded to dynamic
+- Verified lint: 0 errors, 27 pre-existing warnings (none in new code)
+- Verified API: /api/sessions/config returns 200, /api/sessions returns 200, page compiles successfully
+
+Stage Summary:
+- New files: src/app/api/sessions/config/route.ts
+- Modified files: src/lib/session-manager.ts (+270 lines), src/components/trading/TradingSessions.tsx (full rewrite)
+- Feature: Users can now select which IDX sessions and forex overlap periods to enable for trading
+- Overlap bonus quality scores (+5/+10/+15) only apply when the user has enabled the overlap
+- Config persists in SystemConfig table with key __trading_session_config__
+

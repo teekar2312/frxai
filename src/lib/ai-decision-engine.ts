@@ -30,6 +30,7 @@ import type { SentimentFilterResult, SentimentTrend } from './sentiment-filter'
 // Fix #17: Integrate with indicator-pool for real technical data
 // Fix 1 (Task 7): Added missing OHLCVBar type import
 import { fetchCandles, calculateRSI, calculateMACD, calculateBollingerBands, calculateADX, calculateATR, calculateStochastic, calculateEMA, computeStrategySignal, type OHLCVBar, type StrategySignal } from './indicator-pool'
+import { isLlmAvailable, runLlmMarketAnalysis, type LlmAnalysisResult } from './ai-providers'
 import { isMarketOpen, getTradingPhase } from './mt5-connection'
 
 // ============================================================================
@@ -107,6 +108,40 @@ export interface RiskFactors {
   portfolioRiskPct: number
 }
 
+/** LLM enhancement data attached to a decision */
+export interface LlmEnhancement {
+  /** Whether LLM analysis was attempted */
+  used: boolean
+  /** Which provider was used (e.g. 'groq', 'openai') */
+  provider: string | null
+  /** Model used */
+  model: string | null
+  /** Latency in ms */
+  latencyMs: number | null
+  /** LLM's market condition assessment */
+  llmMarketCondition: string | null
+  /** LLM's trend direction */
+  llmTrendDirection: string | null
+  /** LLM's confidence */
+  llmConfidence: number | null
+  /** LLM's recommended action */
+  llmAction: string | null
+  /** LLM's reasoning */
+  llmReasoning: string | null
+  /** Key factors identified by LLM */
+  llmKeyFactors: Array<{ name: string; impact: string; score: number; detail: string }> | null
+  /** LLM's risk assessment */
+  llmRiskAssessment: string | null
+  /** LLM's sentiment bias */
+  llmSentimentBias: string | null
+  /** Raw LLM response */
+  rawResponse: string | null
+  /** Error if LLM failed */
+  error: string | null
+  /** Token usage */
+  usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
+}
+
 /** Complete AI decision output */
 export interface AiDecision {
   symbol: string
@@ -124,6 +159,8 @@ export interface AiDecision {
   timeframe: string
   signalSources: string[]
   volatilityMultiplier: number
+  /** LLM enhancement data (null if no LLM providers configured) */
+  llmEnhancement: LlmEnhancement | null
   createdAt: Date
 }
 
@@ -338,6 +375,48 @@ function defaultRiskFactors(): RiskFactors {
     marginUsagePct: 0,
     openPositions: 0,
     portfolioRiskPct: 0,
+  }
+}
+
+/** Default LLM enhancement (no LLM used) */
+function noLlmEnhancement(): LlmEnhancement {
+  return {
+    used: false,
+    provider: null,
+    model: null,
+    latencyMs: null,
+    llmMarketCondition: null,
+    llmTrendDirection: null,
+    llmConfidence: null,
+    llmAction: null,
+    llmReasoning: null,
+    llmKeyFactors: null,
+    llmRiskAssessment: null,
+    llmSentimentBias: null,
+    rawResponse: null,
+    error: null,
+    usage: null,
+  }
+}
+
+/** Convert LlmAnalysisResult to LlmEnhancement for AiDecision */
+function toLlmEnhancement(result: LlmAnalysisResult): LlmEnhancement {
+  return {
+    used: result.used,
+    provider: result.provider,
+    model: result.model,
+    latencyMs: result.latencyMs,
+    llmMarketCondition: result.marketAnalysis?.marketCondition ?? null,
+    llmTrendDirection: result.marketAnalysis?.trendDirection ?? null,
+    llmConfidence: result.marketAnalysis?.confidence ?? null,
+    llmAction: result.marketAnalysis?.action ?? null,
+    llmReasoning: result.marketAnalysis?.reasoning ?? null,
+    llmKeyFactors: result.marketAnalysis?.keyFactors ?? null,
+    llmRiskAssessment: result.marketAnalysis?.riskAssessment ?? null,
+    llmSentimentBias: result.marketAnalysis?.sentimentBias ?? null,
+    rawResponse: result.rawResponse,
+    error: result.error,
+    usage: result.usage,
   }
 }
 
@@ -1018,6 +1097,7 @@ export async function makeDecision(
     timeframe,
     signalSources: [],
     volatilityMultiplier: 1.0,
+    llmEnhancement: noLlmEnhancement(),
     createdAt: now,
   }
 
@@ -1078,6 +1158,7 @@ export async function makeDecision(
           timeframe,
           signalSources: [],
           volatilityMultiplier: 1.0,
+          llmEnhancement: noLlmEnhancement(),
           createdAt: now,
         }
         return closedDecision
@@ -1173,6 +1254,7 @@ export async function makeDecision(
         timeframe,
         signalSources: buildSignalSources(technicalFactors, newsFactors, sentimentFactors),
         volatilityMultiplier: 1.0,
+        llmEnhancement: noLlmEnhancement(),
         createdAt: now,
       }
       await logDecisionToDb(blockedDecision, riskFactors, sentimentFactors)
@@ -1279,6 +1361,64 @@ export async function makeDecision(
       confidence = calibrateConfidence(confidence, learningState)
     }
 
+    // --- Step 10.8: LLM-Enhanced Analysis ---
+    // If any AI provider is configured and enabled, get LLM perspective
+    let llmEnhancement = noLlmEnhancement()
+    try {
+      const llmAvailable = await isLlmAvailable('market_analysis')
+      if (llmAvailable) {
+        const midPrice = (technicalFactors.supportLevel + technicalFactors.resistanceLevel) / 2 || 0
+        const llmResult = await runLlmMarketAnalysis({
+          symbol,
+          price: midPrice,
+          change: 0,
+          technicalFactors,
+          newsFactors,
+          sentimentFactors,
+        })
+        llmEnhancement = toLlmEnhancement(llmResult)
+
+        // If LLM provided a valid analysis, optionally adjust confidence
+        if (llmResult.used && llmResult.marketAnalysis) {
+          const llmAction = llmResult.marketAnalysis.action
+          const llmConf = llmResult.marketAnalysis.confidence
+
+          // If LLM agrees with our decision, boost confidence slightly
+          if (
+            (decision === 'BUY' && llmAction === 'BUY') ||
+            (decision === 'SELL' && llmAction === 'SELL')
+          ) {
+            confidence = Math.min(95, Math.round(confidence * 1.05))
+          }
+          // If LLM strongly disagrees, reduce confidence
+          else if (
+            (decision === 'BUY' && llmAction === 'SELL') ||
+            (decision === 'SELL' && llmAction === 'BUY')
+          ) {
+            confidence = Math.max(20, Math.round(confidence * 0.85))
+          }
+
+          logger.info('AI_ENGINE', `LLM enhancement for ${symbol}: ${llmResult.provider}/${llmResult.model} (${llmResult.latencyMs}ms) action=${llmAction} conf=${llmConf}`, {
+            symbol,
+            metadata: {
+              llmProvider: llmResult.provider,
+              llmModel: llmResult.model,
+              llmLatencyMs: llmResult.latencyMs,
+              llmAction,
+              llmConfidence: llmConf,
+              originalDecision: decision,
+              adjustedConfidence: confidence,
+            },
+          })
+        }
+      }
+    } catch (err) {
+      logger.warn('AI_ENGINE', `LLM enhancement failed for ${symbol}, continuing without LLM`, {
+        details: err instanceof Error ? err.message : String(err),
+        symbol,
+      })
+    }
+
     const aiDecision: AiDecision = {
       symbol,
       decision,
@@ -1295,6 +1435,7 @@ export async function makeDecision(
       timeframe,
       signalSources,
       volatilityMultiplier,
+      llmEnhancement,
       createdAt: now,
     }
 
@@ -1384,6 +1525,7 @@ export async function makeMultiStrategyDecision(
     timeframe: effectiveTimeframe,
     signalSources: [],
     volatilityMultiplier: 1.0,
+    llmEnhancement: noLlmEnhancement(),
     createdAt: now,
   }
 
@@ -1564,6 +1706,7 @@ export async function makeMultiStrategyDecision(
       timeframe: effectiveTimeframe,
       signalSources: strategies.map((s) => s.id),
       volatilityMultiplier: 1.0,
+      llmEnhancement: noLlmEnhancement(),
       createdAt: now,
     }
 

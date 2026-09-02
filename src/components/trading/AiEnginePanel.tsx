@@ -9,7 +9,7 @@ import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { BrainCircuit, Save, Target, BarChart3, TrendingUp, CheckCircle2, XCircle } from 'lucide-react'
+import { BrainCircuit, Save, Target, BarChart3, TrendingUp, CheckCircle2, XCircle, Sparkles, Wifi, WifiOff, Zap } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface AiConfig {
@@ -45,6 +45,12 @@ interface AccuracyData {
   }
 }
 
+interface LlmStatus {
+  available: boolean
+  activeProviders: string[]
+  taskCoverage: Record<string, boolean>
+}
+
 const DEFAULT_CONFIG: AiConfig = {
   minConfidenceBuy: 65,
   minConfidenceSell: 65,
@@ -57,18 +63,47 @@ const DEFAULT_CONFIG: AiConfig = {
   volatilityScalingEnabled: true,
 }
 
+const PROVIDER_COLORS: Record<string, string> = {
+  groq: 'bg-orange-500',
+  openai: 'bg-emerald-600',
+  together: 'bg-sky-600',
+  tinyfish: 'bg-violet-500',
+  local: 'bg-slate-600',
+}
+
+const PROVIDER_NAMES: Record<string, string> = {
+  groq: 'Groq AI',
+  openai: 'OpenAI',
+  together: 'Together.ai',
+  tinyfish: 'Tinyfish.ai',
+  local: 'Ollama (Lokal)',
+}
+
+const TASK_LABELS: Record<string, string> = {
+  market_analysis: 'Analisis Pasar',
+  sentiment_analysis: 'Analisis Sentimen',
+  news_summary: 'Ringkasan Berita',
+  strategy_suggestion: 'Saran Strategi',
+  risk_assessment: 'Penilaian Risiko',
+}
+
 export default function AiEnginePanel() {
   const [config, setConfig] = useState<AiConfig>(DEFAULT_CONFIG)
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [accuracy, setAccuracy] = useState<AccuracyData | null>(null)
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch('/api/ai/config')
-      if (res.ok) {
-        const json = await res.json()
+      const [configRes, llmRes] = await Promise.all([
+        fetch('/api/ai/config'),
+        fetch('/api/ai/enhanced').catch(() => null),
+      ])
+
+      if (configRes.ok) {
+        const json = await configRes.json()
         if (json.data) {
           setConfig(prev => ({
             ...prev,
@@ -84,6 +119,13 @@ export default function AiEnginePanel() {
           }))
           setStrategies(json.data.strategies ?? [])
           setAccuracy(json.data.accuracy ?? null)
+        }
+      }
+
+      if (llmRes?.ok) {
+        const llmJson = await llmRes.json()
+        if (llmJson.data) {
+          setLlmStatus(llmJson.data)
         }
       }
     } catch {
@@ -142,12 +184,82 @@ export default function AiEnginePanel() {
 
   return (
     <div className="space-y-6">
+      {/* LLM Provider Status Banner */}
+      {llmStatus && (
+        <Card className={llmStatus.available ? 'border-emerald-200 bg-emerald-50/30 dark:border-emerald-900 dark:bg-emerald-950/20' : 'border-amber-200 bg-amber-50/30 dark:border-amber-900 dark:bg-amber-950/20'}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-semibold flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-violet-500" />
+              Status Provider LLM
+              {llmStatus.available ? (
+                <Badge className="ml-auto bg-emerald-600 text-white text-[10px] gap-1">
+                  <Wifi className="h-3 w-3" />
+                  {llmStatus.activeProviders.length} Aktif
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="ml-auto text-[10px] gap-1">
+                  <WifiOff className="h-3 w-3" />
+                  Belum Dikonfigurasi
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {/* Active Providers */}
+            {llmStatus.available && (
+              <div className="flex flex-wrap gap-2">
+                {llmStatus.activeProviders.map(pid => (
+                  <Badge key={pid} className="text-[10px] gap-1.5">
+                    <div className={`h-2.5 w-2.5 rounded-full ${PROVIDER_COLORS[pid] || 'bg-gray-400'}`} />
+                    {PROVIDER_NAMES[pid] || pid}
+                  </Badge>
+                ))}
+              </div>
+            )}
+
+            {/* Task Coverage */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+              {Object.entries(TASK_LABELS).map(([task, label]) => {
+                const covered = llmStatus.taskCoverage[task]
+                return (
+                  <div
+                    key={task}
+                    className={
+                      'flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[10px] border ' +
+                      (covered
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300'
+                        : 'border-border text-muted-foreground')
+                    }
+                  >
+                    {covered ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
+                    {label}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* Info message when no providers configured */}
+            {!llmStatus.available && (
+              <p className="text-[11px] text-muted-foreground">
+                Belum ada provider LLM yang aktif. Buka <strong>Provider AI</strong> di bawah untuk mengkonfigurasi Groq, OpenAI, Together.ai, Tinyfish.ai, atau Ollama lokal.
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Konfigurasi AI */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <BrainCircuit className="h-4 w-4 text-violet-500" />
             Konfigurasi AI Engine
+            {llmStatus?.available && (
+              <Badge variant="outline" className="ml-auto text-[10px] gap-1 text-violet-600 border-violet-300">
+                <Zap className="h-3 w-3" />
+                LLM Enhanced
+              </Badge>
+            )}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
@@ -358,7 +470,6 @@ function StatCard({ label, value, color }: { label: string; value: string | numb
 
 function CalibrationCard({ tier, count, winRate }: { tier: string; count: number; winRate: number }) {
   const wrPct = winRate * 100
-  const color = wrPct >= 55 ? 'bg-emerald-500' : wrPct >= 45 ? 'bg-amber-500' : 'bg-red-500'
   return (
     <div className="p-3 rounded-lg border space-y-2">
       <div className="flex items-center justify-between">

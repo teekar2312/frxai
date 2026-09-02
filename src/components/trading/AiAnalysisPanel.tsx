@@ -21,6 +21,8 @@ import {
   ShieldAlert,
   BarChart3,
   Lock,
+  Sparkles,
+  Timer,
 } from 'lucide-react'
 
 type MarketCondition = 'TRENDING' | 'RANGE_BOUND' | 'HIGH_VOLATILITY' | 'LOW_VOLATILITY'
@@ -160,6 +162,19 @@ export default function AiAnalysisPanel() {
   const [deciding, setDeciding] = useState(false)
   const [decisionHistory, setDecisionHistory] = useState<DecisionLog[]>([])
   const [accuracy, setAccuracy] = useState<{ totalDecisions: number; winRate: number; avgConfidence: number } | null>(null)
+  const [lastLlmEnhancement, setLastLlmEnhancement] = useState<{
+    used: boolean
+    provider: string | null
+    model: string | null
+    latencyMs: number | null
+    llmAction: string | null
+    llmConfidence: number | null
+    llmReasoning: string | null
+    llmKeyFactors: Array<{ name: string; impact: string; score: number; detail: string }> | null
+    llmRiskAssessment: string | null
+    error: string | null
+    usage: { promptTokens: number; completionTokens: number; totalTokens: number } | null
+  } | null>(null)
 
   const fetchAnalysis = useCallback(async () => {
     try {
@@ -222,7 +237,7 @@ export default function AiAnalysisPanel() {
   const handleMakeDecision = async () => {
     setDeciding(true)
     try {
-      const res = await fetch('/api/ai/decide', {
+      const res = await fetch('/api/ai/enhanced', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ symbol: selectedSymbol }),
@@ -230,6 +245,23 @@ export default function AiAnalysisPanel() {
       if (res.ok) {
         const json = await res.json()
         if (json.success) {
+          // Store LLM enhancement data
+          if (json.data?.llmEnhancement) {
+            const llm = json.data.llmEnhancement
+            setLastLlmEnhancement({
+              used: llm.used,
+              provider: llm.provider,
+              model: llm.model,
+              latencyMs: llm.latencyMs,
+              llmAction: llm.llmAction,
+              llmConfidence: llm.llmConfidence,
+              llmReasoning: llm.llmReasoning,
+              llmKeyFactors: llm.llmKeyFactors,
+              llmRiskAssessment: llm.llmRiskAssessment,
+              error: llm.error,
+              usage: llm.usage,
+            })
+          }
           await fetchDecisionHistory()
           await fetchAccuracy()
         }
@@ -341,8 +373,8 @@ export default function AiAnalysisPanel() {
               ))}
             </div>
             <Button size="sm" onClick={handleMakeDecision} disabled={deciding} className="gap-1.5 h-7 shrink-0">
-              <BrainCircuit className={`h-3 w-3 ${deciding ? 'animate-pulse' : ''}`} />
-              {deciding ? 'Deciding...' : 'Decide'}
+              <Sparkles className={`h-3 w-3 ${deciding ? 'animate-pulse' : ''}`} />
+              {deciding ? 'Analyzing...' : 'AI Analyze'}
             </Button>
           </div>
 
@@ -411,6 +443,83 @@ export default function AiAnalysisPanel() {
                 {decisionHistory[0].strategyUsed && <span>Strategy: {decisionHistory[0].strategyUsed}</span>}
                 <span>{new Date(decisionHistory[0].createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
+
+              {/* LLM Enhancement Section */}
+              {lastLlmEnhancement && (
+                <div className={
+                  'rounded-lg border p-3 space-y-2 ' +
+                  (lastLlmEnhancement.used
+                    ? 'border-violet-200 bg-violet-50/30 dark:border-violet-800 dark:bg-violet-950/20'
+                    : 'border-border')
+                }>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className={"h-3.5 w-3.5 " + (lastLlmEnhancement.used ? "text-violet-500" : "text-muted-foreground")} />
+                    <span className="text-xs font-semibold">LLM Analysis</span>
+                    {lastLlmEnhancement.used && lastLlmEnhancement.provider && (
+                      <Badge variant="outline" className="text-[10px] h-5 gap-1">
+                        {lastLlmEnhancement.provider}
+                        {lastLlmEnhancement.model && <span className="text-muted-foreground">/ {lastLlmEnhancement.model.split('/').pop()}</span>}
+                      </Badge>
+                    )}
+                    {lastLlmEnhancement.used && lastLlmEnhancement.latencyMs != null && (
+                      <span className="text-[10px] text-muted-foreground flex items-center gap-0.5">
+                        <Timer className="h-2.5 w-2.5" />{lastLlmEnhancement.latencyMs}ms
+                      </span>
+                    )}
+                    {lastLlmEnhancement.used && lastLlmEnhancement.llmAction && (
+                      <Badge className={
+                        'text-[10px] h-5 ml-auto ' +
+                        (lastLlmEnhancement.llmAction === 'BUY' ? 'bg-emerald-600' : lastLlmEnhancement.llmAction === 'SELL' ? 'bg-red-600' : 'bg-slate-600')
+                      }>
+                        LLM: {lastLlmEnhancement.llmAction}
+                        {lastLlmEnhancement.llmConfidence != null && ` (${lastLlmEnhancement.llmConfidence}%)`}
+                      </Badge>
+                    )}
+                  </div>
+
+                  {/* LLM Key Factors */}
+                  {lastLlmEnhancement.used && lastLlmEnhancement.llmKeyFactors && lastLlmEnhancement.llmKeyFactors.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {lastLlmEnhancement.llmKeyFactors.map((f, i) => (
+                        <div key={i} className="flex items-center gap-2 text-[11px]">
+                          <span className={
+                            'h-1.5 w-1.5 rounded-full shrink-0 ' +
+                            (f.impact === 'POSITIVE' ? 'bg-emerald-500' : f.impact === 'NEGATIVE' ? 'bg-red-500' : 'bg-amber-500')
+                          } />
+                          <span className="font-medium truncate">{f.name}</span>
+                          <span className="text-muted-foreground truncate">{f.detail}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* LLM Reasoning */}
+                  {lastLlmEnhancement.used && lastLlmEnhancement.llmReasoning && (
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">{lastLlmEnhancement.llmReasoning}</p>
+                  )}
+
+                  {/* LLM Risk Assessment */}
+                  {lastLlmEnhancement.used && lastLlmEnhancement.llmRiskAssessment && (
+                    <p className="text-[11px] text-muted-foreground">
+                      <span className="font-medium">Risk:</span> {lastLlmEnhancement.llmRiskAssessment}
+                    </p>
+                  )}
+
+                  {/* Token Usage */}
+                  {lastLlmEnhancement.used && lastLlmEnhancement.usage && (
+                    <div className="flex gap-3 text-[10px] text-muted-foreground">
+                      <span>Prompt: {lastLlmEnhancement.usage.promptTokens}</span>
+                      <span>Completion: {lastLlmEnhancement.usage.completionTokens}</span>
+                      <span>Total: {lastLlmEnhancement.usage.totalTokens}</span>
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {!lastLlmEnhancement.used && lastLlmEnhancement.error && (
+                    <p className="text-[11px] text-amber-600">LLM tidak tersedia: {lastLlmEnhancement.error}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

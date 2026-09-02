@@ -2643,3 +2643,32 @@ Stage Summary:
 - Overlap bonus quality scores (+5/+10/+15) only apply when the user has enabled the overlap
 - Config persists in SystemConfig table with key __trading_session_config__
 
+---
+
+---
+Task ID: 1
+Agent: Main
+Task: Build complete AI engine + MT5 integration, push to repository
+
+Work Log:
+- Audited existing codebase: AI engine (3200 LOC, complete), MT5 connection (2019 LOC, complete), trade execution engine (2532 LOC, complete), risk engine (1815 LOC, complete), indicator pool (1785 LOC, all 7 strategies implemented)
+- Identified critical gap: no auto-trading loop connecting AI decisions to trade execution
+- Identified missing MT5 bridge functions: modifyPositionAtBridge, getSymbolSpecFromBridge
+- Identified missing API routes: auto-trading control, real trade execution, position sync, AI config, order modification
+- Identified missing frontend: AI Engine Control Panel, Auto-Trading Dashboard
+
+- Added modifyPositionAtBridge() and getSymbolSpecFromBridge() to mt5-connection.ts
+- Created src/lib/auto-trading-loop.ts (~680 LOC): server-side singleton scheduler
+- Created 5 new API routes: /api/auto-trading, /api/trades/execute, /api/execution/modify, /api/execution/sync, /api/ai/config
+- Created AiEnginePanel.tsx: AI config, strategy list, accuracy dashboard
+- Created AutoTradingDashboard.tsx: loop status, config, scan activity, broker sync
+- Added Auto Trading tab to main navigation in page.tsx
+- Fixed pre-existing SWC parse error in ai-decision-engine.ts (line 1510 indentation)
+
+Stage Summary:
+- Commit b9ca66a pushed to origin/main
+- 11 files changed, 2176 insertions, 7 deletions
+- AI engine was already complete (all 7 strategies, multi-strategy consensus, self-learning, decision accuracy tracking)
+- MT5 connection was already complete (order execution with retry, position sync, circuit breaker)
+- The missing piece was the auto-trading ORCHESTRATOR that connects AI decisions to trade execution
+- Now the system can: configure AI parameters, start/stop auto-trading loop, view real-time scan activity, sync broker positions, modify orders

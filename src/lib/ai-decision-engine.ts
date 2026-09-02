@@ -1507,13 +1507,14 @@ export async function makeMultiStrategyDecision(
         confidence: finalConfidence,
         primaryStrategy,
         strategiesRun: strategies.length,
-      breakdown: breakdowns.map((b) => ({
-        id: b.strategyId,
-        signal: b.signal,
-        confidence: b.confidence,
-        weight: b.weight,
-        weightedScore: +b.weightedScore.toFixed(3),
-      })),
+        breakdown: breakdowns.map((b) => ({
+          id: b.strategyId,
+          signal: b.signal,
+          confidence: b.confidence,
+          weight: b.weight,
+          weightedScore: +b.weightedScore.toFixed(3),
+        })),
+      },
     })
 
     // Compute basic technical factors from candles for the AiDecision shape

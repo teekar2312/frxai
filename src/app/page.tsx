@@ -23,6 +23,7 @@ import {
   AlertCircle,
   Clock,
   History,
+  Zap,
 } from 'lucide-react'
 import AccountSummary from '@/components/trading/AccountSummary'
 import StockWatchlist from '@/components/trading/StockWatchlist'
@@ -39,12 +40,15 @@ import LogViewer from '@/components/trading/LogViewer'
 import AuditCompliance from '@/components/trading/AuditCompliance'
 import TradeHistory from '@/components/trading/TradeHistory'
 import SentimentFilter from '@/components/trading/SentimentFilter'
+import AiEnginePanel from '@/components/trading/AiEnginePanel'
+import AutoTradingDashboard from '@/components/trading/AutoTradingDashboard'
 import { useLiveNotifications } from '@/lib/notification-hooks'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'trading', label: 'Live Trading', icon: LineChart },
   { id: 'ai', label: 'AI & Sentiment', icon: BrainCircuit },
+  { id: 'auto-trading', label: 'Auto Trading', icon: Zap },
   { id: 'strategies', label: 'Strategies', icon: Cpu },
   { id: 'risk', label: 'Risk & Money', icon: Shield },
   { id: 'news', label: 'News', icon: Newspaper },
@@ -244,7 +248,12 @@ export default function TradingDashboard() {
 
           <TabsContent value="ai" className="space-y-6">
             <AiAnalysisPanel />
+            <AiEnginePanel />
             <SentimentFilter />
+          </TabsContent>
+
+          <TabsContent value="auto-trading" className="space-y-6">
+            <AutoTradingDashboard />
           </TabsContent>
 
           <TabsContent value="strategies" className="space-y-6">

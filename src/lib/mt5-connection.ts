@@ -2013,6 +2013,24 @@ export async function getPositionsFromBridge(): Promise<Array<Record<string, unk
   return bridgeRequest('/positions')
 }
 
+/** Modify SL/TP on an existing position via the MT5 bridge */
+export async function modifyPositionAtBridge(params: {
+  ticket: string
+  symbol?: string
+  sl?: number
+  tp?: number
+}): Promise<{ success: boolean; error?: string; mt5ErrorCode?: number }> {
+  return bridgeRequest('/modify', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  })
+}
+
+/** Get symbol specification from the MT5 bridge */
+export async function getSymbolSpecFromBridge(symbol: string): Promise<Record<string, unknown>> {
+  return bridgeRequest(`/symbol-spec?symbol=${encodeURIComponent(symbol)}`)
+}
+
 // ---- Singleton instance ----
 const mt5Connection = new Mt5ConnectionManager()
 export default mt5Connection

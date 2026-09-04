@@ -1,0 +1,5 @@
+# MT5 Bridge (real implementation) — pinned current stable majors.
+# NOTE: the MetaTrader5 package is Windows-only (it needs a local MT5 terminal).
+MetaTrader5==5.0.45
+fastapi>=0.110
+uvicorn>=0.29

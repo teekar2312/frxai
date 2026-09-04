@@ -75,10 +75,12 @@ FINEX AI Trader adalah sistem trading otomatis yang terintegrasi dengan broker *
 
 | Fitur | Deskripsi |
 |-------|----------|
-| **MT5 Integration** | MetaTrader 5 via Python bridge |
+| **MT5 Integration** | HTTP bridge kontrak-tetap: **dev/demo** = simulator TypeScript (`mini-services/mt5-bridge`), **produksi** = bridge Python nyata (`python-bridge/`, library resmi MetaTrader5). Swap tanpa perubahan aplikasi |
+| **Execution Lock** | Mutex global — serialisasi risk-check → order-write (race condition guard) |
 | **Async Mutex** | Serialisasi semua MT5 API calls (thread-safety) |
 | **Circuit Breaker** | Auto-reconnect dengan exponential backoff (1s → 30s) |
 | **Error Code Mapping** | MT5 codes 10004-10036 dengan auto-remediation |
+| **Secrets at Rest** | AES-256-GCM untuk botToken/webhookUrl notifikasi di DB |
 
 ---
 
@@ -265,6 +267,14 @@ frxai/
 │   └── seed.ts                # Seed data
 ├── db/
 │   └── custom.db              # SQLite database
+├── python-bridge/             # PRODUCTION MT5 bridge (Python + MetaTrader5, Windows)
+│   ├── mt5_bridge.py          # FastAPI server — kontrak HTTP identik dengan simulator
+│   ├── requirements.txt       # MetaTrader5, fastapi, uvicorn
+│   └── README.md              # Panduan deploy & swap
+├── mini-services/
+│   └── mt5-bridge/            # DEV/DEMO bridge — simulator TypeScript (Bun)
+│       ├── index.ts           # Simulasi broker: harga random-walk, order fill fake
+│       └── supervisor.ts      # Watchdog auto-respawn (probe /heartbeat 5s)
 ├── src/
 │   ├── app/
 │   │   ├── layout.tsx            # Root layout

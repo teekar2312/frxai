@@ -56,8 +56,14 @@ async function checkMt5Bridge(): Promise<ComponentCheck> {
 function checkMemory(): ComponentCheck {
   const mem = process.memoryUsage()
   const rssMb = mem.rss / 1048576
-  // 1.5 GB soft threshold — unhealthy beyond
-  return { ok: rssMb < 1536, detail: `rss=${Math.round(rssMb)}MB heap=${Math.round(mem.heapUsed / 1048576)}MB` }
+  const heapMb = mem.heapUsed / 1048576
+  // Primary metric: heap usage (actual JS allocation pressure). rss includes
+  // shared libraries, JIT caches and source maps and over-reports in dev —
+  // the old rss-only check (threshold 1.5GB) kept status DEGRADED while the
+  // heap sat at ~230MB. rss is kept as a secondary blowout guard at 2GB.
+  const heapOk = heapMb < 1024
+  const rssOk = rssMb < 2048
+  return { ok: heapOk && rssOk, detail: `heap=${Math.round(heapMb)}MB rss=${Math.round(rssMb)}MB` }
 }
 
 function checkDisk(): ComponentCheck {

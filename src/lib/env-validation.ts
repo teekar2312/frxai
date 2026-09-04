@@ -128,6 +128,11 @@ export const EnvSchema = z.object({
   ),
   NOTIFY_RATE_PER_MIN: intFromString(20, 1, 60),
   NOTIFY_RATE_PER_HOUR: intFromString(100, 1, 3_600),
+  // AES-256-GCM key for encrypting NotificationConfig secrets at rest
+  // (botToken/webhookUrl). 32 bytes as 64-char hex or 44-char base64.
+  // Parsed leniently in src/lib/secret-crypto.ts — missing/invalid never
+  // blocks startup (dev fallback key + one-time warning).
+  NOTIFICATION_ENCRYPTION_KEY: z.string().optional(),
 
   // --- Metrics / health ---
   METRICS_ENABLED: z.preprocess(

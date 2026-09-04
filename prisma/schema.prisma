@@ -332,9 +332,9 @@ model NotificationConfig {
   id          String   @id @default(cuid())
   channel     String   @unique // TELEGRAM, DISCORD
   enabled     Boolean  @default(false)
-  botToken    String?  // Telegram bot token (encrypted at rest in production)
+  botToken    String?  // Telegram bot token — AES-256-GCM encrypted at rest (enc:v1: envelope, src/lib/secret-crypto.ts)
   chatId      String?  // Telegram chat id
-  webhookUrl  String?  // Discord webhook URL
+  webhookUrl  String?  // Discord webhook URL — AES-256-GCM encrypted at rest (enc:v1: envelope, src/lib/secret-crypto.ts)
   minSeverity String   @default("WARN") // Minimum severity to notify: INFO, WARN, ERROR, CRITICAL
   events      String   @default("[\"RISK_EVENT\",\"CIRCUIT_BREAKER\",\"TRADE_CLOSED\"]") // JSON: event types
   rateLimitPerMin   Int @default(20)

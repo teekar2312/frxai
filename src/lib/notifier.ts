@@ -17,6 +17,11 @@
  *   env creds (TELEGRAM_BOT_TOKEN/CHAT_ID, DISCORD_WEBHOOK_URL)
  *   → NotificationConfig DB rows (enable/disable, filters, budgets)
  *
+ * Secrets stored in NotificationConfig rows (botToken, webhookUrl) are
+ * AES-256-GCM encrypted at rest via src/lib/secret-crypto.ts:
+ *   - updateChannelConfig encrypts BEFORE persisting
+ *   - resolveChannelConfig decrypts at load (legacy plaintext passes through)
+ *
  * All dispatch is fire-and-forget from producers' perspective:
  * notify() never throws — failures land in NotificationLog + logger.
  */
@@ -26,6 +31,7 @@ import { env } from './env-validation'
 import { getConfig } from './app-config'
 import { retry, isTransientError } from './retry'
 import logger, { LogCategory } from './trading-logger'
+import { decryptSecret, encryptSecret } from './secret-crypto'
 
 // ============================================
 // TYPES
@@ -66,6 +72,8 @@ export interface NotificationDispatchResult {
 export interface ChannelRuntimeConfig {
   enabled: boolean
   target: string
+  /** Decrypted Telegram bot token from NotificationConfig (env token takes precedence). */
+  botToken?: string
   minSeverity: NotificationSeverity
   events: NotificationEventType[] | 'ALL'
   ratePerMin: number
@@ -112,9 +120,16 @@ async function resolveChannelConfig(channel: NotificationChannel): Promise<Chann
   }
 
   // Database layer overrides (NotificationConfig row)
+  // Secrets at rest: botToken/webhookUrl are stored AES-256-GCM encrypted
+  // (enc:v1: envelope) — decrypt at load; legacy plaintext rows pass
+  // through decryptSecret unchanged (wrong key / tamper → '' → channel unusable).
+  let rowBotToken: string | null = null
+  let rowWebhookUrl: string | null = null
   try {
     const row = await db.notificationConfig.findUnique({ where: { channel } })
     if (row) {
+      if (row.botToken) rowBotToken = decryptSecret(row.botToken)
+      if (row.webhookUrl) rowWebhookUrl = decryptSecret(row.webhookUrl)
       enabled = row.enabled
       minSeverity = row.minSeverity as NotificationSeverity
       if (row.events) {
@@ -130,7 +145,7 @@ async function resolveChannelConfig(channel: NotificationChannel): Promise<Chann
         enabled = false
       }
       if (channel === 'TELEGRAM' && row.chatId && !target) target = row.chatId
-      if (channel === 'DISCORD' && row.webhookUrl && !target) target = row.webhookUrl
+      if (channel === 'DISCORD' && rowWebhookUrl && !target) target = rowWebhookUrl
     }
   } catch (err) {
     logger.warn('NOTIFICATION' as LogCategory, `notifier: DB config load failed for ${channel}`, {
@@ -142,7 +157,7 @@ async function resolveChannelConfig(channel: NotificationChannel): Promise<Chann
   if (masterEnabled === true && target) enabled = true
 
   if (!enabled || !target) return null
-  return { enabled, target, minSeverity, events, ratePerMin, ratePerHour }
+  return { enabled, target, botToken: rowBotToken ?? undefined, minSeverity, events, ratePerMin, ratePerHour }
 }
 
 // ============================================
@@ -250,8 +265,9 @@ export function formatNotification(payload: NotificationPayload): FormattedMessa
 // TRANSPORTS (with retry on transient failures)
 // ============================================
 
-async function sendTelegram(target: string, text: string, parseMode: 'HTML'): Promise<void> {
-  const token = env().TELEGRAM_BOT_TOKEN
+async function sendTelegram(target: string, text: string, parseMode: 'HTML', dbToken?: string): Promise<void> {
+  // env credential wins; decrypted NotificationConfig.botToken is the fallback
+  const token = env().TELEGRAM_BOT_TOKEN || dbToken
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN missing')
   await retry(
     async () => {
@@ -373,7 +389,7 @@ export async function notify(payload: NotificationPayload): Promise<Notification
       let attempts = 0
       try {
         if (channel === 'TELEGRAM') {
-          await sendTelegram(cfg.target, formatted.telegram.text, formatted.telegram.parseMode)
+          await sendTelegram(cfg.target, formatted.telegram.text, formatted.telegram.parseMode, cfg.botToken)
         } else {
           await sendDiscord(cfg.target, formatted.discord)
         }
@@ -413,7 +429,11 @@ export function notifyAsync(payload: NotificationPayload): void {
 // CONFIG API HELPERS
 // ============================================
 
-/** Upsert channel config (admin UI). */
+/**
+ * Upsert channel config (admin UI).
+ * botToken and webhookUrl are AES-256-GCM encrypted (src/lib/secret-crypto.ts)
+ * BEFORE persisting — plaintext never reaches the database.
+ */
 export async function updateChannelConfig(
   channel: NotificationChannel,
   patch: Partial<{ enabled: boolean; chatId: string; webhookUrl: string; botToken: string; minSeverity: string; events: string[] }>
@@ -422,8 +442,8 @@ export async function updateChannelConfig(
     const data: Record<string, unknown> = {}
     if (patch.enabled !== undefined) data.enabled = patch.enabled
     if (patch.chatId !== undefined) data.chatId = patch.chatId
-    if (patch.webhookUrl !== undefined) data.webhookUrl = patch.webhookUrl
-    if (patch.botToken !== undefined) data.botToken = patch.botToken
+    if (patch.webhookUrl !== undefined) data.webhookUrl = encryptSecret(patch.webhookUrl)
+    if (patch.botToken !== undefined) data.botToken = encryptSecret(patch.botToken)
     if (patch.minSeverity !== undefined) data.minSeverity = patch.minSeverity
     if (patch.events !== undefined) data.events = JSON.stringify(patch.events)
     if (Object.keys(data).length === 0) return { ok: false, error: 'No fields to update' }

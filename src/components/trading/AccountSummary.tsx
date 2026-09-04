@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Wallet,
@@ -58,70 +58,39 @@ function formatCurrency(value: number): string {
 }
 
 export default function AccountSummary({ isMarketOpen }: { isMarketOpen: boolean }) {
-  const [data, setData] = useState<AccountData>(defaultData)
-  const [loading, setLoading] = useState(true)
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const abortRef = useRef<AbortController | null>(null)
-
-  const fetchData = useCallback(async (active: boolean) => {
-    if (!active) return
-    try {
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-      const accountRes = await fetch('/api/account', { signal: controller.signal })
-
-      if (!active) return
-      // Process account data
-      if (accountRes.ok) {
-        const json = await accountRes.json()
-        const d = json.data ?? json
-        setData({
-          balance: d.balance ?? 0,
-          equity: d.equity ?? 0,
-          marginUsed: d.marginUsed ?? 0,
-          freeMargin: d.freeMargin ?? 0,
-          marginLevel: d.marginLevel ?? 0,
-          dailyPnL: d.dailyPnl ?? 0,
-          openPositions: d.openPositions ?? 0,
-          totalTradesToday: d.totalTradesToday ?? 0,
-          winRate: d.winRate ?? 0,
-          winRateToday: d.winRateToday ?? 0,
-          hasRealData: d.hasRealData ?? false,
-          leverage: d.leverage ?? '1:25',
-          spreadFrom: d.spread?.replace(/^from\s+/i, '') ?? d.spreadFrom?.replace(/^from\s+/i, '') ?? '0.5 pip',
-          commission: d.commission ?? '$1/lot',
-        })
+  // Centralised poll — 10s during market hours, 60s outside (the interval is
+  // a dep of the polling effect, so it re-arms when the session flips;
+  // replaces the old setTimeout recursion). The field-by-field normalization
+  // below is the verbatim guard chain from the hand-rolled fetch, so a
+  // malformed payload degrades to defaults instead of crashing render.
+  const { data: fetched, loading } = useApiQuery<AccountData>({
+    url: '/api/account',
+    intervalMs: isMarketOpen ? 10_000 : 60_000,
+    transform: (json) => {
+      const d = ((json as { data?: unknown }).data ?? json) as Partial<AccountData> & {
+        dailyPnl?: number
+        spread?: string
       }
-    } catch {
-      // Keep previous data on error
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+      return {
+        balance: d.balance ?? 0,
+        equity: d.equity ?? 0,
+        marginUsed: d.marginUsed ?? 0,
+        freeMargin: d.freeMargin ?? 0,
+        marginLevel: d.marginLevel ?? 0,
+        dailyPnL: d.dailyPnl ?? 0,
+        openPositions: d.openPositions ?? 0,
+        totalTradesToday: d.totalTradesToday ?? 0,
+        winRate: d.winRate ?? 0,
+        winRateToday: d.winRateToday ?? 0,
+        hasRealData: d.hasRealData ?? false,
+        leverage: d.leverage ?? '1:25',
+        spreadFrom: d.spread?.replace(/^from\s+/i, '') ?? d.spreadFrom?.replace(/^from\s+/i, '') ?? '0.5 pip',
+        commission: d.commission ?? '$1/lot',
+      }
+    },
+  })
 
-  // Smart polling: 10s during market hours, 60s outside
-  useEffect(() => {
-    let active = true
-
-    const scheduleNext = () => {
-      const delay = isMarketOpen ? 10000 : 60000
-      timerRef.current = setTimeout(async () => {
-        if (!active) return
-        await fetchData(active)
-        scheduleNext()
-      }, delay)
-    }
-
-    // Initial fetch
-    fetchData(active).then(() => scheduleNext())
-
-    return () => {
-      active = false
-      abortRef.current?.abort()
-      if (timerRef.current) clearTimeout(timerRef.current)
-    }
-  }, [fetchData, isMarketOpen])
+  const data = fetched ?? defaultData
 
   const isProfit = data.dailyPnL >= 0
   const isMarginLow = data.marginLevel > 0 && data.marginLevel < 150

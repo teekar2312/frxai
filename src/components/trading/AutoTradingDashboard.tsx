@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useState } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -99,15 +100,11 @@ const SCAN_INTERVALS = [
 ]
 
 export default function AutoTradingDashboard() {
-  const [status, setStatus] = useState<AutoTradingStatus | null>(null)
-  const [recentScans, setRecentScans] = useState<ScanResult[]>([])
-  const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [configOpen, setConfigOpen] = useState(false)
   const [watchlistOpen, setWatchlistOpen] = useState(false)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Local config state
   const [mode, setMode] = useState<'SINGLE_STRATEGY' | 'MULTI_STRATEGY'>('MULTI_STRATEGY')
@@ -117,39 +114,41 @@ export default function AutoTradingDashboard() {
   const [watchlist, setWatchlist] = useState<string[]>(['BBRI', 'BBCA', 'BMRI', 'TLKM', 'ASII', 'ANTM'])
   const [adaptiveLearning, setAdaptiveLearning] = useState(true)
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/auto-trading')
-      if (res.ok) {
-        const json = await res.json()
-        setStatus(json.data?.status ?? json.data)
-        setRecentScans(json.data?.recentScans ?? [])
-
-        // Sync local config from server
-        if (json.data?.config) {
-          const cfg = json.data.config as AutoTradingConfig
-          setMode(cfg.mode)
-          setTimeframe(cfg.timeframe)
-          setScanInterval(cfg.scanIntervalMs)
-          setMaxPositions(cfg.maxOpenPositions)
-          setWatchlist(cfg.watchlist ?? [])
-          setAdaptiveLearning(cfg.adaptiveLearning)
-        }
+  // Centralised 5s poll — abort/stale-guard/visibility-restart handled
+  // generically. `status` + `recentScans` come from one composite transform
+  // (same `json.data?.status ?? json.data` / `?? []` guards as the hand-rolled
+  // fetch); the config-sync side effects run in onJson, outside render.
+  const { data, loading, refresh } = useApiQuery<{
+    status: AutoTradingStatus | null
+    recentScans: ScanResult[]
+  }>({
+    url: '/api/auto-trading',
+    intervalMs: 5_000,
+    transform: (json) => {
+      const d = (
+        json as { data?: AutoTradingStatus & { status?: AutoTradingStatus; recentScans?: ScanResult[] } }
+      ).data
+      return {
+        status: d?.status ?? d ?? null,
+        recentScans: d?.recentScans ?? [],
       }
-    } catch {
-      // use stale
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+    },
+    onJson: (json) => {
+      // Sync local config from server (moved verbatim from fetchStatus)
+      const cfg = (json as { data?: { config?: AutoTradingConfig } }).data?.config
+      if (cfg) {
+        setMode(cfg.mode)
+        setTimeframe(cfg.timeframe)
+        setScanInterval(cfg.scanIntervalMs)
+        setMaxPositions(cfg.maxOpenPositions)
+        setWatchlist(cfg.watchlist ?? [])
+        setAdaptiveLearning(cfg.adaptiveLearning)
+      }
+    },
+  })
 
-  useEffect(() => {
-    fetchStatus()
-    pollRef.current = setInterval(fetchStatus, 5000)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [fetchStatus])
+  const status = data?.status ?? null
+  const recentScans = data?.recentScans ?? []
 
   const handleStart = async () => {
     setStarting(true)
@@ -161,7 +160,7 @@ export default function AutoTradingDashboard() {
       })
       if (res.ok) {
         toast.success('Auto-trading dimulai')
-        fetchStatus()
+        void refresh()
       } else {
         const json = await res.json().catch(() => ({}))
         toast.error(`Gagal memulai: ${json.error || 'Unknown'}`)
@@ -182,7 +181,7 @@ export default function AutoTradingDashboard() {
         body: JSON.stringify({ action: 'stop' }),
       })
       toast.success('Auto-trading dihentikan')
-      fetchStatus()
+      void refresh()
     } catch {
       toast.error('Gagal menghentikan')
     } finally {
@@ -223,7 +222,7 @@ export default function AutoTradingDashboard() {
       if (res.ok) {
         const json = await res.json()
         toast.success(`Sinkronisasi berhasil: ${json.data?.brokerPositionCount ?? 0} posisi`)  
-        fetchStatus()
+        void refresh()
       } else {
         toast.error('Sinkronisasi gagal')
       }

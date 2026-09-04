@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
@@ -164,67 +164,40 @@ interface HaltStatusData {
 }
 
 export default function RiskManagement() {
-  const [data, setData] = useState<RiskData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [haltData, setHaltData] = useState<HaltStatusData | null>(null)
-  const [haltLoading, setHaltLoading] = useState(true)
+  // Two independent polls through the centralised hook — abort/stale-guard/
+  // visibility-restart handled generically. Transforms carry the payload
+  // containment that fixed the "sessionRiskUsedPct.toFixed" crash (b09952f).
+  const { data, loading } = useApiQuery<RiskData>({
+    url: '/api/risk',
+    intervalMs: 10_000,
+    transform: (json) => (json as { data?: RiskData } | null)?.data ?? undefined,
+  })
 
-  const fetchRisk = useCallback(async () => {
-    try {
-      const res = await fetch('/api/risk')
-      if (res.ok) {
-        const json = await res.json()
-        setData(json.data)
+  const { data: haltDataRaw, loading: haltLoading } = useApiQuery<HaltStatusData>({
+    url: '/api/money-management/halt-status',
+    intervalMs: 10_000,
+    transform: (json) => {
+      const raw = (json as { data?: unknown } | null)?.data as Partial<HaltStatusData> | undefined
+      // Normalize: guarantee every field the UI renders exists (bad/old API
+      // shapes degrade to defaults instead of crashing render)
+      if (!raw || typeof raw !== 'object') return undefined // keep stale data
+      return {
+        ...raw,
+        canTrade: raw.canTrade === true,
+        consecutiveLosses: Number(raw.consecutiveLosses) || 0,
+        maxConsecutiveLosses: Number(raw.maxConsecutiveLosses) || 5,
+        sessionPnl: Number(raw.sessionPnl) || 0,
+        sessionPnlLimit: Number(raw.sessionPnlLimit) || 0,
+        sessionRiskUsedPct: Number(raw.sessionRiskUsedPct) || 0,
+        equityCurveStatus:
+          raw.equityCurveStatus === 'BELOW_MA' || raw.equityCurveStatus === 'RECOVERING'
+            ? raw.equityCurveStatus
+            : 'NORMAL',
+        reasons: Array.isArray(raw.reasons) ? raw.reasons : [],
       }
-    } catch {
-      // use stale data
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const fetchHaltStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/money-management/halt-status')
-      if (res.ok) {
-        const json = await res.json()
-        const raw = json?.data as Partial<HaltStatusData> | undefined
-        // Normalize: guarantee every field the UI renders exists (bad/old API
-        // shapes degrade to defaults instead of crashing render)
-        if (raw && typeof raw === 'object') {
-          setHaltData({
-            ...raw,
-            canTrade: raw.canTrade === true,
-            consecutiveLosses: Number(raw.consecutiveLosses) || 0,
-            maxConsecutiveLosses: Number(raw.maxConsecutiveLosses) || 5,
-            sessionPnl: Number(raw.sessionPnl) || 0,
-            sessionPnlLimit: Number(raw.sessionPnlLimit) || 0,
-            sessionRiskUsedPct: Number(raw.sessionRiskUsedPct) || 0,
-            equityCurveStatus:
-              raw.equityCurveStatus === 'BELOW_MA' || raw.equityCurveStatus === 'RECOVERING'
-                ? raw.equityCurveStatus
-                : 'NORMAL',
-            reasons: Array.isArray(raw.reasons) ? raw.reasons : [],
-          })
-        }
-      }
-    } catch {
-      // use stale data
-    } finally {
-      setHaltLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchRisk()
-    fetchHaltStatus()
-    const interval = setInterval(fetchRisk, 10000)
-    const haltInterval = setInterval(fetchHaltStatus, 10000)
-    return () => {
-      clearInterval(interval)
-      clearInterval(haltInterval)
-    }
-  }, [fetchRisk, fetchHaltStatus])
+    },
+  })
+  const haltData = haltDataRaw ?? null
 
   const dailyPnLPct = data ? Math.min(Math.abs(data.dailyPnl / data.dailyLossLimit) * 100, 100) : 0
   const isDailyLoss = data ? data.dailyPnl < 0 : false

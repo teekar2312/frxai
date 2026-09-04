@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState } from 'react'
+import { useApiQuery, extractApiData } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -65,8 +66,6 @@ function formatIDR(value: number): string {
 }
 
 export default function TradingPositions() {
-  const [trades, setTrades] = useState<Trade[]>([])
-  const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
 
   // New trade form state
@@ -79,31 +78,27 @@ export default function TradingPositions() {
   const [newTrailingStop, setNewTrailingStop] = useState(false)
   const [newTrailingDist, setNewTrailingDist] = useState('')
 
-  const fetchTrades = useCallback(async () => {
-    try {
-      const res = await fetch('/api/trades')
-      if (res.ok) {
-        const json = await res.json()
-        setTrades(json.data ?? [])
-      }
-    } catch {
-      // use default
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchTrades()
-    const interval = setInterval(fetchTrades, 5000)
-    return () => clearInterval(interval)
-  }, [fetchTrades])
+  // Centralised 5s poll — abort/stale-guard/visibility-restart handled
+  // generically. Mutations re-sync via refresh() (authoritative server state
+  // instead of hand-rolled optimistic echoes that the 5s poll overwrote anyway).
+  const { data, loading, refresh } = useApiQuery<Trade[]>({
+    url: '/api/trades',
+    intervalMs: 5_000,
+    initialData: [],
+    transform: (json) => {
+      const payload = extractApiData<unknown>(json, null)
+      // Array.isArray guard: a malformed payload keeps stale rows instead of
+      // crashing the table render (same containment class as 3adb99e)
+      return Array.isArray(payload) ? (payload as Trade[]) : undefined
+    },
+  })
+  const trades = data ?? []
 
   const handleCloseTrade = async (id: string) => {
     try {
       const res = await fetch(`/api/trades/${id}`, { method: 'DELETE' })
       if (res.ok) {
-        setTrades((prev) => prev.filter((t) => t.id !== id))
+        void refresh()
       }
     } catch {
       // Keep trade in list on failure
@@ -114,27 +109,19 @@ export default function TradingPositions() {
     const trade = trades.find((t) => t.id === id)
     if (!trade) return
 
-    // Optimistic UI update
-    const newTrailingState = !trade.trailingStop
-    setTrades((prev) =>
-      prev.map((t) =>
-        t.id === id ? { ...t, trailingStop: newTrailingState } : t
-      )
-    )
-
     try {
       await fetch(`/api/trades/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trailingStop: newTrailingState }),
+        body: JSON.stringify({ trailingStop: !trade.trailingStop }),
       })
     } catch {
-      // Revert on failure
-      setTrades((prev) =>
-        prev.map((t) =>
-          t.id === id ? { ...t, trailingStop: !newTrailingState } : t
-        )
-      )
+      // network failure — server truth wins on the next refresh
+    } finally {
+      // Re-sync from the server: authoritative state for both success and
+      // failure (replaces the old optimistic toggle + manual revert, which
+      // the 5s poll overwrote anyway).
+      void refresh()
     }
   }
 
@@ -161,7 +148,7 @@ export default function TradingPositions() {
         setDialogOpen(false)
         resetForm()
         // Re-fetch to get server-side trade with real ID
-        fetchTrades()
+        void refresh()
       } else {
         toast.error('Failed to open trade')
       }

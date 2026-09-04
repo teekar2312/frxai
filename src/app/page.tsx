@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -91,51 +92,35 @@ export default function TradingDashboard() {
       })
     } catch { /* revert on error */ setAutoTrading(!newValue) }
   }, [autoTrading])
-  const [mt5Status, setMt5Status] = useState<string>('DISCONNECTED')
-  const [mt5Latency, setMt5Latency] = useState<number>(0)
-  const [mt5Uptime, setMt5Uptime] = useState<number>(0)
-  const [isMarketOpen, setIsMarketOpen] = useState(false)
-  const [tradingPhase, setTradingPhase] = useState('CLOSED')
-
-  const fetchMt5Status = useCallback(async () => {
-    try {
-      const res = await fetch('/api/mt5/status')
-      if (res.ok) {
-        const json = await res.json()
-        setMt5Status(json.data.status)
-        setMt5Latency(json.data.latencyMs)
-        setMt5Uptime(json.data.uptimeSeconds)
-        setIsMarketOpen(json.data.isMarketOpen)
-        setTradingPhase(json.data.tradingPhase)
+  // Centralised 10s poll for MT5 bridge status (replaces the hand-rolled
+  // interval + visibility plumbing that stacked intervals on tab switches).
+  // isMarketOpen/mt5Status etc. are derived for the whole app shell.
+  const { data: mt5Data } = useApiQuery<{
+    status: string
+    latencyMs: number
+    uptimeSeconds: number
+    isMarketOpen: boolean
+    tradingPhase: string
+  }>({
+    url: '/api/mt5/status',
+    intervalMs: 10_000,
+    transform: (json) => {
+      const d = (json as { data?: Record<string, unknown> } | null)?.data
+      if (!d || typeof d !== 'object') return undefined // keep stale data
+      return {
+        status: typeof d.status === 'string' ? d.status : 'DISCONNECTED',
+        latencyMs: Number(d.latencyMs) || 0,
+        uptimeSeconds: Number(d.uptimeSeconds) || 0,
+        isMarketOpen: d.isMarketOpen === true,
+        tradingPhase: typeof d.tradingPhase === 'string' ? d.tradingPhase : 'CLOSED',
       }
-    } catch { /* stale */ }
-  }, [])
-
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>
-    const startPolling = () => {
-      fetchMt5Status()
-      interval = setInterval(fetchMt5Status, 10000)
-    }
-    const stopPolling = () => {
-      clearInterval(interval)
-    }
-
-    const handleVisibility = () => {
-      if (document.hidden) {
-        stopPolling()
-      } else {
-        startPolling()
-      }
-    }
-
-    startPolling()
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      stopPolling()
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [fetchMt5Status])
+    },
+  })
+  const mt5Status = mt5Data?.status ?? 'DISCONNECTED'
+  const mt5Latency = mt5Data?.latencyMs ?? 0
+  const mt5Uptime = mt5Data?.uptimeSeconds ?? 0
+  const isMarketOpen = mt5Data?.isMarketOpen ?? false
+  const tradingPhase = mt5Data?.tradingPhase ?? 'CLOSED'
 
   const isConnected = mt5Status === 'CONNECTED'
   const isDegraded = mt5Status === 'DEGRADED'

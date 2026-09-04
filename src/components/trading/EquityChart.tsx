@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
+import { useState, useMemo } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { TrendingUp, TrendingDown, DollarSign, Mountain, ArrowDownToLine, BarChart3 } from 'lucide-react'
@@ -40,40 +41,26 @@ interface EquityChartProps {
 
 export default function EquityChart({ isMarketOpen }: EquityChartProps) {
   const [timeRange, setTimeRange] = useState<TimeRange>('1M')
-  const [data, setData] = useState<EquityDataPoint[]>([])
-  const [loading, setLoading] = useState(true)
-  const abortRef = useRef<AbortController | null>(null)
 
-  const fetchEquityData = useCallback((range: TimeRange, _open: boolean) => {
-    abortRef.current?.abort()
-    const controller = new AbortController()
-    abortRef.current = controller
-    fetch(`/api/account/equity-curve?range=${range}`, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error('Failed to fetch')
-        return res.json()
-      })
-      .then((json) => {
-        setData(json.data ?? [])
-        setLoading(false)
-      })
-      .catch((err) => {
-        if (err.name !== 'AbortError') {
-          setData([])
-          setLoading(false)
-        }
-      })
-  }, [])
+  // Centralised poll — 60s during market hours, 5min outside (the interval is
+  // a dep of the polling effect, so it re-arms when the session flips; the
+  // old fetchEquityData(range, _open) range argument now rides the url — the
+  // hook refetches when the url changes). Abort/stale-guard/visibility-
+  // restart handled generically. `data` is the hook payload coalesced to a
+  // plain array so the stats/yDomain memos and render keep their shape.
+  const { data: fetched, loading } = useApiQuery<EquityDataPoint[]>({
+    url: `/api/account/equity-curve?range=${timeRange}`,
+    intervalMs: isMarketOpen === true ? 60_000 : 300_000,
+    initialData: [],
+    transform: (json) => {
+      const d = (json as { data?: unknown }).data
+      // Array.isArray containment: a malformed payload keeps the stale curve
+      // instead of feeding render a non-array (render iterates `data`).
+      return Array.isArray(d) ? (d as EquityDataPoint[]) : undefined
+    },
+  })
 
-  // Initial fetch + auto-refresh: 60s during market hours, 5min outside
-  useEffect(() => {
-    const delay = isMarketOpen === true ? 60000 : 300000
-    fetchEquityData(timeRange, isMarketOpen === true)
-    const interval = setInterval(() => {
-      fetchEquityData(timeRange, isMarketOpen === true)
-    }, delay)
-    return () => clearInterval(interval)
-  }, [timeRange, isMarketOpen, fetchEquityData])
+  const data = fetched ?? []
 
   const stats = useMemo(() => {
     if (data.length === 0) return { start: 0, current: 0, peak: 0, trough: 0, maxDD: 0 }

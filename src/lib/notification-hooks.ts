@@ -1,21 +1,38 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useRef } from 'react'
 import { toast } from 'sonner'
+import { useApiQuery } from '@/hooks/use-api-query'
 
+interface RiskEventItem {
+  id: string
+  severity: string
+  message: string
+  eventType: string
+}
+
+/**
+ * Live risk-event toast notifications.
+ *
+ * Polls unresolved risk events every 15s through the centralised useApiQuery
+ * hook (abort/stale-guard/visibility-pause handled generically). The toast
+ * diffing lives in onJson: it runs outside render on every successful parse,
+ * deduplicates against notifiedIdsRef, and prunes old ids to bound memory.
+ */
 export function useLiveNotifications() {
   const notifiedIdsRef = useRef<Set<string>>(new Set())
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  const checkEvents = useCallback(async () => {
-    try {
-      const res = await fetch('/api/risk-events?resolved=false&limit=5')
-      if (!res.ok) return
-      const json = await res.json()
-      const events = json.data?.events ?? json.events ?? []
+  useApiQuery<unknown>({
+    url: '/api/risk-events?resolved=false&limit=5',
+    intervalMs: 15_000,
+    onJson: (json) => {
+      const env = json as { data?: { events?: unknown }; events?: unknown } | null
+      const events = env?.data?.events ?? env?.events ?? []
+      if (!Array.isArray(events)) return
 
-      for (const event of events) {
-        if (notifiedIdsRef.current.has(event.id)) continue
+      for (const raw of events) {
+        const event = raw as Partial<RiskEventItem>
+        if (!event.id || notifiedIdsRef.current.has(event.id)) continue
         notifiedIdsRef.current.add(event.id)
 
         // Prune old IDs — batch of 50 to keep up with sustained streams
@@ -28,49 +45,22 @@ export function useLiveNotifications() {
         }
 
         if (event.severity === 'CRITICAL') {
-          toast.error(event.message, {
+          toast.error(event.message ?? 'Risk event', {
             description: event.eventType,
             duration: 8000,
           })
         } else if (event.severity === 'HIGH') {
-          toast.warning(event.message, {
+          toast.warning(event.message ?? 'Risk event', {
             description: event.eventType,
             duration: 6000,
           })
         } else if (event.severity === 'MEDIUM') {
-          toast.info(event.message, {
+          toast.info(event.message ?? 'Risk event', {
             description: event.eventType,
             duration: 5000,
           })
         }
       }
-    } catch {
-      // Silent fail — notifications are non-critical
-    }
-  }, [])
-
-  useEffect(() => {
-    checkEvents()
-    intervalRef.current = setInterval(checkEvents, 15000)
-
-    const handleVisibility = () => {
-      if (document.hidden) {
-        if (intervalRef.current) {
-          clearInterval(intervalRef.current)
-          intervalRef.current = null
-        }
-      } else {
-        checkEvents()
-        if (!intervalRef.current) {
-          intervalRef.current = setInterval(checkEvents, 15000)
-        }
-      }
-    }
-
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [checkEvents])
+    },
+  })
 }

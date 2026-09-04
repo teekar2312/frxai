@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
@@ -124,45 +125,40 @@ const OVERLAY_COLORS: Record<string, string> = {
 }
 
 export default function TradingSessions() {
-  const [data, setData] = useState<SessionsApiResponse | null>(null)
   const [currentHour, setCurrentHour] = useState<number>(new Date().getUTCHours())
   const [currentMinute, setCurrentMinute] = useState<number>(new Date().getUTCMinutes())
-  const [, setLoading] = useState(true)
 
-  // Session config state
+  // Session config state — mirrors the config poll payload so
+  // handleToggleSession keeps applying the PUT response directly
+  // (server truth wins on every 60s poll).
   const [sessionConfig, setSessionConfig] = useState<SessionTradingConfig | null>(null)
   const [activeOverlapKeys, setActiveOverlapKeys] = useState<Set<string>>(new Set())
-  const [, setConfigLoading] = useState(true)
   const [updatingKey, setUpdatingKey] = useState<string | null>(null)
 
-  const fetchSessions = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sessions?include=performance')
-      if (res.ok) {
-        const json: SessionsApiResponse = await res.json()
-        setData(json)
-      }
-    } catch {
-      // use local time
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // Sessions poll (30s) — the full envelope is kept as data shape so every
+  // render read (data?.data.*) stays byte-identical.
+  const { data } = useApiQuery<SessionsApiResponse>({
+    url: '/api/sessions?include=performance',
+    intervalMs: 30_000,
+    transform: (json) => json as SessionsApiResponse,
+  })
 
-  const fetchSessionConfig = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sessions/config')
-      if (res.ok) {
-        const json: SessionConfigApiResponse = await res.json()
-        setSessionConfig(json.data.config)
-        setActiveOverlapKeys(new Set(json.data.activeOverlaps.map(o => o.key)))
-      }
-    } catch {
-      // config unavailable
-    } finally {
-      setConfigLoading(false)
+  // Session-config poll (60s)
+  const { data: sessionConfigPayload } = useApiQuery<SessionConfigApiResponse['data']>({
+    url: '/api/sessions/config',
+    intervalMs: 60_000, // refresh config every 60s
+    transform: (json) => {
+      const payload = (json as SessionConfigApiResponse | null)?.data
+      return payload && Array.isArray(payload.activeOverlaps) ? payload : undefined
+    },
+  })
+
+  useEffect(() => {
+    if (sessionConfigPayload !== null) {
+      setSessionConfig(sessionConfigPayload.config)
+      setActiveOverlapKeys(new Set(sessionConfigPayload.activeOverlaps.map((o) => o.key)))
     }
-  }, [])
+  }, [sessionConfigPayload])
 
   const handleToggleSession = useCallback(async (type: 'idx' | 'overlap', key: string, enabled: boolean) => {
     setUpdatingKey(key)
@@ -197,18 +193,7 @@ export default function TradingSessions() {
     }
   }, [])
 
-  useEffect(() => {
-    fetchSessions()
-    fetchSessionConfig()
-    const interval = setInterval(fetchSessions, 30000)
-    const configInterval = setInterval(fetchSessionConfig, 60000) // refresh config every 60s
-    return () => {
-      clearInterval(interval)
-      clearInterval(configInterval)
-    }
-  }, [fetchSessions, fetchSessionConfig])
-
-  // Update clock every second
+  // Update clock every second — not a fetch, stays a plain interval.
   useEffect(() => {
     const interval = setInterval(() => {
       const now = new Date()

@@ -1,6 +1,5 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
@@ -11,6 +10,7 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion'
 import { BrainCircuit, TrendingUp, TrendingDown, Minus, Pause, Play, Clock } from 'lucide-react'
+import { useApiQuery } from '@/hooks/use-api-query'
 
 type SignalType = 'BUY' | 'SELL' | 'HOLD'
 type StrategyStatus = 'Active' | 'Paused'
@@ -84,53 +84,25 @@ function getConfidenceColor(confidence: number): string {
 }
 
 export default function StrategyMonitor() {
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([])
-  const [, setLoading] = useState(true)
-  const [visible, setVisible] = useState(true)
-
-  const abortRef = useRef<AbortController | null>(null)
-
-  const fetchStrategies = useCallback(async () => {
-    try {
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-      const res = await fetch('/api/strategies', { signal: controller.signal })
-      if (res.ok) {
-        const json = await res.json()
-        // The endpoint returns { data: { strategies: [...], summary, ... } }.
-        // Guard with Array.isArray so an unexpected shape degrades to the
-        // previous data instead of crashing render
-        // (fix: "strategies.filter is not a function").
-        const raw = json?.data?.strategies
-        const primarySymbol = json?.data?.dataInfo?.symbol ?? 'BBCA'
-        if (Array.isArray(raw)) {
-          setStrategies(raw.map((s: ApiStrategy) => toStrategyInfo(s, primarySymbol)))
-        }
-        // non-array / malformed → keep stale data (initial state is [])
-      }
-    } catch {
-      // use stale data
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  // Track tab visibility in state so the polling effect re-runs when the tab
-  // becomes visible again (the old handler cleared the interval and never
-  // restarted it — polling died permanently after a tab switch).
-  useEffect(() => {
-    const handleVisibility = () => setVisible(!document.hidden)
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => document.removeEventListener('visibilitychange', handleVisibility)
-  }, [])
-
-  useEffect(() => {
-    if (!visible) return
-    fetchStrategies()
-    const interval = setInterval(fetchStrategies, 10000)
-    return () => clearInterval(interval)
-  }, [fetchStrategies, visible])
+  // Centralised polling hook — abort/stale-guard/visibility-restart handled
+  // generically; the transform carries the payload containment that fixed
+  // the "strategies.filter is not a function" crash (3adb99e).
+  const { data } = useApiQuery<StrategyInfo[]>({
+    url: '/api/strategies',
+    intervalMs: 10_000,
+    initialData: [],
+    transform: (json) => {
+      // The endpoint returns { data: { strategies: [...], summary, ... } }.
+      // Guard with Array.isArray so an unexpected shape degrades to the
+      // previous data instead of crashing render.
+      const env = json as { data?: { strategies?: unknown; dataInfo?: { symbol?: string } } } | null
+      const raw = env?.data?.strategies
+      if (!Array.isArray(raw)) return undefined // keep stale data
+      const primarySymbol = env?.data?.dataInfo?.symbol ?? 'BBCA'
+      return (raw as ApiStrategy[]).map((s) => toStrategyInfo(s, primarySymbol))
+    },
+  })
+  const strategies = data ?? []
 
   const activeCount = strategies.filter((s) => s.status === 'Active').length
   const buyCount = strategies.filter((s) => s.signal === 'BUY').length

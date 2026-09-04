@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useState } from 'react'
+import { useApiQuery, extractApiData } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
@@ -50,47 +51,19 @@ function formatPrice(price: number): string {
 }
 
 export default function StockWatchlist() {
-  const [stocks, setStocks] = useState<Stock[]>([])
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
 
-  const abortRef = useRef<AbortController | null>(null)
+  // Centralised 10s poll. The old hand-rolled visibility handler cleared the
+  // interval on tab-hide and never restarted it (polling died permanently
+  // after a tab switch) — that bug is gone with the hook.
+  const { data, loading } = useApiQuery<Stock[]>({
+    url: '/api/stocks',
+    intervalMs: 10_000,
+    initialData: [],
+    transform: (json) => extractApiData<Stock[]>(json, []),
+  })
 
-  const fetchStocks = useCallback(async () => {
-    try {
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-      const res = await fetch('/api/stocks', { signal: controller.signal })
-      if (res.ok) {
-        const json = await res.json()
-        setStocks(json.data ?? [])
-      }
-    } catch {
-      // use stale data
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchStocks()
-    const interval = setInterval(fetchStocks, 10000)
-    const handleVisibility = () => {
-      if (document.hidden) {
-        clearInterval(interval)
-      } else {
-        fetchStocks()
-        // Need to restart interval — handle by re-running effect
-      }
-    }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      clearInterval(interval)
-      abortRef.current?.abort()
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [fetchStocks])
+  const stocks = data ?? []
 
   const filtered = stocks.filter(
     (s) =>

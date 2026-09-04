@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useRef } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -104,9 +105,17 @@ function mapApiAlert(raw: Record<string, unknown>): PriceAlert {
   }
 }
 
+/** Normalise the /api/alerts payload to UI alerts (same guards as the old fetch). */
+function mapAlertsPayload(json: unknown): PriceAlert[] {
+  const body = json as { data?: unknown; alerts?: unknown } | null
+  const list: unknown = body?.data ?? body?.alerts ?? []
+  return Array.isArray(list) ? list.map(mapApiAlert) : []
+}
+
 export default function PriceAlerts() {
+  // Local `alerts` mirrors hook data so the mutation handlers below keep
+  // their optimistic-update ergonomics (server truth wins every poll).
   const [alerts, setAlerts] = useState<PriceAlert[]>([])
-  const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -123,66 +132,42 @@ export default function PriceAlerts() {
   const toastedIdsRef = useRef<Set<string>>(new Set())
   // Track previously seen triggered IDs for toast dedup
   const prevTriggeredRef = useRef<Set<string>>(new Set())
-  const abortRef = useRef<AbortController | null>(null)
 
-  const fetchAlerts = useCallback(async () => {
-    try {
-      abortRef.current?.abort()
-      const controller = new AbortController()
-      abortRef.current = controller
-      const res = await fetch('/api/alerts?limit=200', { signal: controller.signal })
-      if (res.ok) {
-        const json = await res.json()
-        const data: Array<Record<string, unknown>> = json.data ?? json.alerts ?? []
-        const mapped = Array.isArray(data) ? data.map(mapApiAlert) : []
-        setAlerts(mapped)
+  // Centralised 10s poll. The old hand-rolled visibility handler cleared the
+  // interval on tab-hide and never restarted it (polling died permanently
+  // after a tab switch) — that bug is gone with the hook.
+  const { data, loading } = useApiQuery<PriceAlert[]>({
+    url: '/api/alerts?limit=200',
+    intervalMs: 10_000,
+    initialData: [],
+    transform: mapAlertsPayload,
+    onJson: (json) => {
+      // Detect newly triggered alerts for toast notifications
+      const mapped = mapAlertsPayload(json)
+      const newTriggered = mapped.filter(
+        (a) => a.status === 'Triggered' && !prevTriggeredRef.current.has(a.id)
+      )
+      prevTriggeredRef.current = new Set(mapped.filter((a) => a.status === 'Triggered').map((a) => a.id))
 
-        // Detect newly triggered alerts for toast notifications
-        const newTriggered = mapped.filter(
-          (a) => a.status === 'Triggered' && !prevTriggeredRef.current.has(a.id)
-        )
-        prevTriggeredRef.current = new Set(mapped.filter((a) => a.status === 'Triggered').map((a) => a.id))
-
-        for (const alert of newTriggered) {
-          if (toastedIdsRef.current.has(alert.id)) continue
-          toastedIdsRef.current.add(alert.id)
-          // Prune to prevent unbounded growth
-          if (toastedIdsRef.current.size > 200) {
-            const iter = toastedIdsRef.current.values()
-            const first = iter.next().value
-            if (first) toastedIdsRef.current.delete(first)
-          }
-          toast.success(
-            `Price alert triggered: ${alert.symbol} ${alert.condition} ${Number(alert.targetPrice).toLocaleString()}`
-          )
+      for (const alert of newTriggered) {
+        if (toastedIdsRef.current.has(alert.id)) continue
+        toastedIdsRef.current.add(alert.id)
+        // Prune to prevent unbounded growth
+        if (toastedIdsRef.current.size > 200) {
+          const iter = toastedIdsRef.current.values()
+          const first = iter.next().value
+          if (first) toastedIdsRef.current.delete(first)
         }
+        toast.success(
+          `Price alert triggered: ${alert.symbol} ${alert.condition} ${Number(alert.targetPrice).toLocaleString()}`
+        )
       }
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') return
-      // Silently fail
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+    },
+  })
 
   useEffect(() => {
-    fetchAlerts()
-    const interval = setInterval(fetchAlerts, 10_000)
-    const handleVisibility = () => {
-      if (document.hidden) {
-        clearInterval(interval)
-      } else {
-        fetchAlerts()
-        // Interval was cleared; need a new one — handled by re-running effect
-      }
-    }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      clearInterval(interval)
-      abortRef.current?.abort()
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [fetchAlerts])
+    if (data !== null) setAlerts(data)
+  }, [data])
 
   const handleDelete = async (id: string) => {
     setDeletingId(id)

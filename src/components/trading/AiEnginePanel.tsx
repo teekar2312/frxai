@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState } from 'react'
+import { useApiQuery } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -89,57 +90,58 @@ const TASK_LABELS: Record<string, string> = {
 
 export default function AiEnginePanel() {
   const [config, setConfig] = useState<AiConfig>(DEFAULT_CONFIG)
-  const [strategies, setStrategies] = useState<StrategyInfo[]>([])
-  const [accuracy, setAccuracy] = useState<AccuracyData | null>(null)
-  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null)
-  const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
-  const fetchData = useCallback(async () => {
-    try {
-      const [configRes, llmRes] = await Promise.all([
-        fetch('/api/ai/config'),
-        fetch('/api/ai/enhanced').catch(() => null),
-      ])
-
-      if (configRes.ok) {
-        const json = await configRes.json()
-        if (json.data) {
-          setConfig(prev => ({
-            ...prev,
-            minConfidenceBuy: json.data.config.minConfidenceBuy ?? prev.minConfidenceBuy,
-            minConfidenceSell: json.data.config.minConfidenceSell ?? prev.minConfidenceSell,
-            technicalWeight: Math.round((json.data.config.technicalWeight ?? 0.5) * 100),
-            newsWeight: Math.round((json.data.config.newsWeight ?? 0.25) * 100),
-            sentimentWeight: Math.round((json.data.config.sentimentWeight ?? 0.25) * 100),
-            maxPositionsPerDecision: json.data.config.maxPositionsPerDecision ?? 3,
-            cooldownSeconds: json.data.config.cooldownSeconds ?? 300,
-            extremeSentimentBlock: json.data.config.extremeSentimentBlock ?? true,
-            volatilityScalingEnabled: json.data.config.volatilityScalingEnabled ?? true,
-          }))
-          setStrategies(json.data.strategies ?? [])
-          setAccuracy(json.data.accuracy ?? null)
-        }
+  // Two independent 30s polls through the centralised hook (was one
+  // Promise.all inside fetchData): /api/ai/config carries the config merge +
+  // strategies + accuracy; /api/ai/enhanced carries LLM provider status.
+  // Abort/stale-guard/visibility-restart handled generically. The config
+  // sync into local state runs in onJson — verbatim guard chain from the
+  // hand-rolled fetch.
+  const {
+    data: engineData,
+    loading: engineLoading,
+    refresh: refreshEngine,
+  } = useApiQuery<{ strategies: StrategyInfo[]; accuracy: AccuracyData | null }>({
+    url: '/api/ai/config',
+    intervalMs: 30_000,
+    transform: (json) => {
+      const d = (json as { data?: { strategies?: StrategyInfo[]; accuracy?: AccuracyData } }).data
+      if (!d) return undefined
+      return {
+        strategies: d.strategies ?? [],
+        accuracy: d.accuracy ?? null,
       }
+    },
+    onJson: (json) => {
+      const cfg = (json as { data?: { config?: Partial<AiConfig> } }).data?.config
+      if (!cfg) return
+      setConfig(prev => ({
+        ...prev,
+        minConfidenceBuy: cfg.minConfidenceBuy ?? prev.minConfidenceBuy,
+        minConfidenceSell: cfg.minConfidenceSell ?? prev.minConfidenceSell,
+        technicalWeight: Math.round((cfg.technicalWeight ?? 0.5) * 100),
+        newsWeight: Math.round((cfg.newsWeight ?? 0.25) * 100),
+        sentimentWeight: Math.round((cfg.sentimentWeight ?? 0.25) * 100),
+        maxPositionsPerDecision: cfg.maxPositionsPerDecision ?? 3,
+        cooldownSeconds: cfg.cooldownSeconds ?? 300,
+        extremeSentimentBlock: cfg.extremeSentimentBlock ?? true,
+        volatilityScalingEnabled: cfg.volatilityScalingEnabled ?? true,
+      }))
+    },
+  })
 
-      if (llmRes?.ok) {
-        const llmJson = await llmRes.json()
-        if (llmJson.data) {
-          setLlmStatus(llmJson.data)
-        }
-      }
-    } catch {
-      // use stale
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  const { data: llmData, loading: llmLoading } = useApiQuery<LlmStatus>({
+    url: '/api/ai/enhanced',
+    intervalMs: 30_000,
+    transform: (json) => (json as { data?: LlmStatus | null }).data ?? undefined,
+  })
 
-  useEffect(() => {
-    fetchData()
-    const interval = setInterval(fetchData, 30000)
-    return () => clearInterval(interval)
-  }, [fetchData])
+  // Combined loading — true until BOTH endpoints settle (was one Promise.all).
+  const loading = engineLoading || llmLoading
+  const strategies = engineData?.strategies ?? []
+  const accuracy = engineData?.accuracy ?? null
+  const llmStatus = llmData ?? null
 
   const handleSave = async () => {
     setSaving(true)
@@ -161,6 +163,9 @@ export default function AiEnginePanel() {
       })
       if (res.ok) {
         toast.success('Konfigurasi AI berhasil disimpan')
+        // Re-sync the engine payload so the saved config is reflected
+        // immediately instead of waiting for the next 30s poll.
+        void refreshEngine()
       } else {
         const json = await res.json().catch(() => ({}))
         toast.error(`Gagal menyimpan: ${json.error || 'Unknown error'}`)

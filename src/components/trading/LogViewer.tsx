@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useState } from 'react'
+import { useApiQuery, extractApiData } from '@/hooks/use-api-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -42,6 +43,13 @@ interface LogAnalytics {
   topMessages: { message: string; count: number }[]
 }
 
+/** Composite payload of /api/logs (multi-state response: logs + stats + analytics). */
+interface LogsPayload {
+  logs: LogEntry[]
+  stats: LogStats | null
+  analytics: LogAnalytics | null
+}
+
 const LEVEL_CONFIG: Record<string, { icon: typeof Bug; color: string; bg: string; badgeClass: string }> = {
   DEBUG: { icon: Bug, color: 'text-cyan-600', bg: 'bg-cyan-50 dark:bg-cyan-950/30', badgeClass: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900 dark:text-cyan-200' },
   INFO: { icon: Info, color: 'text-emerald-600', bg: 'bg-emerald-50 dark:bg-emerald-950/30', badgeClass: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' },
@@ -57,10 +65,6 @@ const CATEGORIES = [
 ]
 
 export default function LogViewer() {
-  const [logs, setLogs] = useState<LogEntry[]>([])
-  const [stats, setStats] = useState<LogStats | null>(null)
-  const [analytics, setAnalytics] = useState<LogAnalytics | null>(null)
-  const [loading, setLoading] = useState(true)
   const [levelFilter, setLevelFilter] = useState('ALL')
   const [categoryFilter, setCategoryFilter] = useState('ALL')
   const [startDate, setStartDate] = useState('')
@@ -68,38 +72,34 @@ export default function LogViewer() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [showAnalytics, setShowAnalytics] = useState(false)
 
-  const fetchLogs = useCallback(async () => {
-    try {
-      const params = new URLSearchParams({ limit: '100' })
-      if (levelFilter !== 'ALL') params.set('level', levelFilter)
-      if (categoryFilter !== 'ALL') params.set('category', categoryFilter)
-      if (startDate) params.set('startDate', startDate)
-      if (endDate) params.set('endDate', endDate)
-      if (showAnalytics) params.set('analytics', 'true')
+  // Filter-dependent URL — the hook refetches whenever it changes (the old
+  // fetchLogs identity did the same) and polls it every 5s while Live is on
+  // (intervalMs 0 = fetch once per url change).
+  const params = new URLSearchParams({ limit: '100' })
+  if (levelFilter !== 'ALL') params.set('level', levelFilter)
+  if (categoryFilter !== 'ALL') params.set('category', categoryFilter)
+  if (startDate) params.set('startDate', startDate)
+  if (endDate) params.set('endDate', endDate)
+  if (showAnalytics) params.set('analytics', 'true')
 
-      const res = await fetch(`/api/logs?${params}`)
-      if (res.ok) {
-        const json = await res.json()
-        setLogs(json.data.logs || [])
-        setStats(json.data.stats || null)
-        if (showAnalytics) setAnalytics(json.data.analytics || null)
+  const { data, loading } = useApiQuery<LogsPayload>({
+    url: `/api/logs?${params}`,
+    intervalMs: autoRefresh ? 5_000 : 0,
+    transform: (json) => {
+      const payload = extractApiData<Partial<LogsPayload> | null>(json, null)
+      // Malformed envelope → keep stale data (the old fetch threw → catch)
+      if (payload === null) return undefined
+      return {
+        logs: payload.logs || [],
+        stats: payload.stats || null,
+        analytics: showAnalytics ? payload.analytics || null : null,
       }
-    } catch {
-      // use stale data
-    } finally {
-      setLoading(false)
-    }
-  }, [levelFilter, categoryFilter, startDate, endDate, showAnalytics])
+    },
+  })
 
-  useEffect(() => {
-    fetchLogs()
-  }, [fetchLogs])
-
-  useEffect(() => {
-    if (!autoRefresh) return
-    const interval = setInterval(fetchLogs, 5000)
-    return () => clearInterval(interval)
-  }, [autoRefresh, fetchLogs])
+  const logs = data?.logs ?? []
+  const stats = data?.stats ?? null
+  const analytics = data?.analytics ?? null
 
   const TrendIcon = analytics?.errorRateTrend.direction === 'improving' ? TrendingUp :
     analytics?.errorRateTrend.direction === 'degrading' ? TrendingDown : Minus

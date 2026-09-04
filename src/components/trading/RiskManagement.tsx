@@ -129,19 +129,38 @@ function getProgressColor(value: number, max: number): string {
   return '[&>div]:bg-red-500'
 }
 
-function formatCurrency(value: number): string {
+function formatCurrency(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value)
 }
 
+interface HaltReasonItem {
+  type: string
+  message: string
+  active: boolean
+}
+
+/** Shape returned by GET /api/money-management/halt-status (v2.0.2).
+ *  Detail fields are optional so a degraded API response degrades the UI
+ *  gracefully instead of crashing render. */
 interface HaltStatusData {
   canTrade: boolean
-  reasons: Array<{ type: string; message: string; active: boolean }>
-  consecutiveLosses: number
-  maxConsecutiveLosses: number
-  equityCurveStatus: string
-  sessionPnl: number
-  sessionPnlLimit: number
-  sessionRiskUsedPct: number
+  consecutiveLossHalted?: boolean
+  equityCurveHalted?: boolean
+  sessionLimitReached?: boolean
+  marketClosed?: boolean
+  haltReasons?: string[]
+  consecutiveLosses?: number
+  maxConsecutiveLosses?: number
+  cooldownRemainingMinutes?: number
+  equityCurveStatus?: string // NORMAL | BELOW_MA | RECOVERING
+  sessionPnl?: number
+  sessionPnlLimit?: number
+  sessionLosses?: number
+  sessionRiskUsedPct?: number
+  sessionTrades?: number
+  remainingRiskBudget?: number
+  reasons?: HaltReasonItem[]
 }
 
 export default function RiskManagement() {
@@ -169,7 +188,24 @@ export default function RiskManagement() {
       const res = await fetch('/api/money-management/halt-status')
       if (res.ok) {
         const json = await res.json()
-        setHaltData(json.data)
+        const raw = json?.data as Partial<HaltStatusData> | undefined
+        // Normalize: guarantee every field the UI renders exists (bad/old API
+        // shapes degrade to defaults instead of crashing render)
+        if (raw && typeof raw === 'object') {
+          setHaltData({
+            ...raw,
+            consecutiveLosses: Number(raw.consecutiveLosses) || 0,
+            maxConsecutiveLosses: Number(raw.maxConsecutiveLosses) || 5,
+            sessionPnl: Number(raw.sessionPnl) || 0,
+            sessionPnlLimit: Number(raw.sessionPnlLimit) || 0,
+            sessionRiskUsedPct: Number(raw.sessionRiskUsedPct) || 0,
+            equityCurveStatus:
+              raw.equityCurveStatus === 'BELOW_MA' || raw.equityCurveStatus === 'RECOVERING'
+                ? raw.equityCurveStatus
+                : 'NORMAL',
+            reasons: Array.isArray(raw.reasons) ? raw.reasons : [],
+          })
+        }
       }
     } catch {
       // use stale data
@@ -451,15 +487,15 @@ export default function RiskManagement() {
                 <span className="text-xs text-muted-foreground">Consecutive Losses</span>
               </div>
               <div className="flex items-baseline gap-1">
-                <span className={`text-lg font-bold ${haltData ? (haltData.consecutiveLosses >= haltData.maxConsecutiveLosses ? 'text-red-600' : 'text-emerald-600') : 'text-muted-foreground'}`}>
+                <span className={`text-lg font-bold ${haltData ? ((haltData.consecutiveLosses ?? 0) >= (haltData.maxConsecutiveLosses ?? 5) ? 'text-red-600' : 'text-emerald-600') : 'text-muted-foreground'}`}>
                   {haltLoading ? '-' : haltData?.consecutiveLosses ?? 0}
                 </span>
                 <span className="text-xs text-muted-foreground">/ {haltLoading ? '-' : haltData?.maxConsecutiveLosses ?? 5} max</span>
               </div>
-              {haltData && haltData.consecutiveLosses > 0 && (
+              {haltData && (haltData.consecutiveLosses ?? 0) > 0 && (
                 <Progress
-                  value={Math.min((haltData.consecutiveLosses / haltData.maxConsecutiveLosses) * 100, 100)}
-                  className={`h-1.5 ${(haltData.consecutiveLosses / haltData.maxConsecutiveLosses) >= 0.8 ? '[&>div]:bg-red-500' : (haltData.consecutiveLosses / haltData.maxConsecutiveLosses) >= 0.6 ? '[&>div]:bg-amber-500' : '[&>div]:bg-emerald-500'}`}
+                  value={Math.min(((haltData.consecutiveLosses ?? 0) / Math.max(haltData.maxConsecutiveLosses ?? 5, 1)) * 100, 100)}
+                  className={`h-1.5 ${((haltData.consecutiveLosses ?? 0) / Math.max(haltData.maxConsecutiveLosses ?? 5, 1)) >= 0.8 ? '[&>div]:bg-red-500' : ((haltData.consecutiveLosses ?? 0) / Math.max(haltData.maxConsecutiveLosses ?? 5, 1)) >= 0.6 ? '[&>div]:bg-amber-500' : '[&>div]:bg-emerald-500'}`}
                 />
               )}
             </div>
@@ -470,11 +506,11 @@ export default function RiskManagement() {
                 <BarChart3 className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">Equity Curve</span>
               </div>
-              <Badge className={haltData?.equityCurveStatus === 'TRADING' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : haltData?.equityCurveStatus === 'HALTED_DRAWDOWN' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-amber-600 hover:bg-amber-700 text-white'}>
-                {haltLoading ? '...' : haltData?.equityCurveStatus ?? 'TRADING'}
+              <Badge className={haltData?.equityCurveStatus === 'NORMAL' ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : haltData?.equityCurveStatus === 'BELOW_MA' ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-amber-600 hover:bg-amber-700 text-white'}>
+                {haltLoading ? '...' : haltData?.equityCurveStatus === 'NORMAL' ? 'TRADING' : haltData?.equityCurveStatus === 'BELOW_MA' ? 'HALTED_DRAWDOWN' : (haltData?.equityCurveStatus ?? 'TRADING')}
               </Badge>
               <p className="text-[10px] text-muted-foreground">
-                {haltData?.equityCurveStatus === 'TRADING' ? 'Curve above threshold' : haltData?.equityCurveStatus === 'HALTED_DRAWDOWN' ? 'Drawdown halt active' : 'Recovery mode'}
+                {haltData?.equityCurveStatus === 'BELOW_MA' ? 'Drawdown halt active' : haltData?.equityCurveStatus === 'RECOVERING' ? 'Recovery mode' : 'Curve above threshold'}
               </p>
             </div>
 
@@ -484,12 +520,12 @@ export default function RiskManagement() {
                 <Zap className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">Session P&L</span>
               </div>
-              <p className={`text-lg font-bold ${haltData ? (haltData.sessionPnl < 0 ? 'text-red-600' : 'text-emerald-600') : 'text-muted-foreground'}`}>
-                {haltLoading ? '-' : haltData ? `${haltData.sessionPnl >= 0 ? '+' : ''}${formatCurrency(haltData.sessionPnl)}` : '-'}
+              <p className={`text-lg font-bold ${haltData ? ((haltData.sessionPnl ?? 0) < 0 ? 'text-red-600' : 'text-emerald-600') : 'text-muted-foreground'}`}>
+                {haltLoading ? '-' : haltData ? `${(haltData.sessionPnl ?? 0) >= 0 ? '+' : ''}${formatCurrency(haltData.sessionPnl)}` : '-'}
               </p>
               <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                 <span>Limit: {haltLoading ? '-' : haltData ? formatCurrency(haltData.sessionPnlLimit) : '-'}</span>
-                <span>{haltLoading ? '-' : haltData ? `${haltData.sessionRiskUsedPct.toFixed(0)}%` : '-'} used</span>
+                <span>{haltLoading ? '-' : haltData ? `${(haltData.sessionRiskUsedPct ?? 0).toFixed(0)}%` : '-'} used</span>
               </div>
             </div>
 
@@ -499,9 +535,9 @@ export default function RiskManagement() {
                 <AlertTriangle className="h-3.5 w-3.5 text-muted-foreground" />
                 <span className="text-xs text-muted-foreground">Halt Reasons</span>
               </div>
-              {haltData && haltData.reasons.filter(r => r.active).length > 0 ? (
+              {haltData && (haltData.reasons ?? []).some(r => r?.active) ? (
                 <div className="space-y-1">
-                  {haltData.reasons.filter(r => r.active).map((r, i) => (
+                  {(haltData.reasons ?? []).filter(r => r?.active).map((r, i) => (
                     <Badge key={i} variant="destructive" className="text-[10px] block w-full text-left mb-1">
                       {r.type}: {r.message}
                     </Badge>

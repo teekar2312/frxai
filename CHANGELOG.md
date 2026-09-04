@@ -6,6 +6,31 @@ Format berdasarkan [Keep a Changelog](https://keepachangelog.com/), dan proyek i
 
 ---
 
+## [2.0.2] — RiskManagement Crash Fix & Rich Halt Status
+
+### Fixed
+- **`RiskManagement` crash** — `Cannot read properties of undefined (reading 'toFixed')` di
+  `sessionRiskUsedPct.toFixed(0)`: komponen merender 7 field yang **tidak pernah dikembalikan**
+  API `/api/money-management/halt-status` (`sessionRiskUsedPct`, `sessionPnl`, `sessionPnlLimit`,
+  `consecutiveLosses`, `maxConsecutiveLosses`, `equityCurveStatus`, `reasons`). Diperbaiki dari dua sisi:
+  - **API diperkaya (additive, backward-compatible)**: `PreTradeHaltStatus` kini menyertakan seluruh
+    detail yang selama ini dihitung sub-check lalu dibuang — `consecutiveLosses`,
+    `maxConsecutiveLosses`, `cooldownRemainingMinutes`, `equityCurveStatus` (NORMAL/BELOW_MA/RECOVERING),
+    `sessionPnl`, `sessionPnlLimit`, `sessionLosses` (baru di `SessionRiskResult`), `sessionRiskUsedPct`
+    (loss vs limit, capped 100%), `sessionTrades`, `remainingRiskBudget`, dan `reasons` terstruktur
+    (`{type, message, active}` — satu entri per check, selalu ada). Default aman saat sub-check error.
+  - **UI defensif**: payload dinormalisasi saat fetch (semua field dijamin ada — respons lama/salah
+    bentuk menurunkan tampilan, bukan crash render), `formatCurrency` guard NaN/undefined,
+    mapping enum equity curve → label TRADING/HALTED_DRAWDOWN/RECOVERING, guard `Array.isArray`
+    untuk reasons, pembagi Progress `Math.max(..., 1)`.
+
+### Verified
+- `GET /api/money-management/halt-status` mengembalikan data riil (Equity 13.910 vs MA 11.183,
+  limit $100, 0% used); tab Risk & Money render sempurna tanpa console error; sweep 14 tab = 0 error;
+  401/401 unit test pass; lint 0 error.
+
+---
+
 ## [2.0.1] — Type Safety, Recovery Hints & Code Hygiene
 
 ### Critical

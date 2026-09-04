@@ -949,6 +949,7 @@ export async function checkEquityCurveStatus(): Promise<EquityCurveResult> {
 export interface SessionRiskResult {
   isLimitReached: boolean
   sessionPnl: number
+  sessionLosses: number
   sessionLimit: number
   sessionTrades: number
   remainingRiskBudget: number
@@ -986,6 +987,7 @@ export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
     return {
       isLimitReached: false,
       sessionPnl: 0,
+      sessionLosses: 0,
       sessionLimit: 0,
       sessionTrades: 0,
       remainingRiskBudget: 0,
@@ -1046,6 +1048,7 @@ export async function checkSessionRiskLimit(): Promise<SessionRiskResult> {
   return {
     isLimitReached,
     sessionPnl: Math.round(sessionPnl * 100) / 100,
+    sessionLosses: Math.round(sessionLosses * 100) / 100,
     sessionLimit: Math.round(sessionLimit * 100) / 100,
     sessionTrades,
     remainingRiskBudget,
@@ -1160,6 +1163,18 @@ export function calculatePartialProfitLevels(params: {
 
 // ---- 5. Enhanced Pre-Trade Halt Status ----
 
+export type HaltReasonType =
+  | "CONSECUTIVE_LOSS"
+  | "EQUITY_CURVE"
+  | "SESSION_LIMIT"
+  | "MARKET_CLOSED"
+
+export interface HaltReason {
+  type: HaltReasonType
+  message: string
+  active: boolean
+}
+
 export interface PreTradeHaltStatus {
   canTrade: boolean
   haltReasons: string[]
@@ -1167,6 +1182,18 @@ export interface PreTradeHaltStatus {
   equityCurveHalted: boolean
   sessionLimitReached: boolean
   marketClosed: boolean
+  /** Rich detail (v2.0.2) — surfaced for the Risk Management UI. */
+  consecutiveLosses: number
+  maxConsecutiveLosses: number
+  cooldownRemainingMinutes: number
+  equityCurveStatus: EquityCurveStatus
+  sessionPnl: number
+  sessionPnlLimit: number
+  sessionLosses: number
+  sessionRiskUsedPct: number
+  sessionTrades: number
+  remainingRiskBudget: number
+  reasons: HaltReason[]
 }
 
 /**
@@ -1187,9 +1214,14 @@ export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
   let sessionLimitReached = false
   let marketClosed = false
 
+  // Sub-results captured so the rich detail fields can be surfaced to the UI
+  let clResult: ConsecutiveLossResult | null = null
+  let ecResult: EquityCurveResult | null = null
+  let srResult: SessionRiskResult | null = null
+
   // 1. Consecutive loss check
   try {
-    const clResult = await checkConsecutiveLossHalt()
+    clResult = await checkConsecutiveLossHalt()
     if (clResult.isHalted) {
       consecutiveLossHalted = true
       haltReasons.push(clResult.haltReason || "Consecutive loss halt active")
@@ -1202,7 +1234,7 @@ export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
 
   // 2. Equity curve check
   try {
-    const ecResult = await checkEquityCurveStatus()
+    ecResult = await checkEquityCurveStatus()
     if (ecResult.status === "BELOW_MA") {
       equityCurveHalted = true
       haltReasons.push(
@@ -1217,7 +1249,7 @@ export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
 
   // 3. Session risk limit check
   try {
-    const srResult = await checkSessionRiskLimit()
+    srResult = await checkSessionRiskLimit()
     if (srResult.isLimitReached) {
       sessionLimitReached = true
       haltReasons.push(
@@ -1244,6 +1276,55 @@ export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
 
   const canTrade = haltReasons.length === 0
 
+  // Structured reasons for the UI (one entry per check, always present)
+  const reasons: HaltReason[] = [
+    {
+      type: "CONSECUTIVE_LOSS",
+      message:
+        clResult?.haltReason ??
+        (clResult
+          ? `${clResult.consecutiveLosses} of ${clResult.maxAllowed} consecutive losses`
+          : "Consecutive loss check unavailable"),
+      active: consecutiveLossHalted,
+    },
+    {
+      type: "EQUITY_CURVE",
+      message: ecResult
+        ? `Equity ${ecResult.currentEquity.toFixed(2)} vs MA(${ecResult.maPeriod}) ${ecResult.equityCurveMa.toFixed(2)}`
+        : "Equity curve check unavailable",
+      active: equityCurveHalted,
+    },
+    {
+      type: "SESSION_LIMIT",
+      message: srResult
+        ? `Session P&L ${srResult.sessionPnl.toFixed(2)} / limit ${srResult.sessionLimit.toFixed(2)}`
+        : "Session risk check unavailable",
+      active: sessionLimitReached,
+    },
+    {
+      type: "MARKET_CLOSED",
+      message: marketClosed
+        ? "Market is currently closed (outside 09:00-15:00 WIB trading hours)"
+        : "Within trading hours",
+      active: marketClosed,
+    },
+  ]
+
+  // Rich detail (defaults when a check errored so consumers never see undefined)
+  const consecutiveLosses = clResult?.consecutiveLosses ?? 0
+  const maxConsecutiveLosses = clResult?.maxAllowed ?? 5
+  const cooldownRemainingMinutes = clResult?.cooldownRemainingMinutes ?? 0
+  const equityCurveStatus: EquityCurveStatus = ecResult?.status ?? "NORMAL"
+  const sessionPnl = srResult?.sessionPnl ?? 0
+  const sessionPnlLimit = srResult?.sessionLimit ?? 0
+  const sessionLosses = srResult?.sessionLosses ?? 0
+  const sessionRiskUsedPct =
+    sessionPnlLimit > 0
+      ? Math.min((Math.abs(sessionLosses) / sessionPnlLimit) * 100, 100)
+      : 0
+  const sessionTrades = srResult?.sessionTrades ?? 0
+  const remainingRiskBudget = srResult?.remainingRiskBudget ?? 0
+
   if (!canTrade) {
     logger.warn(
       "MONEY_MANAGEMENT",
@@ -1268,6 +1349,17 @@ export async function getPreTradeHaltStatus(): Promise<PreTradeHaltStatus> {
     equityCurveHalted,
     sessionLimitReached,
     marketClosed,
+    consecutiveLosses,
+    maxConsecutiveLosses,
+    cooldownRemainingMinutes,
+    equityCurveStatus,
+    sessionPnl,
+    sessionPnlLimit,
+    sessionLosses,
+    sessionRiskUsedPct: Math.round(sessionRiskUsedPct * 10) / 10,
+    sessionTrades,
+    remainingRiskBudget,
+    reasons,
   }
 }
 

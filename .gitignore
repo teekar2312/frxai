@@ -55,6 +55,8 @@ server.log
 # database (SQLite runtime data — recreate with `bun run db:push`)
 db/*.db
 db/*.db-journal
+db/*.db-shm
+db/*.db-wal
 
 # internal agent / tooling artifacts
 tool-results/

@@ -3,6 +3,7 @@ import { executeTrade } from '@/lib/trade-execution-engine'
 import { preTradeCheck } from '@/lib/risk-engine'
 import { validateSymbol, isMarketOpen, getPricesFromBridge } from '@/lib/mt5-connection'
 import { captureIndicatorSnapshot, fetchCandles } from '@/lib/indicator-pool'
+import { withTradeExecutionLock } from '@/lib/execution-lock'
 import { apiErrorResponse } from '@/lib/api-errors'
 
 export async function POST(request: NextRequest) {
@@ -57,31 +58,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (!skipRiskCheck) {
-      const riskCheck = await preTradeCheck({
-        symbol,
-        direction,
-        lotSize,
-        entryPrice: executionPrice,
-        sl: sl ?? null,
-        tp: tp ?? null,
-        strategy: strategy ?? null,
-      })
-
-      if (!riskCheck.approved) {
-        return NextResponse.json({
-          success: false,
-          error: `Risk check failed: ${riskCheck.reason}`,
-          riskCheck: {
-            approved: false,
-            reason: riskCheck.reason,
-            suggestedLotSize: riskCheck.suggestedLotSize,
-            warnings: riskCheck.warnings,
-          },
-        }, { status: 400 })
-      }
-    }
-
     let indicatorSnapshot: string | undefined
     try {
       const effectiveTimeframe = timeframe || 'M15'
@@ -91,19 +67,57 @@ export async function POST(request: NextRequest) {
       }
     } catch (_e) { /* non-critical */ }
 
-    const result = await executeTrade({
-      symbol,
-      direction,
-      lotSize,
-      price: executionPrice,
-      sl: sl ?? undefined,
-      tp: tp ?? undefined,
-      strategy: strategy ?? undefined,
-      timeframe: timeframe ?? undefined,
-      aiConfidence: undefined,
-      indicatorSnapshot,
-      comment: `MANUAL-${strategy ?? 'USER'}-${Date.now()}`,
+    // Risk check + trade creation run inside the global execution lock so
+    // concurrent submissions cannot both pass risk validation before the
+    // first trade is written (check-then-act race — see execution-lock.ts).
+    const outcome = await withTradeExecutionLock(async () => {
+      if (!skipRiskCheck) {
+        const riskCheck = await preTradeCheck({
+          symbol,
+          direction,
+          lotSize,
+          entryPrice: executionPrice,
+          sl: sl ?? null,
+          tp: tp ?? null,
+          strategy: strategy ?? null,
+        })
+
+        if (!riskCheck.approved) {
+          return { kind: 'rejected' as const, riskCheck }
+        }
+      }
+
+      const result = await executeTrade({
+        symbol,
+        direction,
+        lotSize,
+        price: executionPrice,
+        sl: sl ?? undefined,
+        tp: tp ?? undefined,
+        strategy: strategy ?? undefined,
+        timeframe: timeframe ?? undefined,
+        aiConfidence: undefined,
+        indicatorSnapshot,
+        comment: `MANUAL-${strategy ?? 'USER'}-${Date.now()}`,
+      })
+      return { kind: 'executed' as const, result }
     })
+
+    if (outcome.kind === 'rejected') {
+      const riskCheck = outcome.riskCheck
+      return NextResponse.json({
+        success: false,
+        error: `Risk check failed: ${riskCheck.reason}`,
+        riskCheck: {
+          approved: false,
+          reason: riskCheck.reason,
+          suggestedLotSize: riskCheck.suggestedLotSize,
+          warnings: riskCheck.warnings,
+        },
+      }, { status: 400 })
+    }
+
+    const result = outcome.result
 
     if (result.success) {
       return NextResponse.json({

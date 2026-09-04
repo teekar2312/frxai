@@ -20,6 +20,7 @@ import logger from './trading-logger'
 import { makeDecision, makeMultiStrategyDecision, type AiDecision, STRATEGY_REGISTRY, defaultTechnicalFactors, defaultNewsFactors, defaultSentimentFactors, defaultRiskFactors } from './ai-decision-engine'
 import { executeTrade, closeTrade, emergencyCloseAll } from './trade-execution-engine'
 import { preTradeCheck } from './risk-engine'
+import { withTradeExecutionLock } from './execution-lock'
 import { isMarketOpen, getTradingPhase, getPricesFromBridge, getPositionsFromBridge, validateSymbol } from './mt5-connection'
 import mt5Connection from './mt5-connection'
 
@@ -522,47 +523,61 @@ class AutoTradingLoop {
 
     // Run pre-trade risk check
     try {
-      const riskCheck = await preTradeCheck({
-        symbol,
-        direction: dec,
-        lotSize: suggestedLotSize,
-        entryPrice: currentPrice,
-        sl: suggestedSl,
-        tp: suggestedTp,
-        strategy: decision.strategyUsed,
-        aiConfidence: confidence,
+      // Risk check + trade creation run inside the global execution lock
+      // so a concurrent submission (API route or another scan cycle) cannot
+      // pass risk validation while this order is mid-flight (check-then-act
+      // race — see src/lib/execution-lock.ts).
+      const guarded = await withTradeExecutionLock(async () => {
+        const riskCheck = await preTradeCheck({
+          symbol,
+          direction: dec,
+          lotSize: suggestedLotSize,
+          entryPrice: currentPrice,
+          sl: suggestedSl,
+          tp: suggestedTp,
+          strategy: decision.strategyUsed,
+          aiConfidence: confidence,
+        })
+
+        if (!riskCheck.approved) {
+          return { kind: 'rejected' as const, riskCheck }
+        }
+
+        // Use risk-adjusted lot size if suggested
+        const finalLotSize = riskCheck.suggestedLotSize > 0
+          ? Math.min(riskCheck.suggestedLotSize, suggestedLotSize)
+          : suggestedLotSize
+
+        // Execute the trade
+        const result = await executeTrade({
+          symbol,
+          direction: dec,
+          lotSize: finalLotSize,
+          price: currentPrice,
+          sl: suggestedSl,
+          tp: suggestedTp,
+          strategy: decision.strategyUsed,
+          timeframe: decision.timeframe,
+          marketCond: decision.technicalFactors.trendDirection,
+          aiConfidence: confidence,
+          comment: `AUTO-${decision.strategyUsed}-${Date.now()}`,
+        })
+
+        return { kind: 'executed' as const, result, finalLotSize }
       })
 
-      if (!riskCheck.approved) {
+      if (guarded.kind === 'rejected') {
         this._tradesRejected++
         return {
           timestamp: new Date(),
           symbol,
           decision,
           actionTaken: 'REJECTED_RISK',
-          actionDetails: riskCheck.reason || 'Risk check failed',
+          actionDetails: guarded.riskCheck.reason || 'Risk check failed',
         }
       }
 
-      // Use risk-adjusted lot size if suggested
-      const finalLotSize = riskCheck.suggestedLotSize > 0
-        ? Math.min(riskCheck.suggestedLotSize, suggestedLotSize)
-        : suggestedLotSize
-
-      // Execute the trade
-      const result = await executeTrade({
-        symbol,
-        direction: dec,
-        lotSize: finalLotSize,
-        price: currentPrice,
-        sl: suggestedSl,
-        tp: suggestedTp,
-        strategy: decision.strategyUsed,
-        timeframe: decision.timeframe,
-        marketCond: decision.technicalFactors.trendDirection,
-        aiConfidence: confidence,
-        comment: `AUTO-${decision.strategyUsed}-${Date.now()}`,
-      })
+      const { result, finalLotSize } = guarded
 
       if (result.success) {
         this._tradesOpened++

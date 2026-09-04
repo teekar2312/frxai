@@ -4,12 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Select,
@@ -40,609 +36,34 @@ import {
   ShieldCheck,
   Stethoscope,
   Timer,
-  Trash2,
-  X,
-  XCircle,
   Zap,
 } from 'lucide-react'
+import { useApiQuery } from '@/hooks/use-api-query'
+import { ChannelCard } from './system-health/ChannelCard'
+import { ConfigEntryRow } from './system-health/ConfigEntryRow'
+import { CheckRow, MemoryBar, NotifStatusBadge, SeverityBadge, StatusBadge } from './system-health/badges'
+import {
+  CONFIG_SCOPES,
+  formatAge,
+  formatClock,
+  formatUptime,
+  HEAP_LIMIT_MB,
+  POLL_HEALTH_MS,
+  POLL_METRICS_MS,
+  POLL_NOTIF_MS,
+  RSS_LIMIT_MB,
+  type ChannelConfig,
+  type ConfigEntry,
+  type HealthData,
+  type MetricsData,
+  type NotificationItem,
+  type TestResult,
+} from './system-health/types'
 
-// ============================================
-// TYPES (mirrors backend v2 API contracts)
-// ============================================
-
-interface ComponentCheck {
-  ok: boolean
-  latencyMs?: number
-  detail?: string
-}
-
-interface HealthData {
-  status: 'HEALTHY' | 'DEGRADED' | 'UNHEALTHY'
-  type: string
-  version: string
-  uptimeSeconds: number
-  latencyMs: number
-  timestamp: string
-  checks: {
-    database: ComponentCheck | null
-    mt5Bridge: ComponentCheck | null
-    memory: ComponentCheck | null
-    disk: ComponentCheck | null
-    environment: ComponentCheck | null
-  }
-}
-
-interface HistogramStats {
-  count: number
-  sum: number
-  min: number
-  max: number
-  mean: number
-  p50: number
-  p95: number
-  p99: number
-}
-
-interface MetricsData {
-  capturedAt: string
-  uptimeSeconds: number
-  process: { memoryMb: number; rssMb: number }
-  counters: Array<{ name: string; labels: Record<string, string>; value: number }>
-  gauges: Array<{ name: string; labels: Record<string, string>; value: number }>
-  histograms: Array<{ name: string; labels: Record<string, string>; stats: HistogramStats }>
-  rateLimit: {
-    activeKeys: number
-    totalHits: number
-    totalBlocked: number
-    prunedKeys?: number
-    windowMs: number
-    enabled: boolean
-    budgets: Record<string, number>
-  }
-}
-
-interface ChannelConfig {
-  channel: 'TELEGRAM' | 'DISCORD'
-  envConfigured: boolean
-  tokenPreview?: string
-  webhookPreview?: string
-  chatId?: string | null
-  enabled: boolean
-  minSeverity: string
-  events: string[]
-  rateLimitPerMin: number
-  consecutiveErrors: number
-  lastError: string | null
-  lastSentAt: string | null
-}
-
-interface NotificationItem {
-  id: string
-  channel: string
-  eventType: string
-  title: string
-  body: string
-  severity: string
-  status: string
-  attempts: number
-  lastError: string | null
-  sentAt: string | null
-  createdAt: string
-}
-
-interface ConfigEntry {
-  key: string
-  scope: string
-  description: string
-  mutable: boolean
-  effective: unknown
-  effectiveType: string
-  sources: Array<{ layer: string; value: unknown; updatedAt?: string }>
-}
-
-type TestResult = { channel: string; status: 'SENT' | 'FAILED' | 'SKIPPED'; error?: string }
-
-// ============================================
-// CONSTANTS
-// ============================================
-
-const POLL_HEALTH_MS = 12_000
-const POLL_METRICS_MS = 15_000
-const POLL_NOTIF_MS = 30_000
-
-const CONFIG_SCOPES = [
-  'all', 'trading', 'risk', 'notifications', 'logging', 'bridge', 'rateLimit', 'backtest', 'monitoring',
-]
-
-const VALID_EVENTS = [
-  'TRADE_OPENED', 'TRADE_CLOSED', 'RISK_EVENT', 'CIRCUIT_BREAKER',
-  'SYSTEM_ERROR', 'SYSTEM_STARTUP', 'SESSION_CHANGE', 'TEST', 'ALL',
-]
-
-const SEVERITIES = ['INFO', 'WARN', 'ERROR', 'CRITICAL']
-
-// MT5 RSS soft threshold (mirrors /api/health checkMemory)
-const RSS_LIMIT_MB = 1536
-const HEAP_LIMIT_MB = 512
-
-// ============================================
-// HELPERS
-// ============================================
-
-function formatUptime(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  if (h < 24) return `${h}h ${m}m`
-  return `${Math.floor(h / 24)}d ${h % 24}h`
-}
-
-function formatAge(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const diff = Date.now() - new Date(iso).getTime()
-  if (diff < 0 || isNaN(diff)) return '—'
-  if (diff < 10_000) return 'just now'
-  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  return `${Math.floor(diff / 3_600_000)}h ago`
-}
-
-function formatClock(iso: string | null | undefined): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (isNaN(d.getTime())) return '—'
-  return d.toLocaleTimeString()
-}
-
-// ============================================
-// SMALL PRESENTATIONAL COMPONENTS
-// ============================================
-
-function StatusBadge({ status }: { status: HealthData['status'] }) {
-  const cfg =
-    status === 'HEALTHY'
-      ? 'bg-emerald-600 hover:bg-emerald-700 gap-1.5'
-      : status === 'DEGRADED'
-        ? 'bg-amber-600 hover:bg-amber-700 text-white gap-1.5'
-        : 'bg-red-600 hover:bg-red-700 gap-1.5'
-  return (
-    <Badge className={`h-7 px-3 text-xs font-semibold ${cfg}`}>
-      {status === 'HEALTHY' ? (
-        <CheckCircle2 className="h-3.5 w-3.5" />
-      ) : status === 'DEGRADED' ? (
-        <AlertTriangle className="h-3.5 w-3.5" />
-      ) : (
-        <XCircle className="h-3.5 w-3.5" />
-      )}
-      {status}
-    </Badge>
-  )
-}
-
-function CheckRow({ label, icon: Icon, check }: { label: string; icon: typeof Database; check: ComponentCheck | null }) {
-  return (
-    <div className="flex items-center gap-3 rounded-lg border p-3">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium">{label}</span>
-          {check === null ? (
-            <Badge variant="outline" className="text-[10px] text-muted-foreground">
-              NOT PROBED
-            </Badge>
-          ) : check.ok ? (
-            <Badge className="gap-1 bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-900/40 text-[10px]">
-              <CheckCircle2 className="h-3 w-3" />
-              OK
-            </Badge>
-          ) : (
-            <Badge className="gap-1 bg-red-100 text-red-800 hover:bg-red-100 dark:bg-red-900/40 dark:text-red-300 dark:hover:bg-red-900/40 text-[10px]">
-              <XCircle className="h-3 w-3" />
-              FAIL
-            </Badge>
-          )}
-        </div>
-        <div className="mt-0.5 flex items-center gap-2 text-[11px] text-muted-foreground">
-          {check?.latencyMs !== undefined && <span className="font-mono">{check.latencyMs}ms</span>}
-          {check?.detail && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="truncate max-w-[220px] cursor-help">{check.detail}</span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-xs break-words">
-                {check.detail}
-              </TooltipContent>
-            </Tooltip>
-          )}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function MemoryBar({ label, valueMb, limitMb, unit = 'MB' }: { label: string; valueMb: number; limitMb: number; unit?: string }) {
-  const pct = Math.min(100, Math.round((valueMb / limitMb) * 100))
-  const barColor = pct < 60 ? '[&>div]:bg-emerald-500' : pct < 85 ? '[&>div]:bg-amber-500' : '[&>div]:bg-red-500'
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between text-xs">
-        <span className="text-muted-foreground">{label}</span>
-        <span className="font-mono font-medium">
-          {valueMb.toFixed(1)} {unit} <span className="text-muted-foreground">/ {limitMb} {unit}</span>
-        </span>
-      </div>
-      <Progress value={pct} className={`h-2 ${barColor}`} />
-      <div className="text-right text-[10px] text-muted-foreground">{pct}% of soft limit</div>
-    </div>
-  )
-}
-
-function LayerBadge({ layer }: { layer: string }) {
-  const cfg =
-    layer === 'runtime'
-      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-      : layer === 'database'
-        ? 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300'
-        : layer === 'env'
-          ? 'bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300'
-          : 'bg-muted text-muted-foreground'
-  return <Badge variant="secondary" className={`text-[10px] font-mono ${cfg}`}>{layer}</Badge>
-}
-
-function NotifStatusBadge({ status }: { status: string }) {
-  const cfg =
-    status === 'SENT'
-      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
-      : status === 'FAILED'
-        ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
-        : status === 'PENDING'
-          ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
-          : 'bg-muted text-muted-foreground'
-  return <Badge variant="secondary" className={`text-[10px] ${cfg}`}>{status}</Badge>
-}
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const cfg =
-    severity === 'CRITICAL'
-      ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300'
-      : severity === 'ERROR'
-        ? 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300'
-        : severity === 'WARN'
-          ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300'
-          : 'bg-muted text-muted-foreground'
-  return <Badge variant="secondary" className={`text-[10px] ${cfg}`}>{severity}</Badge>
-}
-
-// ============================================
-// CHANNEL CONFIG CARD (Telegram / Discord)
-// ============================================
-
-function ChannelCard({
-  cfg,
-  saving,
-  onPatch,
-}: {
-  cfg: ChannelConfig
-  saving: boolean
-  onPatch: (channel: 'TELEGRAM' | 'DISCORD', patch: Record<string, unknown>) => Promise<boolean>
-}) {
-  const isTelegram = cfg.channel === 'TELEGRAM'
-  // Draft override: null = show the server value (no prop→state sync needed)
-  const [targetOverride, setTargetOverride] = useState<string | null>(null)
-  const targetDraft = targetOverride ?? (cfg.chatId ?? '')
-  const targetDirty = targetDraft !== (cfg.chatId ?? '')
-  const lastErrorShort = cfg.lastError && cfg.lastError.length > 90 ? `${cfg.lastError.slice(0, 90)}…` : cfg.lastError
-
-  const handleSaveTarget = async () => {
-    const value = targetDraft.trim()
-    if (!value) return
-    const ok = await onPatch(cfg.channel, isTelegram ? { chatId: value } : { webhookUrl: value })
-    if (ok) setTargetOverride(null)
-  }
-
-  return (
-    <Card>
-      <CardHeader className="pb-3">
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="flex items-center gap-2 text-sm font-medium">
-            {isTelegram ? <Send className="h-4 w-4 text-emerald-600" /> : <Cable className="h-4 w-4 text-emerald-600" />}
-            {isTelegram ? 'Telegram' : 'Discord'}
-          </CardTitle>
-          <div className="flex items-center gap-2">
-            {cfg.envConfigured ? (
-              <Badge variant="outline" className="text-[10px] gap-1">
-                <Leaf className="h-3 w-3 text-emerald-600" />
-                ENV OK
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="text-[10px] text-muted-foreground">
-                NO ENV
-              </Badge>
-            )}
-            <Switch
-              checked={cfg.enabled}
-              disabled={saving}
-              onCheckedChange={(checked) => onPatch(cfg.channel, { enabled: checked })}
-              aria-label={`Toggle ${cfg.channel} notifications`}
-            />
-          </div>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Target input */}
-        <div className="space-y-2">
-          <Label htmlFor={`target-${cfg.channel}`} className="text-xs">
-            {isTelegram ? 'Chat ID' : 'Webhook URL'}
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              id={`target-${cfg.channel}`}
-              value={targetDraft}
-              onChange={(e) => setTargetOverride(e.target.value)}
-              placeholder={isTelegram ? 'e.g. 123456789' : 'https://discord.com/api/webhooks/…'}
-              className="text-xs font-mono"
-              disabled={saving}
-            />
-            <Button
-              size="sm"
-              variant="outline"
-              className="shrink-0"
-              disabled={saving || !targetDirty || !targetDraft.trim()}
-              onClick={handleSaveTarget}
-            >
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-              Save
-            </Button>
-          </div>
-        </div>
-
-        {/* Min severity */}
-        <div className="space-y-2">
-          <Label className="text-xs">Minimum Severity</Label>
-          <Select
-            value={cfg.minSeverity}
-            disabled={saving}
-            onValueChange={(v) => onPatch(cfg.channel, { minSeverity: v })}
-          >
-            <SelectTrigger className="h-8 text-xs">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SEVERITIES.map((s) => (
-                <SelectItem key={s} value={s} className="text-xs">
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Events */}
-        <div className="space-y-1.5">
-          <Label className="text-xs">Events</Label>
-          <div className="flex flex-wrap gap-1">
-            {VALID_EVENTS.map((ev) => {
-              const active = cfg.events.includes(ev)
-              return (
-                <button
-                  key={ev}
-                  type="button"
-                  disabled={saving}
-                  onClick={() => {
-                    const next = active ? cfg.events.filter((e) => e !== ev) : [...cfg.events, ev]
-                    onPatch(cfg.channel, { events: next })
-                  }}
-                  className={
-                    active
-                      ? 'rounded-full border border-emerald-600 bg-emerald-600 text-white px-2 py-0.5 text-[10px] font-medium transition-colors hover:bg-emerald-700'
-                      : 'rounded-full border bg-muted text-muted-foreground px-2 py-0.5 text-[10px] transition-colors hover:bg-muted/70'
-                  }
-                  title={active ? `Click to disable ${ev}` : `Click to enable ${ev}`}
-                >
-                  {ev}
-                </button>
-              )
-            })}
-          </div>
-          <p className="text-[10px] text-muted-foreground">Empty = all events dispatched (server default).</p>
-        </div>
-
-        {/* Health of channel */}
-        <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted/30 p-2.5 text-[11px]">
-          <div>
-            <span className="text-muted-foreground">Errors streak: </span>
-            <span className={cfg.consecutiveErrors > 0 ? 'font-mono font-medium text-red-600' : 'font-mono'}>
-              {cfg.consecutiveErrors}
-            </span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Rate limit: </span>
-            <span className="font-mono">{cfg.rateLimitPerMin}/min</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Last sent: </span>
-            <span className="font-mono">{formatAge(cfg.lastSentAt)}</span>
-          </div>
-          <div>
-            <span className="text-muted-foreground">Enabled: </span>
-            <span className={cfg.enabled ? 'font-mono text-emerald-600' : 'font-mono text-muted-foreground'}>
-              {cfg.enabled ? 'yes' : 'no'}
-            </span>
-          </div>
-          {lastErrorShort && (
-            <div className="col-span-2 truncate text-red-600 dark:text-red-400" title={cfg.lastError ?? undefined}>
-              <XCircle className="mr-1 inline h-3 w-3" />
-              {lastErrorShort}
-            </div>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-// ============================================
-// CONFIG ENTRY ROW (inline editor)
-// ============================================
-
-function ConfigEntryRow({
-  entry,
-  busy,
-  onSave,
-  onReset,
-}: {
-  entry: ConfigEntry
-  busy: boolean
-  onSave: (key: string, value: unknown) => Promise<boolean>
-  onReset: (key: string) => Promise<boolean>
-}) {
-  const topLayer = entry.sources[0]?.layer ?? 'default'
-  const hasRuntimeOverride = entry.sources.some((s) => s.layer === 'runtime')
-  const [editing, setEditing] = useState(false)
-  // Draft override: null = show the effective (server) value — avoids prop→state sync
-  const [draftOverride, setDraftOverride] = useState<string | null>(null)
-  const draft = draftOverride ?? String(entry.effective)
-
-  const isNumber = entry.effectiveType === 'number'
-  const isBoolean = entry.effectiveType === 'boolean'
-
-  const validate = (raw: string): { ok: true; value: unknown } | { ok: false; error: string } => {
-    if (isNumber) {
-      const n = Number(raw)
-      if (!Number.isFinite(n)) return { ok: false, error: 'Value must be a valid number' }
-      return { ok: true, value: n }
-    }
-    if (isBoolean) {
-      if (raw !== 'true' && raw !== 'false') return { ok: false, error: 'Value must be true or false' }
-      return { ok: true, value: raw === 'true' }
-    }
-    if (!raw.trim()) return { ok: false, error: 'Value cannot be empty' }
-    return { ok: true, value: raw.trim() }
-  }
-
-  const handleSave = async () => {
-    const parsed = validate(draft)
-    if (!parsed.ok) {
-      toast.error(parsed.error, { description: entry.key })
-      return
-    }
-    const ok = await onSave(entry.key, parsed.value)
-    if (ok) {
-      setEditing(false)
-      setDraftOverride(null)
-    }
-  }
-
-  const handleCancel = () => {
-    setDraftOverride(null)
-    setEditing(false)
-  }
-
-  return (
-    <div className="border-b px-3 py-2.5 last:border-b-0">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-mono text-xs font-medium">{entry.key}</span>
-            <LayerBadge layer={topLayer} />
-            {!entry.mutable && <Badge variant="outline" className="text-[10px] text-muted-foreground">IMMUTABLE</Badge>}
-            {hasRuntimeOverride && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-red-600 disabled:opacity-50"
-                    disabled={busy}
-                    aria-label={`Reset ${entry.key}`}
-                    onClick={() => onReset(entry.key)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="top">Remove runtime override &amp; reset</TooltipContent>
-              </Tooltip>
-            )}
-          </div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">{entry.description || '—'}</p>
-          {/* Layer chain */}
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            {entry.sources.map((s, i) => (
-              <Tooltip key={`${entry.key}-${s.layer}`}>
-                <TooltipTrigger asChild>
-                  <span className="cursor-help">
-                    {i > 0 && <span className="mr-1 text-[10px] text-muted-foreground">←</span>}
-                    <LayerBadge layer={s.layer} />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-[260px]">
-                  <span className="font-mono">{String(s.value)}</span>
-                  {s.updatedAt ? ` (set ${formatAge(s.updatedAt)})` : ''}
-                </TooltipContent>
-              </Tooltip>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 sm:shrink-0">
-          {editing ? (
-            <>
-              {isBoolean ? (
-                <Select value={draft} onValueChange={setDraftOverride}>
-                  <SelectTrigger className="h-8 w-[110px] text-xs font-mono">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="true" className="text-xs">true</SelectItem>
-                    <SelectItem value="false" className="text-xs">false</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input
-                  value={draft}
-                  onChange={(e) => setDraftOverride(e.target.value)}
-                  className="h-8 w-[140px] text-xs font-mono"
-                  autoFocus
-                  type={isNumber ? 'number' : 'text'}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSave()
-                    if (e.key === 'Escape') handleCancel()
-                  }}
-                />
-              )}
-              <Button size="sm" className="h-8 gap-1 text-xs" disabled={busy} onClick={handleSave}>
-                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-                Save
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                className="h-8 gap-1 text-xs"
-                onClick={handleCancel}
-              >
-                <X className="h-3 w-3" />
-                Cancel
-              </Button>
-            </>
-          ) : (
-            <>
-              <span className="max-w-[160px] truncate rounded bg-muted px-2 py-1 font-mono text-xs" title={String(entry.effective)}>
-                {String(entry.effective)}
-              </span>
-              {entry.mutable && (
-                <Button size="sm" variant="outline" className="h-8 gap-1 text-xs" onClick={() => setEditing(true)}>
-                  <Settings2 className="h-3 w-3" />
-                  Edit
-                </Button>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  )
+/** Payload of GET /api/notifications?limit=20 — was the inline useState type. */
+type NotifLogPayload = {
+  notifications: NotificationItem[]
+  stats: { total: number; sent: number; failed: number; pending: number }
 }
 
 // ============================================
@@ -651,22 +72,48 @@ function ConfigEntryRow({
 
 export default function SystemHealthPanel() {
   // ---- Health state ----
+  // `health` stays a local mirror: runFullCheck (on-demand readiness sweep on
+  // a different URL — not hook-compatible) lands its response here directly.
   const [health, setHealth] = useState<HealthData | null>(null)
-  const [healthLoading, setHealthLoading] = useState(true)
-  const [healthError, setHealthError] = useState<string | null>(null)
   const [fullChecking, setFullChecking] = useState(false)
 
-  // ---- Metrics state ----
-  const [metrics, setMetrics] = useState<MetricsData | null>(null)
-  const [metricsLoading, setMetricsLoading] = useState(true)
-  const [metricsError, setMetricsError] = useState<string | null>(null)
+  // ---- Health / metrics / notif-log polls (was fetchHealth + fetchMetrics +
+  // fetchNotifLog + three setIntervals) ----
+  const { data: fetchedHealth, loading: healthLoading, error: healthError } = useApiQuery<HealthData>({
+    url: '/api/health',
+    intervalMs: POLL_HEALTH_MS,
+    transform: (json) => {
+      const d = (json as { data?: unknown } | null)?.data
+      return d && typeof d === 'object' ? (d as HealthData) : undefined
+    },
+  })
+  // Mirror poll data → the health state shared by render + runFullCheck.
+  useEffect(() => {
+    if (fetchedHealth !== null) setHealth(fetchedHealth)
+  }, [fetchedHealth])
+
+  const { data: metrics, loading: metricsLoading, error: metricsError } = useApiQuery<MetricsData>({
+    url: '/api/metrics',
+    intervalMs: POLL_METRICS_MS,
+    transform: (json) => {
+      const d = (json as { success?: unknown; data?: unknown } | null)
+      return d?.success && d.data ? (d.data as MetricsData) : undefined
+    },
+  })
+
+  const { data: notifLog, loading: notifLogLoading, refresh: notifLogRefresh } = useApiQuery<NotifLogPayload>({
+    url: '/api/notifications?limit=20',
+    intervalMs: POLL_NOTIF_MS,
+    transform: (json) => {
+      const d = (json as { success?: unknown; data?: unknown } | null)
+      return d?.success && d.data ? (d.data as NotifLogPayload) : undefined
+    },
+  })
 
   // ---- Notification state ----
   const [channels, setChannels] = useState<{ telegram: ChannelConfig; discord: ChannelConfig } | null>(null)
   const [channelsLoading, setChannelsLoading] = useState(true)
   const [channelSaving, setChannelSaving] = useState(false)
-  const [notifLog, setNotifLog] = useState<{ notifications: NotificationItem[]; stats: { total: number; sent: number; failed: number; pending: number } } | null>(null)
-  const [notifLogLoading, setNotifLogLoading] = useState(true)
   const [testing, setTesting] = useState(false)
   const [testResults, setTestResults] = useState<TestResult[] | null>(null)
 
@@ -681,40 +128,6 @@ export default function SystemHealthPanel() {
   // FETCHERS
   // ============================================
 
-  const fetchHealth = useCallback(async () => {
-    try {
-      const res = await fetch('/api/health', { cache: 'no-store' })
-      const json = await res.json()
-      if (json?.data) {
-        setHealth(json.data as HealthData)
-        setHealthError(null)
-      } else {
-        setHealthError('Invalid health response')
-      }
-    } catch {
-      setHealthError('Failed to reach /api/health')
-    } finally {
-      setHealthLoading(false)
-    }
-  }, [])
-
-  const fetchMetrics = useCallback(async () => {
-    try {
-      const res = await fetch('/api/metrics', { cache: 'no-store' })
-      const json = await res.json()
-      if (json?.success && json.data) {
-        setMetrics(json.data as MetricsData)
-        setMetricsError(null)
-      } else {
-        setMetricsError('Invalid metrics response')
-      }
-    } catch {
-      setMetricsError('Failed to reach /api/metrics')
-    } finally {
-      setMetricsLoading(false)
-    }
-  }, [])
-
   const fetchChannels = useCallback(async () => {
     try {
       const res = await fetch('/api/notifications/config', { cache: 'no-store' })
@@ -726,20 +139,6 @@ export default function SystemHealthPanel() {
       // silent — cards keep stale data
     } finally {
       setChannelsLoading(false)
-    }
-  }, [])
-
-  const fetchNotifLog = useCallback(async () => {
-    try {
-      const res = await fetch('/api/notifications?limit=20', { cache: 'no-store' })
-      const json = await res.json()
-      if (json?.success && json.data) {
-        setNotifLog(json.data)
-      }
-    } catch {
-      // silent — log keeps stale data
-    } finally {
-      setNotifLogLoading(false)
     }
   }, [])
 
@@ -763,27 +162,13 @@ export default function SystemHealthPanel() {
   }, [])
 
   // ============================================
-  // EFFECTS (initial load + polling)
+  // EFFECTS (initial load — health/metrics/notif-log self-fetch via useApiQuery)
   // ============================================
 
   useEffect(() => {
-    fetchHealth()
-    fetchMetrics()
     fetchChannels()
-    fetchNotifLog()
     fetchConfig('all')
-  }, [fetchHealth, fetchMetrics, fetchChannels, fetchNotifLog, fetchConfig])
-
-  useEffect(() => {
-    const h = setInterval(fetchHealth, POLL_HEALTH_MS)
-    const m = setInterval(fetchMetrics, POLL_METRICS_MS)
-    const n = setInterval(fetchNotifLog, POLL_NOTIF_MS)
-    return () => {
-      clearInterval(h)
-      clearInterval(m)
-      clearInterval(n)
-    }
-  }, [fetchHealth, fetchMetrics, fetchNotifLog])
+  }, [fetchChannels, fetchConfig])
 
   // ============================================
   // DERIVED DATA
@@ -830,7 +215,6 @@ export default function SystemHealthPanel() {
       const json = await res.json()
       if (json?.data) {
         setHealth(json.data as HealthData)
-        setHealthError(null)
         const status = json.data.status as HealthData['status']
         if (status === 'HEALTHY') {
           toast.success('Full readiness check passed', { description: `All dependencies OK (${json.data.latencyMs}ms)` })
@@ -888,7 +272,7 @@ export default function SystemHealthPanel() {
           toast.warning('No channel delivered the test', { description: 'Enable a channel & configure its target first' })
         }
         // The TEST event is logged — refresh the log
-        fetchNotifLog()
+        void notifLogRefresh()
       } else {
         toast.error('Test notification failed')
       }

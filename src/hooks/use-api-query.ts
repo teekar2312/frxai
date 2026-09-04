@@ -106,7 +106,9 @@ export function useApiQuery<T>(options: UseApiQueryOptions<T>): UseApiQueryResul
     const controller = new AbortController()
     abortRef.current = controller
     try {
-      const res = await fetch(url, { signal: controller.signal })
+      // no-store: every consumer polls live API state (matching the
+      // hand-rolled fetches this hook replaced)
+      const res = await fetch(url, { cache: 'no-store', signal: controller.signal })
       if (seq !== seqRef.current) return // superseded by a newer fetch
       if (!res.ok) {
         setError(`HTTP ${res.status}`)

@@ -1,6 +1,7 @@
 {
   "name": "mt5-bridge",
   "scripts": {
-    "dev": "bun --hot index.ts"
+    "dev": "bun --hot index.ts",
+    "supervisor": "bun supervisor.ts"
   }
 }

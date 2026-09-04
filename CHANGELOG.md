@@ -31,6 +31,9 @@ Format berdasarkan [Keep a Changelog](https://keepachangelog.com/), dan proyek i
 ### Verified
 - Browser E2E: 14 tab render, 0 console error; Auto Trading config (dropdown mode) fungsional; Backtest run end-to-end via UI (POST 201, status COMPLETED); error format baru diverifikasi via curl (JSON invalid → 500 + code INTERNAL_ERROR + recovery + route).
 
+### Fixed
+- **`StrategyMonitor` crash** — `strategies.filter is not a function`: komponen memasukkan `json.data` (object) ke state padahal endpoint `/api/strategies` mengembalikan array di `data.strategies`. Kini: pembacaan `data.strategies` + guard `Array.isArray` (respons salah bentuk → pertahankan data lama, tanpa crash) + mapping field yang benar (`enabled`→`status`, `currentSignal` `NEUTRAL`→`HOLD`, `lastUpdated`→waktu lokal, `activeSymbol` dari sinyal per-simbol). Sekalian diperbaiki: polling 10s yang berhenti permanen setelah ganti tab (handler `visibilitychange` lama menghapus interval tanpa restart) → kini reaktiv via state `visible`.
+
 ---
 
 ## [0.2.1] — 2025-01-XX

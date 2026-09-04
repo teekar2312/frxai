@@ -26,6 +26,45 @@ interface StrategyInfo {
   lastSignalTime: string
 }
 
+/** Raw strategy object returned by GET /api/strategies (data.strategies[]). */
+interface ApiStrategy {
+  id: string
+  name: string
+  description: string
+  enabled: boolean
+  currentSignal: 'BUY' | 'SELL' | 'NEUTRAL'
+  confidence: number
+  lastUpdated: string
+  symbols?: Array<{ symbol: string; signal: string; confidence: number }>
+}
+
+/** Map the API payload into the shape this component renders. */
+function toStrategyInfo(s: ApiStrategy, fallbackSymbol: string): StrategyInfo {
+  // First symbol with a non-neutral signal, else the strongest-confidence entry,
+  // else the endpoint's primary symbol.
+  const perSymbol = Array.isArray(s.symbols) ? s.symbols : []
+  const signalSymbol =
+    perSymbol.find((x) => x.signal === 'BUY' || x.signal === 'SELL')?.symbol ??
+    perSymbol[0]?.symbol ??
+    fallbackSymbol
+
+  const time = new Date(s.lastUpdated)
+  const lastSignalTime = Number.isNaN(time.getTime())
+    ? '--'
+    : time.toLocaleTimeString('id-ID', { hour12: false })
+
+  return {
+    id: s.id,
+    name: s.name,
+    description: s.description,
+    status: s.enabled ? 'Active' : 'Paused',
+    signal: s.currentSignal === 'BUY' ? 'BUY' : s.currentSignal === 'SELL' ? 'SELL' : 'HOLD',
+    confidence: typeof s.confidence === 'number' ? Math.round(s.confidence) : 0,
+    activeSymbol: signalSymbol,
+    lastSignalTime,
+  }
+}
+
 
 function getSignalBadge(signal: SignalType) {
   switch (signal) {
@@ -47,6 +86,7 @@ function getConfidenceColor(confidence: number): string {
 export default function StrategyMonitor() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
   const [loading, setLoading] = useState(true)
+  const [visible, setVisible] = useState(true)
 
   const abortRef = useRef<AbortController | null>(null)
 
@@ -58,7 +98,16 @@ export default function StrategyMonitor() {
       const res = await fetch('/api/strategies', { signal: controller.signal })
       if (res.ok) {
         const json = await res.json()
-        setStrategies(json.data ?? [])
+        // The endpoint returns { data: { strategies: [...], summary, ... } }.
+        // Guard with Array.isArray so an unexpected shape degrades to the
+        // previous data instead of crashing render
+        // (fix: "strategies.filter is not a function").
+        const raw = json?.data?.strategies
+        const primarySymbol = json?.data?.dataInfo?.symbol ?? 'BBCA'
+        if (Array.isArray(raw)) {
+          setStrategies(raw.map((s: ApiStrategy) => toStrategyInfo(s, primarySymbol)))
+        }
+        // non-array / malformed → keep stale data (initial state is [])
       }
     } catch {
       // use stale data
@@ -67,24 +116,21 @@ export default function StrategyMonitor() {
     }
   }, [])
 
+  // Track tab visibility in state so the polling effect re-runs when the tab
+  // becomes visible again (the old handler cleared the interval and never
+  // restarted it — polling died permanently after a tab switch).
   useEffect(() => {
+    const handleVisibility = () => setVisible(!document.hidden)
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
+
+  useEffect(() => {
+    if (!visible) return
     fetchStrategies()
     const interval = setInterval(fetchStrategies, 10000)
-    const handleVisibility = () => {
-      if (document.hidden) {
-        clearInterval(interval)
-      } else {
-        fetchStrategies()
-        // Need to restart interval — handle by re-running effect
-      }
-    }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => {
-      clearInterval(interval)
-      abortRef.current?.abort()
-      document.removeEventListener('visibilitychange', handleVisibility)
-    }
-  }, [fetchStrategies])
+    return () => clearInterval(interval)
+  }, [fetchStrategies, visible])
 
   const activeCount = strategies.filter((s) => s.status === 'Active').length
   const buyCount = strategies.filter((s) => s.signal === 'BUY').length

@@ -10,10 +10,6 @@ const db = new PrismaClient()
 
 // ---- Helpers ----
 
-function getWibNow(): Date {
-  return new Date()
-}
-
 function getWibHour(): number {
   const wibStr = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Jakarta',
@@ -326,10 +322,6 @@ async function main() {
   await db.dailyPerformance.deleteMany({})
 
   // Calculate PnL for each day
-  const todayPnl = createdClosedTrades.filter(t => t.daysOffset === 0).reduce((s, _t, _i) => {
-    const spec = closedTradeSpecs.find(s2 => s2.daysOffset === 0)
-    return s
-  }, 0)
   // Recalculate properly
   const todayClosedPnl = closedTradeSpecs.filter(t => t.daysOffset === 0).reduce((s, t) => s + t.pnl, 0) // 500+1200+320+480-400-40 = 2060
   const todayOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0) // 350+700-90+1200+120-400-450+420 = 1850

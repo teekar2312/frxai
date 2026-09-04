@@ -136,7 +136,7 @@ describe('setConfigValue', () => {
     const res = await setConfigValue('bridge.url', 'http://evil:9999', { persist: false })
     expect(res.ok).toBe(false)
     expect(res.error).toContain('immutable')
-    expect(getConfig('bridge.url')).toBe('http://localhost:3001') // unchanged
+    expect(getConfig<string>('bridge.url')).toBe('http://localhost:3001') // unchanged
   })
 
   test('value failing validation (trading.leverage = -5) is rejected', async () => {

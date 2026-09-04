@@ -473,7 +473,7 @@ export const MT5_ERROR_CODE_MAP: Map<number, Mt5ErrorCodeEntry> = new Map(
 /** Convert WIB (UTC+7) hours/minutes to UTC hours/minutes */
 function wibToUtc(wibHour: number, wibMinute: number = 0): { hour: number; minute: number } {
   let utcHour = wibHour - 7
-  let utcMinute = wibMinute
+  const utcMinute = wibMinute
   if (utcHour < 0) utcHour += 24
   return { hour: utcHour, minute: utcMinute }
 }

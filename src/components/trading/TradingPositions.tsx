@@ -156,8 +156,8 @@ export default function TradingPositions() {
         }),
       })
       if (res.ok) {
-        const json = await res.json()
-        const created = json.data ?? json
+        // Response body still consumed; binding dropped (was unused)
+        await res.json()
         setDialogOpen(false)
         resetForm()
         // Re-fetch to get server-side trade with real ID

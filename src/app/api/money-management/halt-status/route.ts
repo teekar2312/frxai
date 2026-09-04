@@ -10,7 +10,7 @@ export async function GET() {
   try {
     const haltStatus = await getPreTradeHaltStatus()
     return NextResponse.json({ success: true, data: haltStatus })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Failed to fetch halt status" },
       { status: 500 },

@@ -7,7 +7,7 @@ import { defaultNewsFactors } from './helpers'
 // Breaking news cache (shared across symbols within the same minute)
 let breakingNewsCache: { items: Awaited<ReturnType<typeof detectBreakingNews>>; cachedAt: number } | null = null
 // Fix 4 (Task 2-b): Time-based cache for per-symbol news fetches (avoids redundant API calls)
-let lastNewsFetchTime: Record<string, number> = {}
+const lastNewsFetchTime: Record<string, number> = {}
 
 // ============================================================================
 // SECTION 5: NEWS IMPACT ANALYSIS

@@ -108,7 +108,7 @@ export async function POST(request: NextRequest) {
     })
 
     return NextResponse.json({ success: true, data: log }, { status: 201 })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Failed to create log" },
       { status: 500 }

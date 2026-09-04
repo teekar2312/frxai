@@ -1,6 +1,6 @@
 import logger from '@/lib/trading-logger'
 import { filterTrade, getSentimentTrend } from '@/lib/sentiment-filter'
-import type { SentimentFilterResult, SentimentTrend } from '@/lib/sentiment-filter'
+import type { SentimentTrend } from '@/lib/sentiment-filter'
 import { type SentimentFactors } from './types'
 import { defaultSentimentFactors } from './helpers'
 

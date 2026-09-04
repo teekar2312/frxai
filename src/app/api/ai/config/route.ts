@@ -62,7 +62,6 @@ export async function GET() {
  },
  })
  } catch (err) {
- const msg = err instanceof Error ? err.message : String(err)
  return apiErrorResponse(err, { route: 'AI-CONFIG' })
  }
 }
@@ -106,7 +105,6 @@ export async function PUT(request: NextRequest) {
  },
  })
  } catch (err) {
- const msg = err instanceof Error ? err.message : String(err)
  return apiErrorResponse(err, { route: 'AI-CONFIG' })
  }
 }

@@ -353,7 +353,6 @@ class AutoTradingLoop {
 
           // If we've opened a position, check if we've hit the max
           if (scanResult.actionTaken === 'EXECUTED') {
-            const updatedOpen = openPositions.length + this._tradesOpened
             // Re-count from DB to be accurate
             const currentOpen = await db.trade.count({ where: { status: 'OPEN' } })
             if (currentOpen >= this.config.maxOpenPositions) {
@@ -438,7 +437,7 @@ class AutoTradingLoop {
 
   private async processDecision(
     decision: AiDecision,
-    openPositions: TradeRecord[],
+    _openPositions: TradeRecord[],
   ): Promise<ScanResult> {
     const { symbol, decision: dec, confidence, suggestedLotSize, suggestedSl, suggestedTp } = decision
 
@@ -607,7 +606,7 @@ class AutoTradingLoop {
       const weakest = sorted[0]
 
       if (weakest && weakest.id) {
-        await closeTrade(weakest.id, 'AUTO_REDUCE', `AI REDUCE signal: ${decision.reasoning}`)
+        await closeTrade(weakest.id, `AI REDUCE signal: ${decision.reasoning}`)
         this._tradesClosedByAI++
         logger.info('AUTO_TRADING', `Reduced position: closed ${weakest.symbol}`, {
           symbol: weakest.symbol,
@@ -633,7 +632,7 @@ class AutoTradingLoop {
       this._lastSyncAt = new Date()
 
       logger.info('AUTO_TRADING', `Broker position sync: ${brokerPositions.length} positions`, {
-        brokerPositionCount: brokerPositions.length,
+        metadata: { brokerPositionCount: brokerPositions.length },
       })
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err)

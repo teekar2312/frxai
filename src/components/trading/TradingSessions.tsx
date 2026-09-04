@@ -127,12 +127,12 @@ export default function TradingSessions() {
   const [data, setData] = useState<SessionsApiResponse | null>(null)
   const [currentHour, setCurrentHour] = useState<number>(new Date().getUTCHours())
   const [currentMinute, setCurrentMinute] = useState<number>(new Date().getUTCMinutes())
-  const [loading, setLoading] = useState(true)
+  const [, setLoading] = useState(true)
 
   // Session config state
   const [sessionConfig, setSessionConfig] = useState<SessionTradingConfig | null>(null)
   const [activeOverlapKeys, setActiveOverlapKeys] = useState<Set<string>>(new Set())
-  const [configLoading, setConfigLoading] = useState(true)
+  const [, setConfigLoading] = useState(true)
   const [updatingKey, setUpdatingKey] = useState<string | null>(null)
 
   const fetchSessions = useCallback(async () => {
@@ -221,8 +221,6 @@ export default function TradingSessions() {
   const sessions = data?.data.sessions ?? []
   const overlaps = data?.data.overlaps ?? []
   const idx = data?.data.idx
-  const activeSessions = data?.data.activeSessions ?? []
-  const activeOverlaps = data?.data.activeOverlaps ?? []
   const performance = data?.data.sessionPerformance
   const riskBudget = data?.data.riskBudget
   const recommendation = data?.data.recommendation ?? ''

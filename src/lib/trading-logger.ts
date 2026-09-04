@@ -966,17 +966,17 @@ class EscalationManager {
     level: LogLevel,
     category: LogCategory,
     message: string,
-    ctx?: LogContext
+    _ctx?: LogContext
   ): Promise<void> {
-    let escalationLevel: number
-    let actions: string[] = []
+    let _escalationLevel: number
+    const actions: string[] = []
 
     switch (level) {
       case 'ERROR':
-        escalationLevel = 1
+        _escalationLevel = 1
         break
       case 'CRITICAL':
-        escalationLevel = 2
+        _escalationLevel = 2
         // Create EscalationEvent in DB for CRITICAL
         try {
           const record = await db.escalationEvent.create({
@@ -1006,7 +1006,7 @@ class EscalationManager {
         return
 
       case 'FATAL':
-        escalationLevel = 3
+        _escalationLevel = 3
         // Create EscalationEvent in DB for FATAL
         const fatalActions: string[] = []
 

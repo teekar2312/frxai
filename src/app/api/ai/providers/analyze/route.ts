@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { chat, buildMarketAnalysisPrompt, buildSentimentAnalysisPrompt, buildNewsSummaryPrompt, buildPortfolioAnalysisPrompt } from '@/lib/ai-providers'
-import type { AiAnalysisResult, AiSentimentResult, AiNewsSummary } from '@/lib/ai-providers'
 
 /**
  * POST /api/ai/providers/analyze — Run AI analysis using configured providers
@@ -14,7 +13,7 @@ export async function POST(request: NextRequest) {
 
     let messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = []
     let taskType: 'market_analysis' | 'sentiment_analysis' | 'news_summary' | 'strategy_suggestion' | 'risk_assessment' = 'market_analysis'
-    let jsonMode = true
+    const jsonMode = true
 
     switch (task) {
       case 'market_analysis': {

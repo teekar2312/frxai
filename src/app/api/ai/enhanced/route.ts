@@ -65,7 +65,6 @@ export async function GET() {
     const status = await getLlmStatus()
     return NextResponse.json({ success: true, data: status })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unknown error'
     return apiErrorResponse(err, { route: 'POST /api/ai/enhanced' })
   }
 }

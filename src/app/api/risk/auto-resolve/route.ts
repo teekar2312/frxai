@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       success: true,
       data: { resolvedCount },
     })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Auto-resolve failed" },
       { status: 500 },

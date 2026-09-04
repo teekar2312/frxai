@@ -181,7 +181,8 @@ export function generateMockCandles(
 
     // Random walk components
     const trend = (Math.random() - 0.495) * volatility * 0.3 // Slight upward bias
-    const noise = (Math.random() - 0.5) * volatility * 2
+    // Math.random() draw intentionally kept (RNG call sequence preserved); binding unused
+    const _noise = (Math.random() - 0.5) * volatility * 2
 
     // Gap from previous close
     const gap = (Math.random() - 0.5) * volatility * 0.1

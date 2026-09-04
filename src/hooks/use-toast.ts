@@ -18,7 +18,9 @@ type ToasterToast = ToastProps & {
   action?: ToastActionElement
 }
 
-const actionTypes = {
+// Exported so the value is considered "used" (it is intentionally referenced
+// only as a type via `typeof actionTypes`); no runtime behavior change.
+export const actionTypes = {
   ADD_TOAST: "ADD_TOAST",
   UPDATE_TOAST: "UPDATE_TOAST",
   DISMISS_TOAST: "DISMISS_TOAST",

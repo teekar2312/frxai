@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { parsePagination } from '@/lib/api-query'
 import logger from '@/lib/trading-logger'
 
 const VALID_SORT_FIELDS = ['closeTime', 'pnl', 'pnlPercent'] as const
@@ -11,8 +12,7 @@ export async function GET(request: NextRequest) {
     const symbol = searchParams.get('symbol')
     const strategy = searchParams.get('strategy')
     const outcome = searchParams.get('outcome') // all, win, loss
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10) || 1)
-    const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '20', 10) || 20))
+    const { page, limit } = parsePagination(searchParams)
     const startDateStr = searchParams.get('startDate')
     const endDateStr = searchParams.get('endDate')
     const sortField = searchParams.get('sort') || 'closeTime'

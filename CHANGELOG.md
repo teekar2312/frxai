@@ -6,6 +6,86 @@ Format berdasarkan [Keep a Changelog](https://keepachangelog.com/), dan proyek i
 
 ---
 
+## [2.1.0] — Modular Architecture, Zero tsc Errors, Enforced Lint
+
+### Modularization — the 5 engines >1,700 lines split into 50 domain modules
+Pure code movement via the **facade pattern**: every original import path
+(`@/lib/<module>`) still works — the original file is now a thin re-export
+facade, all consumers untouched. All 5 splits were verified byte-identical
+against their original slices (diff vs `git show`), with acyclic internal
+import DAGs and every module-level singleton declared exactly once.
+
+| File (before) | → Folder (after) | Parts |
+|---|---|---|
+| `ai-decision-engine.ts` (3,343) | `src/lib/ai/` | 14 (types, helpers, technical-synthesis, news-analysis, sentiment, risk-context, signal-tracking, reasoning, decision-core, consensus, batch, trackers, config, self-learning) |
+| `mt5-connection.ts` (2,295) | `src/lib/mt5/` | 7 (types, mutex, symbols, config, bridge, circuit-breaker, connection-manager) |
+| `trade-execution-engine.ts` (2,620) | `src/lib/execution/` | 10 (types, lifecycle, pnl, trigger-engine, trailing-stop, partial-close, position-sync, price-pipeline, emergency-close, pipeline) |
+| `risk-engine.ts` (1,835) | `src/lib/risk/` | 12 (types, internal-helpers, config, events, margin-monitoring, snapshot, pre-trade, gap-detection, volatility-regime, stale-resolver, correlation, audit-trail) |
+| `indicator-pool.ts` (1,788) | `src/lib/indicators/` | 7 (types, helpers, calculations, pool, candles, strategies, snapshot) |
+
+`src/lib/config.ts` is now pure static constants (dead `getCurrentEquity()` removed —
+zero consumers; DB-backed values live in domain modules).
+
+### Type Safety — tsc errors: 54 → 0 repo-wide
+- **`bun:test` resolution**: `tests/globals.d.ts` loads `bun-types` (already a devDependency)
+  — the whole test suite now type-checks without touching a single test file.
+- **Mini-service isolation**: `mini-services/mt5-bridge` gets its own `tsconfig.json`
+  (Bun runtime, no DOM lib) and is excluded from the app tsconfig — its 10 errors
+  were DOM-lib leakage (`history`/`History`, `Position` global merge), fixed by module
+  scoping (`export {}`) + proper `req.json()` casts. Own tsc: 10 → 0.
+- **Real latent bugs the type system caught**:
+  - `POST /api/trades` destructured `const [pnlAgg] = await db.trade.aggregate(...)` —
+    aggregate returns a single object, not an array → runtime "not iterable" crash
+    on every manual trade. Fixed (shared `getAccountEquity()` helper).
+  - `POST /api/trades/execute` called `captureIndicatorSnapshot(candles)` with the
+    symbol argument missing → indicator snapshot never persisted for manual trades. Fixed.
+- **Prisma schema**: `Trade.mt5Ticket Int?` added (the modify-at-broker route reads it;
+  bridge `modifyPositionAtBridge` param aligned to `number` — the bridge service
+  expects a numeric ticket). Note: ticket persistence from order results is still a
+  known functional gap (documented in worklog).
+- **Type fixes**: `TradeLifecycleEvent.pnlPercent?` (now emitted by closeTrade —
+  notifications show real % instead of 0.00), `provider-manager.lastTestResult`
+  narrowed to `"success" | "failure" | null`, auto-trading-loop `closeTrade` call
+  signature (reason string was landing in the closePrice slot), `LogContext`
+  misuse moved into `metadata`, `recordMetric` value-first overload,
+  `RiskManagement` haltData normalization typed complete.
+
+### Lint — newly enforced rules, 124 violations → 0 errors
+Enabled (previously off): `@typescript-eslint/no-unused-vars` (with `_` ignore
+pattern), `prefer-const`, `no-debugger`, `no-unreachable`, `no-redeclare`,
+`no-fallthrough`, `@typescript-eslint/prefer-as-const`, `no-empty` (warn),
+`no-useless-escape` (warn). Cleanup: 18 unused imports, 8 unused catch bindings,
+7 dead `const msg`, 20 dead locals, 8 params `_`-prefixed, `no-mixed-spaces-and-tabs`
+downgraded to warn (49 pre-existing cosmetic indentation sites — formatting pass
+scheduled). Remaining warnings: 31 legit `no-console` (documented) + the 49 whitespace.
+
+### Shared utilities & DI seam
+- **`src/lib/di.ts`** — service locator for `db` + `logger` (`getDb`/`getLogger`/
+  `setService`/`resetServices`/`withServices`). Production resolves the same
+  singletons (zero overhead); tests can inject fakes. Async-aware: overrides stay
+  active across awaits (a bug the new tests caught and fixed).
+- **`src/lib/api-query.ts`** — `parsePagination()` standardizes the 8 hand-rolled
+  page/limit parsing variants (NaN/negative/overflow → defaults + clamping);
+  wired into `/api/trades/history`.
+- **`src/lib/db-utils.ts`** — `getAccountEquity()` (single aggregate query, the
+  pattern previously inlined); wired into `POST /api/trades`.
+
+### Tests
+- +33 (di 12, api-query 21): DI resolution/override/nesting/async-scope semantics,
+  pagination edge cases, injected-fake DB flowing through `getAccountEquity` —
+  **total 434/434 pass** across 16 files.
+
+### Verified
+- Cold-start dev server HEALTHY; browser E2E: 14/14 tabs render with **0 page errors,
+  0 console errors/warnings** (also fixed a pre-existing React `key` warning in
+  `AiAnalysisPanel` — JSON-parsed lists can contain nulls/missing keys);
+  Backtest golden path run via UI → COMPLETED (BBCA/EMA/1H through the split
+  indicator pipeline); Trade History renders with rewired pagination.
+- `bun run lint` 0 errors · `bun test` 434/434 · `bunx tsc --noEmit` 0 errors
+  (root + mini-service).
+
+---
+
 ## [2.0.2] — RiskManagement Crash Fix & Rich Halt Status
 
 ### Fixed

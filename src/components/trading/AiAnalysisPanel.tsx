@@ -320,8 +320,8 @@ export default function AiAnalysisPanel() {
               <div>
                 <p className="mb-3 text-sm font-semibold">Analysis Factors</p>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  {data.factors.map((factor) => (
-                    <div key={factor.key} className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                  {data.factors.map((factor, i) => (
+                    <div key={factor.key ?? `factor-${i}`} className="flex items-start justify-between gap-3 rounded-lg border p-3">
                       <div className="min-w-0"><p className="text-sm font-medium">{factor.name}</p><p className="truncate text-xs text-muted-foreground">{factor.detail}</p></div>
                       <div className="flex shrink-0 flex-col items-end gap-1">{impactBadge(factor.impact)}<span className="text-xs font-mono text-muted-foreground">{factor.score}</span></div>
                     </div>
@@ -429,7 +429,7 @@ export default function AiAnalysisPanel() {
                   if (!Array.isArray(sources) || sources.length === 0) return null
                   return (
                     <div className="flex flex-wrap gap-1">
-                      {sources.map(s => <Badge key={s} variant="outline" className="text-[10px] h-5">{s}</Badge>)}
+                      {sources.map((s, i) => <Badge key={`${i}-${String(s)}`} variant="outline" className="text-[10px] h-5">{s}</Badge>)}
                     </div>
                   )
                 } catch { return null }

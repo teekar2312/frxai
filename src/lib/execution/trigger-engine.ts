@@ -285,6 +285,7 @@ export async function closeTrade(
       toStatus: 'CLOSED',
       reason,
       pnl,
+      pnlPercent,
       metadata: {
         closePrice: finalClosePrice,
         entryPrice: trade.entryPrice,

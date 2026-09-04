@@ -74,9 +74,6 @@ export interface StrategySignal {
 // CONSTANTS
 // ============================================
 
-/** Default minimum bars required for safe indicator computation */
-const DEFAULT_MIN_BARS = 200
-
 /** Default cache TTL in milliseconds */
 export const DEFAULT_CACHE_TTL_MS = 60_000
 

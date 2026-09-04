@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     })
 
     return NextResponse.json({ success: true, data: result })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Gap risk assessment failed" },
       { status: 500 },

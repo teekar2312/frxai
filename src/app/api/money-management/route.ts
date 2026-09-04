@@ -103,7 +103,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { action, symbol, direction, entryPrice, sl, equity, method, fixedDollarRisk, scalingFactor } = body
+    const { action, symbol, direction, entryPrice, sl, equity, method, fixedDollarRisk } = body
 
     if (action === "calculate-size") {
       if (!symbol || !entryPrice || !equity) {

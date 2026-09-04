@@ -348,8 +348,9 @@ function setCachedSentiment(symbol: string, data: NonNullable<Awaited<ReturnType
 
 /**
  * Tokenize text into lowercase words, filtering stop words.
+ * Currently unused (_-prefixed for eslint); kept as reference utility.
  */
-function tokenize(text: string): string[] {
+function _tokenize(text: string): string[] {
   const lower = text.toLowerCase()
   const words = lower.split(/[^a-z0-9\u00C0-\u024F\u4e00-\u9fff]+/)
   return words.filter((w) => w.length > 1 && !STOP_WORDS.has(w))
@@ -378,8 +379,9 @@ function clamp(value: number, min: number, max: number): number {
 
 /**
  * Safely parse a JSON string field from Prisma.
+ * Currently unused (_-prefixed for eslint); kept as reference utility.
  */
-function parseJsonField<T>(field: string | null | undefined, fallback: T): T {
+function _parseJsonField<T>(field: string | null | undefined, fallback: T): T {
   if (!field) return fallback
   try {
     return JSON.parse(field) as T
@@ -397,8 +399,9 @@ function toJsonString(value: unknown): string {
 
 /**
  * Check if a Prisma JSON field (stored as string) contains a given symbol.
+ * Currently unused (_-prefixed for eslint); kept as reference utility.
  */
-function symbolInJsonSymbols(jsonSymbols: string | null, symbol: string): boolean {
+function _symbolInJsonSymbols(jsonSymbols: string | null, symbol: string): boolean {
   if (!jsonSymbols) return false
   try {
     const arr: unknown[] = JSON.parse(jsonSymbols)

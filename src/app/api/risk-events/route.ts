@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
         stats: { total, unresolved, critical, today: todayEvents },
       },
     })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Failed to fetch risk events" },
       { status: 500 }
@@ -77,7 +77,7 @@ export async function PATCH(request: NextRequest) {
     })
 
     return NextResponse.json({ success: true, data: updated })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Failed to update risk event" },
       { status: 500 }

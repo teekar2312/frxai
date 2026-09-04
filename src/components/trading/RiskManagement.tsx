@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ShieldAlert, TrendingDown, Activity, Percent, Gauge, AlertTriangle, Ban, AlertOctagon, CheckCircle2, XCircle, TriangleAlert, PieChart, Layers, TrendingUp, DollarSign, Hand, BarChart3, Zap, Loader2 } from 'lucide-react'
+import { ShieldAlert, TrendingDown, Activity, Percent, Gauge, AlertTriangle, Ban, AlertOctagon, CheckCircle2, XCircle, TriangleAlert, PieChart, Layers, TrendingUp, Hand, BarChart3, Zap, Loader2 } from 'lucide-react'
 
 interface PositionRisk {
   tradeId: string
@@ -194,6 +194,7 @@ export default function RiskManagement() {
         if (raw && typeof raw === 'object') {
           setHaltData({
             ...raw,
+            canTrade: raw.canTrade === true,
             consecutiveLosses: Number(raw.consecutiveLosses) || 0,
             maxConsecutiveLosses: Number(raw.maxConsecutiveLosses) || 5,
             sessionPnl: Number(raw.sessionPnl) || 0,

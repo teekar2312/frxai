@@ -342,7 +342,7 @@ export function computeStrategySignal(
           return { signal: 'NEUTRAL', confidence: 0, strength: 0, indicators }
         }
 
-        const { upper, middle, lower, percentB } = bollResult.values
+        const { percentB } = bollResult.values
 
         // BUY at lower band (%B < 0.1 — price near or below lower band)
         if (percentB < 0.1) {

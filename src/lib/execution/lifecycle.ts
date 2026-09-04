@@ -27,6 +27,7 @@ export interface TradeLifecycleEvent {
   toStatus: string
   reason?: string
   pnl?: number
+  pnlPercent?: number
   metadata?: Record<string, unknown>
   timestamp: Date
 }

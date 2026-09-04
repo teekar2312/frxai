@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAllProviderConfigs, getProviderConfig, updateProviderConfig, enableProvider, getProviderMetas, seedProviderConfigs } from '@/lib/ai-providers'
+import { getAllProviderConfigs, updateProviderConfig, enableProvider, getProviderMetas, seedProviderConfigs } from '@/lib/ai-providers'
 
 /**
  * GET /api/ai/providers — List all provider configs + metadata

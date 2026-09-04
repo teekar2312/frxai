@@ -164,12 +164,12 @@ const MIN_SL_TP_DISTANCE_TICKS = 10;
 
 let session: Session | null = null;
 let balance = DEFAULT_BALANCE;
-let positions: Map<number, Position> = new Map();
+const positions: Map<number, Position> = new Map();
 let history: ClosedTrade[] = [];
 let nextTicket = TICKET_COUNTER_START;
 
 // Live price feed with random walk
-let livePrices: Record<string, { bid: number; ask: number }> = {};
+const livePrices: Record<string, { bid: number; ask: number }> = {};
 
 function initPrices(): void {
   for (const [sym, info] of Object.entries(SYMBOL_MAP)) {
@@ -346,7 +346,7 @@ function validateSymbol(symbol: string): string | null {
 async function handleConnect(req: Request): Promise<Response> {
   let body: { login?: number; password?: string; server?: string };
   try {
-    body = await req.json();
+    body = (await req.json()) as { login?: number; password?: string; server?: string };
   } catch {
     return errorResponse(400, "Invalid JSON body");
   }
@@ -439,7 +439,7 @@ async function handleOrder(req: Request): Promise<Response> {
     comment?: string;
   };
   try {
-    body = await req.json();
+    body = (await req.json()) as { symbol?: string; direction?: string; lotSize?: number; sl?: number | null; tp?: number | null; comment?: string };
   } catch {
     return errorResponse(400, "Invalid JSON body");
   }
@@ -550,7 +550,7 @@ async function handleClose(req: Request): Promise<Response> {
 
   let body: { ticket?: number };
   try {
-    body = await req.json();
+    body = (await req.json()) as { ticket?: number };
   } catch {
     return errorResponse(400, "Invalid JSON body");
   }
@@ -750,7 +750,7 @@ async function handlePrices(): Promise<Response> {
   tickPrices();
 
   const prices: Record<string, { bid: number; ask: number; spread: number; timestamp: string }> = {};
-  for (const [sym, info] of Object.entries(SYMBOL_MAP)) {
+  for (const [sym] of Object.entries(SYMBOL_MAP)) {
     const p = livePrices[sym];
     prices[sym] = {
       bid: p.bid,
@@ -927,3 +927,6 @@ Bun.serve({
 });
 
 console.log("[" + new Date().toISOString() + "] MT5 Bridge server listening on port " + PORT);
+
+// Force module scope so local interfaces (Position, etc.) do not merge with global types from bun-types/DOM lib
+export {}

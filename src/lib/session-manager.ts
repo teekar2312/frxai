@@ -872,7 +872,6 @@ export async function isOverlapEnabled(overlapKey: string): Promise<boolean> {
 export async function getActiveOverlapSessions(): Promise<Array<{ key: string; label: string; name: string }>> {
   const config = await getSessionTradingConfig()
   const utcHour = new Date().getUTCHours()
-  const utcMinute = new Date().getUTCMinutes()
 
   const overlapMap: Record<string, string> = {
     overlap_tokyo_london: 'Tokyo-London',

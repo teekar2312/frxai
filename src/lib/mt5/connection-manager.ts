@@ -913,7 +913,7 @@ export async function getPositionsFromBridge(): Promise<Array<Record<string, unk
 
 /** Modify SL/TP on an existing position via the MT5 bridge */
 export async function modifyPositionAtBridge(params: {
-  ticket: string
+  ticket: number
   symbol?: string
   sl?: number
   tp?: number

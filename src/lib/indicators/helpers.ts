@@ -27,7 +27,7 @@ export function standardDeviation(values: number[]): number {
 
 /** Generate a cache key from indicator name, params, and optional scope */
 export function cacheKey(name: IndicatorName, params?: Record<string, number>, scope?: string): string {
-  let key = scope ? `${scope}:` : ''
+  const key = scope ? `${scope}:` : ''
   if (!params || Object.keys(params).length === 0) return `${key}${name}`
   const sorted = Object.entries(params)
     .sort(([a], [b]) => a.localeCompare(b))

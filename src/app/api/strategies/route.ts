@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server"
-import { IndicatorPool, computeStrategySignal, fetchCandles, storeCandles } from "@/lib/indicator-pool"
+import { IndicatorPool, computeStrategySignal, fetchCandles } from "@/lib/indicator-pool"
 import { checkSessionTradingRules, getSessionSizingMultiplier, getSessionQualityScore } from "@/lib/session-manager"
 import logger from "@/lib/trading-logger"
 
@@ -104,7 +104,6 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const symbol = searchParams.get("symbol") || "BBCA"
     const timeframe = searchParams.get("timeframe") || "H1"
-    const refresh = searchParams.get("refresh") === "true"
 
     // Session rules check
     const sessionRules = checkSessionTradingRules()

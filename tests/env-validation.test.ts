@@ -73,7 +73,7 @@ function parsedOf(ok: boolean, parsed: Env | null): Env {
 
 describe('validateEnvironment — valid environment', () => {
   test('valid env → ok:true, no errors, parsed filled, non-strict in dev', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.DATABASE_URL = 'file:./db/custom.db'
 
     const report = validateEnvironment({ fresh: true })
@@ -93,7 +93,7 @@ describe('validateEnvironment — valid environment', () => {
   })
 
   test('missing optional keys fall back to documented defaults', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     delete process.env.LOG_LEVEL
     delete process.env.LOG_RETENTION_DAYS
     delete process.env.BRIDGE_MAX_RETRIES
@@ -111,7 +111,7 @@ describe('validateEnvironment — valid environment', () => {
   })
 
   test('NODE_ENV=test is an accepted mode', () => {
-    process.env.NODE_ENV = 'test'
+    Object.assign(process.env, { NODE_ENV: 'test' })
     const report = validateEnvironment({ fresh: true })
     expect(report.ok).toBe(true)
     expect(report.mode).toBe('test')
@@ -125,7 +125,7 @@ describe('validateEnvironment — valid environment', () => {
 
 describe('validateEnvironment — invalid values', () => {
   test('empty DATABASE_URL is recorded as an error', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.DATABASE_URL = ''
 
     const report = validateEnvironment({ fresh: true, failFast: false })
@@ -139,7 +139,7 @@ describe('validateEnvironment — invalid values', () => {
   })
 
   test('LOG_LEVEL invalid string → error recorded; empty/missing → fallback DEBUG', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
 
     // invalid value
     process.env.LOG_LEVEL = 'BOGUS'
@@ -162,7 +162,7 @@ describe('validateEnvironment — invalid values', () => {
   })
 
   test('LOG_LEVEL is case-normalized (warn → WARN)', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.LOG_LEVEL = 'warn'
     const report = validateEnvironment({ fresh: true })
     const parsed = parsedOf(report.ok, report.parsed)
@@ -170,7 +170,7 @@ describe('validateEnvironment — invalid values', () => {
   })
 
   test('BASE_BALANCE outside allowed range is rejected; valid float is coerced', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
 
     process.env.BASE_BALANCE = '0'
     const tooLow = validateEnvironment({ fresh: true, failFast: false })
@@ -189,7 +189,7 @@ describe('validateEnvironment — invalid values', () => {
   })
 
   test('cross-field: BRIDGE_RETRY_BASE_DELAY_MS > BRIDGE_RETRY_MAX_DELAY_MS → error', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.BRIDGE_RETRY_BASE_DELAY_MS = '2000'
     process.env.BRIDGE_RETRY_MAX_DELAY_MS = '1000'
 
@@ -204,7 +204,7 @@ describe('validateEnvironment — invalid values', () => {
   })
 
   test('cross-field control: base <= max produces no cross-field error', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.BRIDGE_RETRY_BASE_DELAY_MS = '500'
     process.env.BRIDGE_RETRY_MAX_DELAY_MS = '8000'
 
@@ -220,7 +220,7 @@ describe('validateEnvironment — invalid values', () => {
 
 describe('validateEnvironment — production mode', () => {
   function breakProduction(): void {
-    process.env.NODE_ENV = 'production'
+    Object.assign(process.env, { NODE_ENV: 'production' })
     delete process.env.MT5_LOGIN
     delete process.env.MT5_PASSWORD
     delete process.env.MT5_SERVER
@@ -272,7 +272,7 @@ describe('validateEnvironment — production mode', () => {
   })
 
   test('development mode with missing MT5 credentials → no errors (warnings only)', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     delete process.env.MT5_LOGIN
     delete process.env.MT5_PASSWORD
     process.env.TELEGRAM_BOT_TOKEN = 'some-bot-token'
@@ -294,7 +294,7 @@ describe('validateEnvironment — production mode', () => {
 
 describe('validateEnvironment — strict mode', () => {
   test('VALIDATE_ENV_STRICT=true + invalid value → throws EnvValidationError with issues', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.VALIDATE_ENV_STRICT = 'true'
     process.env.DATABASE_URL = ''
 
@@ -316,7 +316,7 @@ describe('validateEnvironment — strict mode', () => {
   })
 
   test('failFast:false overrides strict mode → report returned without throwing', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.VALIDATE_ENV_STRICT = 'true'
     process.env.DATABASE_URL = ''
 
@@ -333,7 +333,7 @@ describe('validateEnvironment — strict mode', () => {
 
 describe('env() caching & resetEnvCache', () => {
   test('env() is cached — changes to process.env are invisible until resetEnvCache()', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.DATABASE_URL = 'file:./db/one.db'
 
     const first = env()
@@ -351,7 +351,7 @@ describe('env() caching & resetEnvCache', () => {
   })
 
   test('validateEnvironment report caching: fresh bypasses cache, resetEnvCache recomputes', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.DATABASE_URL = 'file:./db/one.db'
 
     const r1 = validateEnvironment({ fresh: true })
@@ -370,7 +370,7 @@ describe('env() caching & resetEnvCache', () => {
   })
 
   test('env() fallback path: schema-invalid env still boots in dev with safe fallback', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     delete process.env.DATABASE_URL // required key missing → schema fails → fallback layer
 
     const e = env()
@@ -381,7 +381,7 @@ describe('env() caching & resetEnvCache', () => {
 
 describe('ensureValidEnv', () => {
   test('valid env → { ok: true, env } with parsed values', () => {
-    process.env.NODE_ENV = 'development'
+    Object.assign(process.env, { NODE_ENV: 'development' })
     process.env.DATABASE_URL = 'file:./db/custom.db'
 
     const result = ensureValidEnv()
@@ -393,7 +393,7 @@ describe('ensureValidEnv', () => {
   })
 
   test('production + missing MT5_LOGIN → { ok: false, error: EnvValidationError }', () => {
-    process.env.NODE_ENV = 'production'
+    Object.assign(process.env, { NODE_ENV: 'production' })
     delete process.env.MT5_LOGIN
     delete process.env.MT5_PASSWORD
     delete process.env.MT5_SERVER

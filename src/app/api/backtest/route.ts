@@ -151,7 +151,7 @@ function validatePayload(body: Record<string, unknown>): { ok: true; data: Backt
 // ROUTE HANDLERS
 // =============================================
 
-export async function GET(request: NextRequest) {
+export async function GET(_request: NextRequest) {
   try {
     const results = await db.backtestResult.findMany({
       orderBy: { createdAt: 'desc' },

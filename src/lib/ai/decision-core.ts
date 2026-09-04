@@ -1,7 +1,7 @@
 import { db } from '@/lib/db'
 import logger from '@/lib/trading-logger'
 import { isLlmAvailable, runLlmMarketAnalysis } from '@/lib/ai-providers'
-import { isMarketOpen, getTradingPhase } from '@/lib/mt5-connection'
+import { getTradingPhase } from '@/lib/mt5-connection'
 import {
   DEFAULT_TIMEFRAME,
   BUY_THRESHOLD,
@@ -14,8 +14,6 @@ import {
   ESTIMATED_ACCOUNT_VALUE,
   RISK_PER_TRADE_PCT,
   type DecisionType,
-  type TechnicalFactors,
-  type NewsFactors,
   type SentimentFactors,
   type RiskFactors,
   type AiDecision,
@@ -84,7 +82,7 @@ export async function makeDecision(
 
   try {
     // --- Step 1: Load configuration ---
-    let config = await getDecisionConfig()
+    const config = await getDecisionConfig()
 
     // --- Step 2: Check cooldown ---
     try {

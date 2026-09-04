@@ -126,10 +126,38 @@ export function observeHistogram(name: string, value: number, labels: Record<str
   pushSample(getBucket(m, labels), value)
 }
 
-/** Generic recorder used by cross-module bridges (e.g. rate-limit). */
-export function recordMetric(name: string, labels: Record<string, string>, value = 1): void {
-  if (name.endsWith('_total')) incrementCounter(name, labels, value)
-  else if (name.endsWith('_ms') || name.endsWith('_bytes')) observeHistogram(name, value, labels)
+/**
+ * Generic recorder used by cross-module bridges (e.g. rate-limit).
+ *
+ * Supports two call conventions:
+ *  - recordMetric(name, labels?, value?)  — labels-first (bridge style)
+ *  - recordMetric(name, value, labels?)   — value-first (ergonomic style)
+ */
+export function recordMetric(
+  name: string,
+  labels: Record<string, string>,
+  value?: number,
+): void
+// eslint-disable-next-line no-redeclare -- TS function overload signature (not a redeclaration; core rule lacks TS-overload support)
+export function recordMetric(
+  name: string,
+  value: number,
+  labels?: Record<string, string>,
+): void
+// eslint-disable-next-line no-redeclare -- TS function overload signature + implementation
+export function recordMetric(
+  name: string,
+  a: Record<string, string> | number,
+  b?: number | Record<string, string>,
+): void {
+  const labels: Record<string, string> =
+    typeof a === "number"
+      ? ((b as Record<string, string> | undefined) ?? {})
+      : a
+  const value: number =
+    typeof a === "number" ? a : ((b as number | undefined) ?? 1)
+  if (name.endsWith("_total")) incrementCounter(name, labels, value)
+  else if (name.endsWith("_ms") || name.endsWith("_bytes")) observeHistogram(name, value, labels)
   else setGauge(name, value, labels)
 }
 

@@ -26,7 +26,6 @@ import {
   Activity,
   AlertCircle,
   Loader2,
-  Clock,
   BarChart3,
   Zap,
 } from 'lucide-react'
@@ -257,51 +256,6 @@ const ERROR_ROWS: ComplianceRow[] = [
   { name: 'Recovery Actions Wired', phase: 'Phase 4', status: true },
 ]
 
-const SESSION_ROWS: ComplianceRow[] = [
-  { name: 'Unified Session Module', phase: 'Phase 5', status: true },
-  { name: 'Shared Forex Config', phase: 'Phase 5', status: true },
-  { name: 'IDX Sub-Sessions', phase: 'Phase 5', status: true },
-  { name: 'Phase Transitions', phase: 'Phase 5', status: true },
-  { name: 'Session Performance', phase: 'Phase 5', status: true },
-  { name: 'Session Risk Budget', phase: 'Phase 5', status: true },
-  { name: 'Trading Rules', phase: 'Phase 5', status: true },
-  { name: 'Sizing Multiplier', phase: 'Phase 5', status: true },
-  { name: 'Quality Score', phase: 'Phase 5', status: true },
-  { name: 'Time to Next Phase', phase: 'Phase 5', status: true },
-]
-
-const INDICATOR_ROWS: ComplianceRow[] = [
-  { name: 'SMA Calculation', phase: 'Phase 5', status: true },
-  { name: 'EMA Calculation', phase: 'Phase 5', status: true },
-  { name: 'RSI (Wilder\'s)', phase: 'Phase 5', status: true },
-  { name: 'MACD + Signal + Histogram', phase: 'Phase 5', status: true },
-  { name: 'ATR (Wilder\'s)', phase: 'Phase 5', status: true },
-  { name: 'Bollinger Bands', phase: 'Phase 5', status: true },
-  { name: 'Stochastic %K/%D', phase: 'Phase 5', status: true },
-  { name: 'ADX + +DI/-DI', phase: 'Phase 5', status: true },
-  { name: 'VWAP', phase: 'Phase 5', status: true },
-  { name: 'Pivot Points (Classic+Fib)', phase: 'Phase 5', status: true },
-  { name: 'Dependency Graph + Cache', phase: 'Phase 5', status: true },
-  { name: 'OHLCV Data Model', phase: 'Phase 5', status: true },
-  { name: 'Real Strategy Signals', phase: 'Phase 5', status: true },
-  { name: 'Indicator Snapshot', phase: 'Phase 5', status: true },
-  { name: 'Mock Data Generator', phase: 'Phase 5', status: true },
-]
-
-const EXECUTION_ROWS: ComplianceRow[] = [
-  { name: 'Trade State Machine', phase: 'Phase 5', status: true },
-  { name: 'Lifecycle Event Bus', phase: 'Phase 5', status: true },
-  { name: 'SL/TP Trigger Engine', phase: 'Phase 5', status: true },
-  { name: 'Trailing Stop Engine', phase: 'Phase 5', status: true },
-  { name: 'Partial Close (3-level)', phase: 'Phase 5', status: true },
-  { name: 'Position Sync', phase: 'Phase 5', status: true },
-  { name: 'Price Update Pipeline', phase: 'Phase 5', status: true },
-  { name: 'Emergency Close All', phase: 'Phase 5', status: true },
-  { name: 'Execution Pipeline', phase: 'Phase 5', status: true },
-  { name: 'PendingOrder Model', phase: 'Phase 5', status: true },
-  { name: 'Trade Fields Enhanced', phase: 'Phase 5', status: true },
-]
-
 const NEWS_ROWS: ComplianceRow[] = [
   { name: 'Finnhub Integration', phase: 'Phase 6', status: true },
   { name: 'MARKETAUX Integration', phase: 'Phase 6', status: true },
@@ -381,7 +335,6 @@ function SectionStatusBadge({ status }: { status: string }) {
 
 function ComplianceTable({ rows, apiSection }: { rows: ComplianceRow[]; apiSection?: { status: string } }) {
   const sectionStatus = apiSection?.status ?? 'COMPLIANT'
-  const allCompliant = sectionStatus === 'COMPLIANT'
 
   return (
     <div>

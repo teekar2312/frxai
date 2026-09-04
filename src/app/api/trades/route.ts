@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { db } from "@/lib/db"
 import { preTradeCheck } from "@/lib/risk-engine"
 import { calculatePositionSize, updateDailyPerformance } from "@/lib/money-management"
-import { BASE_BALANCE, LEVERAGE, COMMISSION_PER_LOT } from "@/lib/config"
+import { LEVERAGE, COMMISSION_PER_LOT } from "@/lib/config"
+import { getAccountEquity } from "@/lib/db-utils"
 import logger from "@/lib/trading-logger"
 import { SYMBOL_SECTORS } from "@/lib/risk-engine"
 
@@ -72,12 +73,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Efficient equity calculation (single aggregate query)
-    const [pnlAgg] = await db.trade.aggregate({
-      _sum: { pnl: true },
-      where: { status: { in: ['OPEN', 'CLOSED', 'PARTIAL_FILLED'] } },
-    })
-    const equity = BASE_BALANCE + (pnlAgg._sum.pnl ?? 0)
+    // Efficient equity calculation (single aggregate query, shared helper)
+    const equity = await getAccountEquity()
 
     // Pre-Trade Risk Check (with slippage and scaling)
     const riskCheck = await preTradeCheck({

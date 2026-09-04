@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import {
@@ -85,7 +85,7 @@ function getConfidenceColor(confidence: number): string {
 
 export default function StrategyMonitor() {
   const [strategies, setStrategies] = useState<StrategyInfo[]>([])
-  const [loading, setLoading] = useState(true)
+  const [, setLoading] = useState(true)
   const [visible, setVisible] = useState(true)
 
   const abortRef = useRef<AbortController | null>(null)

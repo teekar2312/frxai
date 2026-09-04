@@ -5,7 +5,7 @@
 // ============================================
 
 import { db } from '@/lib/db'
-import { PROVIDER_REGISTRY, getProviderMeta } from './provider-registry'
+import { PROVIDER_REGISTRY } from './provider-registry'
 import { callOpenAiCompat, testOpenAiCompat } from './openai-compat'
 import type {
   AiProviderId,
@@ -171,7 +171,9 @@ function fromDbRow(row: Record<string, unknown>): AiProviderConfigData {
     priority: row.priority as number,
     timeoutMs: row.timeoutMs as number,
     lastTestedAt: (row.lastTestedAt as string) || null,
-    lastTestResult: (row.lastTestResult as string) || null,
+    lastTestResult: row.lastTestResult === 'success' || row.lastTestResult === 'failure'
+      ? row.lastTestResult
+      : null,
     lastLatencyMs: (row.lastLatencyMs as number) || null,
     createdAt: row.createdAt as string,
     updatedAt: row.updatedAt as string,

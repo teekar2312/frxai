@@ -169,7 +169,7 @@ export async function GET() {
     }
 
     return NextResponse.json({ success: true, data: auditReport })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Failed to fetch audit status" },
       { status: 500 },

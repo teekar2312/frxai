@@ -12,20 +12,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { Slider } from '@/components/ui/slider'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import {
   BrainCircuit,
   CheckCircle2,
   XCircle,
   Loader2,
   Settings,
-  Zap,
   ExternalLink,
   Eye,
   EyeOff,
   ChevronDown,
   ChevronUp,
-  Shield,
   MessageSquare,
   Newspaper,
   BarChart3,

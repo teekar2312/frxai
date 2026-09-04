@@ -396,6 +396,16 @@ BBRI, BBCA, BMRI, BBNI, TLKM, ASII, UNVR, GOTO, BUKA, ACST, ADRO, ANTM, BRIS, BR
 > persisten, configuration hierarchy, notifikasi Telegram/Discord,
 > backtest engine lengkap, dan monitoring/observability.
 
+### Refactor v2.1.0 — Modular Architecture & Zero tsc Errors
+
+| Aspek | Hasil v2.1.0 | Detail |
+|-------|--------------|--------|
+| File >1.700 baris | **5 engine → 50 modul domain** (facade pattern) | `src/lib/ai/` (14), `src/lib/mt5/` (7), `src/lib/execution/` (10), `src/lib/risk/` (12), `src/lib/indicators/` (7) — semua import path lama tetap berfungsi, zero consumer diubah, per-part diverifikasi byte-identical |
+| `tsc --noEmit` | **54 → 0 error** repo-wide | `bun:test` resolution via `tests/globals.d.ts` (bun-types), mini-service dapat tsconfig sendiri (10 → 0), 2 bug laten ditemukan & diperbaiki (POST /api/trades "not iterable", snapshot manual trade tanpa symbol) |
+| ESLint | **Aturan keamanan diaktifkan, 124 error → 0** | `no-unused-vars`, `prefer-const`, `no-debugger`, `no-unreachable`, `no-redeclare`, `no-fallthrough` — 44 file dibersihkan dari dead code/imports |
+| Pattern umum | `di.ts` + `api-query.ts` + `db-utils.ts` | Service locator testable untuk db/logger, `parsePagination()` standar (menggantikan 8 varian parsing manual), `getAccountEquity()` shared |
+| Tests | **434/434 pass** (16 file) | +33 test baru (DI semantics, pagination edge cases, fake-DB injection) |
+
 ### Hardening v2.0.1 — Type Safety & Recovery Hints
 
 | Isu Audit | Solusi v2.0.1 | Status |

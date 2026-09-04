@@ -44,7 +44,7 @@ export default function EquityChart({ isMarketOpen }: EquityChartProps) {
   const [loading, setLoading] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
-  const fetchEquityData = useCallback((range: TimeRange, open: boolean) => {
+  const fetchEquityData = useCallback((range: TimeRange, _open: boolean) => {
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller

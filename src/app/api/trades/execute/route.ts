@@ -87,7 +87,7 @@ export async function POST(request: NextRequest) {
       const effectiveTimeframe = timeframe || 'M15'
       const candles = await fetchCandles(symbol, effectiveTimeframe, 100)
       if (candles.length >= 30) {
-        indicatorSnapshot = captureIndicatorSnapshot(candles)
+        indicatorSnapshot = captureIndicatorSnapshot(symbol, candles)
       }
     } catch (_e) { /* non-critical */ }
 
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
       tp: tp ?? undefined,
       strategy: strategy ?? undefined,
       timeframe: timeframe ?? undefined,
-      aiConfidence: null,
+      aiConfidence: undefined,
       indicatorSnapshot,
       comment: `MANUAL-${strategy ?? 'USER'}-${Date.now()}`,
     })
@@ -129,7 +129,6 @@ export async function POST(request: NextRequest) {
       attempts: result.orderResult?.attempts,
     }, { status: 400 })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
     return apiErrorResponse(err, { route: 'POST /api/trades/execute' })
   }
 }

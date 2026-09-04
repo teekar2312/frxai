@@ -1129,7 +1129,7 @@ export function calculatePartialProfitLevels(params: {
   // If a custom risk-reward ratio is provided, adjust the level distances
   // while keeping the same close percentages
   if (riskRewardRatio && riskRewardRatio > 0) {
-    let scaledRange = totalRange * (riskRewardRatio / 3)
+    const scaledRange = totalRange * (riskRewardRatio / 3)
     // Ensure levels don't exceed TP: scaledRange * 3 must fit within totalRange
     const maxLevelRange = totalRange / 3
     const effectiveRange = Math.min(scaledRange, maxLevelRange)

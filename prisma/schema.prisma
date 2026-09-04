@@ -45,6 +45,7 @@ model Trade {
   rejectReason    String?  // Why trade was rejected by risk engine
   mt5ErrorCode    Int?     // MT5 trade_return_code if rejected by broker
   mt5ErrorDesc    String?  // Human-readable MT5 error description
+  mt5Ticket       Int?     // Broker-side order ticket once filled (for modify/close at broker)
   sizingMethod    String?  // Which money management method was used
   riskAmount      Float?   // Dollar risk at trade open
   sector          String?  // Sector classification for correlation

@@ -118,7 +118,6 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ success: false, error: `Bridge error: ${msg}` }, { status: 502 })
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
     return apiErrorResponse(err, { route: 'PUT /api/execution/modify' })
   }
 }

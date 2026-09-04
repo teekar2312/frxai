@@ -34,7 +34,6 @@ import {
   Leaf,
   Loader2,
   MemoryStick,
-  Minus,
   RefreshCw,
   Send,
   Settings2,

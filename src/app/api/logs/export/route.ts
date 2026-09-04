@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
     })
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { success: false, error: "Log export failed" },
       { status: 500 },

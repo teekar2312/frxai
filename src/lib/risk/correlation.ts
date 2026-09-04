@@ -7,7 +7,7 @@
  * (calculateCorrelationMatrix).
  */
 
-import { DEFAULT_CONFIG, type CorrelationMatrixResult } from "./types"
+import { type CorrelationMatrixResult } from "./types"
 
 // ============================================
 // PHASE 3: CORRELATION MATRIX
@@ -22,8 +22,6 @@ import { DEFAULT_CONFIG, type CorrelationMatrixResult } from "./types"
 export function calculateCorrelationMatrix(
   openPositions: Array<{ symbol: string; sector: string; margin: number; pnl: number }>,
 ): CorrelationMatrixResult {
-  const config = DEFAULT_CONFIG // Use defaults for threshold comparison
-
   // Group by sector
   const sectorMap = new Map<string, { margin: number; count: number; pnl: number }>()
   let totalMargin = 0

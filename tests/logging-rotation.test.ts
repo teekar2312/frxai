@@ -3,7 +3,7 @@
  * (pure state functions only — DB flush paths are out of scope).
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test'
+import { describe, test, expect } from 'bun:test'
 import {
   setRetentionDays,
   setMt5LogRetentionDays,

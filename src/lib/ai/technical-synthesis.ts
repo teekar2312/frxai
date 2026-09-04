@@ -38,7 +38,7 @@ export async function analyzeTechnicalFactorsAsync(
 /**
  * Analyze technical factors from real OHLCV bars using indicator-pool.
  */
-function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: string): TechnicalFactors {
+function analyzeTechnicalFromBars(_symbol: string, bars: OHLCVBar[], _timeframe: string): TechnicalFactors {
   const factors = defaultTechnicalFactors()
   const signals: IndicatorSignal[] = []
   const closes = bars.map(b => b.close)
@@ -69,7 +69,6 @@ function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: s
     const lastClose = closes[closes.length - 1]
     const upperB = boll.upper ?? lastClose * 1.05
     const lowerB = boll.lower ?? lastClose * 0.95
-    const midB = boll.middle ?? lastClose
     const bollRange = upperB - lowerB
     if (bollRange > 0) {
       const pos = (lastClose - lowerB) / bollRange
@@ -153,7 +152,7 @@ function analyzeTechnicalFromBars(symbol: string, bars: OHLCVBar[], timeframe: s
  * Analyze technical factors using deterministic mock data (fallback).
  * @deprecated Use analyzeTechnicalFactorsAsync for real data.
  */
-function analyzeTechnicalFactorsMock(symbol: string, timeframe: string = DEFAULT_TIMEFRAME): TechnicalFactors {
+function analyzeTechnicalFactorsMock(symbol: string, _timeframe: string = DEFAULT_TIMEFRAME): TechnicalFactors {
   try {
     const factors = defaultTechnicalFactors()
     const signals: IndicatorSignal[] = []

@@ -229,17 +229,22 @@ export async function closeTrade(
 
     const finalClosePrice = closePrice ?? trade.currentPrice
 
-    // Attempt to close position on the broker via MT5 bridge
-    try {
-      const bridgeResult = await closePositionAtBridge(tradeId)
-      if (!bridgeResult.success) {
-        logger.warn('TRADE_EXECUTION', `Bridge close failed for ${tradeId}: ${bridgeResult.error}, proceeding with DB close`)
-      } else if (bridgeResult.closePrice) {
-        // Use bridge-reported close price if available
-        closePrice = bridgeResult.closePrice
+    // Attempt to close position on the broker via MT5 bridge.
+    // Only possible when the trade carries a broker ticket — the DB trade id
+    // is meaningless to the bridge (the old call sent the cuid, which the
+    // bridge always rejected with 400 "ticket must be a positive number").
+    if (trade.mt5Ticket) {
+      try {
+        const bridgeResult = await closePositionAtBridge(trade.mt5Ticket)
+        if (!bridgeResult.success) {
+          logger.warn('TRADE_EXECUTION', `Bridge close failed for ticket ${trade.mt5Ticket}: ${bridgeResult.error}, proceeding with DB close`)
+        } else if (bridgeResult.closePrice) {
+          // Use bridge-reported close price if available
+          closePrice = bridgeResult.closePrice
+        }
+      } catch (err) {
+        logger.warn('TRADE_EXECUTION', `Bridge close error for ticket ${trade.mt5Ticket}: ${err instanceof Error ? err.message : String(err)}, proceeding with DB close`)
       }
-    } catch (err) {
-      logger.warn('TRADE_EXECUTION', `Bridge close error for ${tradeId}: ${err instanceof Error ? err.message : String(err)}, proceeding with DB close`)
     }
 
     const exitCommission = trade.lotSize * 1 // $1/lot exit commission (FINEX spec)

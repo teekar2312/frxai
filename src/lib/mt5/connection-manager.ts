@@ -544,8 +544,8 @@ class Mt5ConnectionManager {
 
     try {
       const start = Date.now()
-      const result = await bridgeRequest<{ latency?: number; account?: Record<string, unknown> }>('/heartbeat').catch(() => ({ latency: Date.now() - start }))
-      const latency = result.latency ?? (Date.now() - start)
+      const result = await bridgeRequest<{ data?: { latencyMs?: number } }>('/heartbeat').catch(() => ({ data: { latencyMs: Date.now() - start } }))
+      const latency = result?.data?.latencyMs ?? (Date.now() - start)
       this.metrics.latencyMs = latency
       this.metrics.lastHeartbeat = new Date()
 
@@ -705,6 +705,10 @@ export async function withTimeout<T>(
 
 export interface OrderExecutionResult {
   success: boolean
+  /** Broker-side position ticket — persists to Trade.mt5Ticket and is the
+   *  key for modify/close operations against the bridge. */
+  ticket?: number
+  /** String form of the ticket (kept for log/audit parity with older code). */
   orderId?: string
   fillPrice?: number
   fillLot?: number
@@ -712,6 +716,39 @@ export interface OrderExecutionResult {
   mt5ErrorDesc?: string
   attempts: number
   totalLatencyMs: number
+}
+
+/**
+ * Map a bridge POST /order success envelope into OrderExecutionResult fields.
+ *
+ * The bridge responds `{ success, data: { ticket, openPrice, lotSize, ... } }`
+ * (see mini-services/mt5-bridge handleOrder). The historical bug: callers
+ * read `orderId`/`fillPrice`/`fillLot` from the envelope root — all undefined,
+ * so trades were persisted without a ticket and modify/close always 400'd
+ * with "no MT5 ticket". Pure + unit-tested (tests/mt5-order-mapping.test.ts).
+ */
+export function mapBridgeOrderResponse(json: unknown): {
+  ticket?: number
+  orderId?: string
+  fillPrice?: number
+  fillLot?: number
+} {
+  if (typeof json !== 'object' || json === null) return {}
+  const data = (json as { data?: unknown }).data
+  if (typeof data !== 'object' || data === null) return {}
+  const d = data as { ticket?: unknown; openPrice?: unknown; lotSize?: unknown }
+  const ticket =
+    typeof d.ticket === 'number' && Number.isFinite(d.ticket) && d.ticket > 0 ? d.ticket : undefined
+  const fillPrice =
+    typeof d.openPrice === 'number' && Number.isFinite(d.openPrice) ? d.openPrice : undefined
+  const fillLot =
+    typeof d.lotSize === 'number' && Number.isFinite(d.lotSize) ? d.lotSize : undefined
+  return {
+    ticket,
+    orderId: ticket !== undefined ? String(ticket) : undefined,
+    fillPrice,
+    fillLot,
+  }
 }
 
 /** Retryable MT5 trade error codes */
@@ -731,10 +768,10 @@ const MT5_RETRY_DELAY_MS: Record<number, number> = {
 /**
  * Execute an order with automatic retry for transient MT5 errors.
  *
- * **SIMULATED EXECUTION** — Since this environment does not have a live MT5
- * terminal, the function simulates the API call (small delay, simulated
- * success). Replace the inner `_simulateExecution` block with a real
- * `mt5.order_send()` call when integrating with the actual MT5 bridge.
+ * Submits POST /order to the MT5 bridge (mini-services/mt5-bridge) through
+ * the circuit breaker and maps the bridge envelope into execution fields:
+ * data.ticket → ticket/orderId (the position key persisted to Trade.mt5Ticket),
+ * data.openPrice → fillPrice, data.lotSize → fillLot.
  *
  * Uses CircuitBreaker to guard against cascading failures.
  * On retryable errors (10004, 10015, 10020, 10021, 10023, 10028, 10031)
@@ -784,23 +821,33 @@ export async function executeOrderWithRetry(params: {
           })
 
           const bridgeResult = await bridgeRequest<{
-            success: boolean; orderId?: string; fillPrice?: number; fillLot?: number; error?: string; mt5ErrorCode?: number
+            success: boolean
+            data?: { ticket?: number; openPrice?: number; lotSize?: number }
+            message?: string
+            error?: string
+            mt5Code?: number
           }>('/order', {
             method: 'POST',
             body: JSON.stringify({ symbol, direction, lotSize, price, sl, tp, comment }),
           })
 
           if (!bridgeResult.success) {
-            const err: Record<string, unknown> = { message: bridgeResult.error || 'Order rejected' }
-            if (bridgeResult.mt5ErrorCode) err.retcode = bridgeResult.mt5ErrorCode
+            const err: Record<string, unknown> = {
+              message: bridgeResult.message || bridgeResult.error || 'Order rejected',
+            }
+            if (bridgeResult.mt5Code) err.retcode = bridgeResult.mt5Code
             throw err
           }
 
+          // Bridge envelope → execution fields (ticket is the position key
+          // for later modify/close; openPrice/lotSize are the real fill).
+          const mapped = mapBridgeOrderResponse(bridgeResult)
           return {
             success: true,
-            orderId: bridgeResult.orderId!,
-            fillPrice: bridgeResult.fillPrice!,
-            fillLot: bridgeResult.fillLot!,
+            ticket: mapped.ticket,
+            orderId: mapped.orderId,
+            fillPrice: mapped.fillPrice,
+            fillLot: mapped.fillLot,
           }
         }),
         10_000,
@@ -886,29 +933,79 @@ export async function executeOrderWithRetry(params: {
 // MT5 BRIDGE HELPER FUNCTIONS (exported for trade-execution-engine)
 // ============================================
 
-/** Close a position via the MT5 bridge */
-export async function closePositionAtBridge(ticket: string): Promise<{ success: boolean; closePrice?: number; error?: string }> {
-  return bridgeRequest('/close', { method: 'POST', body: JSON.stringify({ ticket }) })
+/**
+ * All bridge endpoints answer `{ success: boolean, data?: T, message?, mt5Code? }`
+ * (mini-services/mt5-bridge jsonResponse/errorResponse). HTTP-level failures
+ * (4xx/5xx) are THROWN by bridgeRequest. These helpers unwrap `data` and map
+ * error fields so call sites never touch the raw envelope — the mismatch class
+ * that broke ticket persistence, price lookups and position sync.
+ */
+interface BridgeEnvelope {
+  success?: boolean
+  data?: unknown
+  message?: string
+  error?: string
+  mt5Code?: number
+}
+
+function unwrapBridgeData<T>(env: unknown): T | undefined {
+  if (typeof env !== 'object' || env === null) return undefined
+  const data = (env as BridgeEnvelope).data
+  return (data ?? undefined) as T | undefined
+}
+
+function mapBridgeErrorFields(env: unknown): { error?: string; mt5ErrorCode?: number } {
+  if (typeof env !== 'object' || env === null) return {}
+  const e = env as BridgeEnvelope
+  return {
+    error: e.message ?? e.error,
+    mt5ErrorCode: typeof e.mt5Code === 'number' ? e.mt5Code : undefined,
+  }
+}
+
+/** Close a position via the MT5 bridge (ticket = broker position ticket, NOT the DB trade id) */
+export async function closePositionAtBridge(ticket: number): Promise<{ success: boolean; closePrice?: number; error?: string; mt5ErrorCode?: number }> {
+  const env = await bridgeRequest<BridgeEnvelope>('/close', {
+    method: 'POST',
+    body: JSON.stringify({ ticket }),
+  })
+  if (!env?.success) return { success: false, ...mapBridgeErrorFields(env) }
+  const data = unwrapBridgeData<{ closePrice?: unknown }>(env)
+  return {
+    success: true,
+    closePrice: typeof data?.closePrice === 'number' ? data.closePrice : undefined,
+  }
 }
 
 /** Close all positions via the MT5 bridge */
-export async function closeAllPositionsAtBridge(): Promise<{ success: boolean; closed: number; error?: string }> {
-  return bridgeRequest('/close-all', { method: 'POST' })
+export async function closeAllPositionsAtBridge(): Promise<{ success: boolean; closed: number; error?: string; mt5ErrorCode?: number }> {
+  const env = await bridgeRequest<BridgeEnvelope>('/close-all', { method: 'POST' })
+  if (!env?.success) return { success: false, closed: 0, ...mapBridgeErrorFields(env) }
+  const data = unwrapBridgeData<{ closed?: unknown }>(env)
+  return {
+    success: true,
+    closed: typeof data?.closed === 'number' ? data.closed : 0,
+  }
 }
 
 /** Get account info from the MT5 bridge */
 export async function getAccountInfoFromBridge(): Promise<Record<string, unknown>> {
-  return bridgeRequest('/account')
+  const env = await bridgeRequest<BridgeEnvelope>('/account')
+  return unwrapBridgeData<Record<string, unknown>>(env) ?? {}
 }
 
 /** Get current prices from the MT5 bridge */
 export async function getPricesFromBridge(): Promise<Record<string, { bid: number; ask: number }>> {
-  return bridgeRequest('/prices')
+  const env = await bridgeRequest<BridgeEnvelope>('/prices')
+  const data = unwrapBridgeData<Record<string, unknown>>(env)
+  return data && typeof data === 'object' ? (data as Record<string, { bid: number; ask: number }>) : {}
 }
 
-/** Get open positions from the MT5 bridge */
+/** Get open positions from the MT5 bridge (always an array — sync code calls .map on it) */
 export async function getPositionsFromBridge(): Promise<Array<Record<string, unknown>>> {
-  return bridgeRequest('/positions')
+  const env = await bridgeRequest<BridgeEnvelope>('/positions')
+  const data = unwrapBridgeData<unknown>(env)
+  return Array.isArray(data) ? (data as Array<Record<string, unknown>>) : []
 }
 
 /** Modify SL/TP on an existing position via the MT5 bridge */
@@ -918,15 +1015,18 @@ export async function modifyPositionAtBridge(params: {
   sl?: number
   tp?: number
 }): Promise<{ success: boolean; error?: string; mt5ErrorCode?: number }> {
-  return bridgeRequest('/modify', {
+  const env = await bridgeRequest<BridgeEnvelope>('/modify', {
     method: 'POST',
     body: JSON.stringify(params),
   })
+  if (!env?.success) return { success: false, ...mapBridgeErrorFields(env) }
+  return { success: true }
 }
 
 /** Get symbol specification from the MT5 bridge */
 export async function getSymbolSpecFromBridge(symbol: string): Promise<Record<string, unknown>> {
-  return bridgeRequest(`/symbol-spec?symbol=${encodeURIComponent(symbol)}`)
+  const env = await bridgeRequest<BridgeEnvelope>(`/symbol-spec?symbol=${encodeURIComponent(symbol)}`)
+  return unwrapBridgeData<Record<string, unknown>>(env) ?? {}
 }
 
 // ---- Singleton instance ----

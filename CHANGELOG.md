@@ -6,6 +6,66 @@ Format berdasarkan [Keep a Changelog](https://keepachangelog.com/), dan proyek i
 
 ---
 
+## [2.1.1] — Centralised Polling + MT5 Ticket Persistence
+
+### Centralised polling — `useApiQuery` hook (kills a whole bug class)
+New `src/hooks/use-api-query.ts`: every component poll now runs through one
+primitive providing stale-response sequence guarding, in-flight abort on
+unmount/url change, interval cleanup, tab-visibility pause with
+restart-and-immediate-refresh on return, and payload containment (a
+`transform` returning `undefined` keeps stale data). `extractApiData` helper
++12 unit tests (459 total).
+
+All 14 hand-rolled pollers migrated (12 components + app shell `page.tsx` +
+`useLiveNotifications`): StrategyMonitor, RiskManagement, TradingPositions,
+StockWatchlist, PriceAlerts, TradingSessions, LogViewer,
+AutoTradingDashboard, AccountSummary, EquityChart, AiEnginePanel,
+TradeHistory. Bugs eliminated:
+- StockWatchlist / PriceAlerts / page.tsx: interval cleared on tab-hide and
+  never (or wrongly) restarted — polling died permanently after a tab switch;
+  page.tsx stacked a new interval per visibility flip
+- TradingPositions / TradeHistory: stale-response races (a superseded fetch
+  landing late overwrote newer data)
+- All: raw `res.json()` without shape guards — one malformed payload away
+  from the StrategyMonitor (3adb99e) / RiskManagement (b09952f) crash class
+
+### MT5 ticket persistence — modify/close at broker now functional
+The bridge `/order` response (`data.ticket` / `data.openPrice` /
+`data.lotSize`) was read from the envelope root (`orderId` / `fillPrice` /
+`fillLot` — all undefined), so `Trade.mt5Ticket` was never persisted and
+`/api/execution/modify` always 400'd with "no MT5 ticket". Fixed chain:
+- `OrderExecutionResult` gains `ticket`; `mapBridgeOrderResponse` (pure,
+  13 unit tests) maps the bridge envelope → execution fields
+- `executeTrade` persists `mt5Ticket` on the Trade row + event metadata
+- `closePositionAtBridge` signature fixed `string → number`; trigger-engine
+  now closes at the broker **by ticket** (it previously sent the DB cuid,
+  which the bridge always rejected) and skips the bridge call cleanly when
+  no ticket exists
+- All bridge helpers (`getPricesFromBridge`, `getPositionsFromBridge`,
+  `getAccountInfoFromBridge`, `getSymbolSpecFromBridge`, close/close-all/
+  modify) now unwrap the `{ success, data }` envelope — the price lookup in
+  `/api/trades/execute` and the position `.map` in `/api/execution/sync`
+  were operating on the raw envelope (the latter would crash with
+  "map is not a function")
+- Heartbeat latency now reads the bridge-reported `data.latencyMs`
+- Mock bridge gains `POST /modify` (SL/TP with order-equivalent distance
+  validation) — the endpoint never existed, so broker modify was dead code
+
+Verified end-to-end against the live bridge: execute → ticket persisted
+(`mt5Ticket: 100000`) → PATCH modify → SL/TP landed in bridge position AND
+trade row → `closeTrade` closed the position at the broker (count 2 → 1).
+
+### Known issues documented for follow-up
+- Margin / PnL / concentration formulas use FX-style
+  `price × lot × 100,000` on IDX stock prices: a 0.01-lot trade reports
+  ~$2–4k margin against a $15,690 account, so the pre-trade engine rejects
+  nearly everything through `/api/trades/execute` (the 8 historic open
+  trades were created via the manual POST path which bypasses risk checks).
+  Needs a domain-modeling decision (contract size + IDR→USD conversion like
+  the bridge uses) — changes every displayed P&L, so it is not a drop-in fix.
+
+---
+
 ## [2.1.0] — Modular Architecture, Zero tsc Errors, Enforced Lint
 
 ### Modularization — the 5 engines >1,700 lines split into 50 domain modules

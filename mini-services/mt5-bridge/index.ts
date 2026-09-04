@@ -622,6 +622,76 @@ async function handleClose(req: Request): Promise<Response> {
   });
 }
 
+async function handleModify(req: Request): Promise<Response> {
+  const s = requireSession();
+  if (s instanceof Response) return s;
+
+  let body: { ticket?: number; sl?: number | null; tp?: number | null; symbol?: string };
+  try {
+    body = (await req.json()) as { ticket?: number; sl?: number | null; tp?: number | null; symbol?: string };
+  } catch {
+    return errorResponse(400, "Invalid JSON body");
+  }
+
+  const { ticket, sl, tp } = body;
+  if (typeof ticket !== "number" || ticket <= 0) {
+    return errorResponse(400, "ticket must be a positive number", 10035);
+  }
+
+  const pos = positions.get(ticket);
+  if (!pos) {
+    return errorResponse(404, `Position ticket ${ticket} not found`, 10036);
+  }
+
+  await simulateLatency(10, 40);
+  tickPrices();
+
+  const info = SYMBOL_MAP[pos.symbol];
+  const prices = livePrices[pos.symbol];
+
+  // Same SL/TP sanity rules as /order (keep distances from current market)
+  if (sl !== undefined && sl !== null) {
+    if (typeof sl !== "number" || sl <= 0) {
+      return errorResponse(400, "sl must be a positive number", 10016);
+    }
+    if (pos.direction === "BUY" && sl >= prices.bid - MIN_SL_TP_DISTANCE_TICKS * info.tickSize) {
+      return errorResponse(400, "SL for BUY must be below current bid", 10016);
+    }
+    if (pos.direction === "SELL" && sl <= prices.ask + MIN_SL_TP_DISTANCE_TICKS * info.tickSize) {
+      return errorResponse(400, "SL for SELL must be above current ask", 10016);
+    }
+  }
+  if (tp !== undefined && tp !== null) {
+    if (typeof tp !== "number" || tp <= 0) {
+      return errorResponse(400, "tp must be a positive number", 10016);
+    }
+    if (pos.direction === "BUY" && tp <= prices.ask + MIN_SL_TP_DISTANCE_TICKS * info.tickSize) {
+      return errorResponse(400, "TP for BUY must be above current ask", 10016);
+    }
+    if (pos.direction === "SELL" && tp >= prices.bid - MIN_SL_TP_DISTANCE_TICKS * info.tickSize) {
+      return errorResponse(400, "TP for SELL must be below current bid", 10016);
+    }
+  }
+
+  // Semantics: key absent → keep current; null → clear; number → set
+  if (sl !== undefined) pos.sl = sl;
+  if (tp !== undefined) pos.tp = tp;
+
+  logOp("MODIFY", `ticket=${ticket} sl=${pos.sl} tp=${pos.tp}`);
+
+  return jsonResponse({
+    success: true,
+    data: {
+      ticket: pos.ticket,
+      symbol: pos.symbol,
+      sl: pos.sl,
+      tp: pos.tp,
+      retcode: 10009,
+      retcodeDescription: MT5_ERRORS[10009].description,
+    },
+  });
+}
+
 async function handleCloseAll(): Promise<Response> {
   const s = requireSession();
   if (s instanceof Response) return s;
@@ -864,6 +934,11 @@ async function handler(req: Request): Promise<Response> {
     // POST /close
     if (path === "/close" && method === "POST") {
       return await handleClose(req);
+    }
+
+    // POST /modify — SL/TP modification of an open position
+    if (path === "/modify" && method === "POST") {
+      return await handleModify(req);
     }
 
     // POST /close-all

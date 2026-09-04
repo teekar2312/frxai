@@ -356,6 +356,9 @@ export async function executeTrade(
         lowestPrice: fillPrice,
         originalLotSize: fillLot,
         partialCloses: 0,
+        // Broker ticket — the key for modify/close against the bridge
+        // (was never persisted before; /api/execution/modify always 400'd)
+        mt5Ticket: orderResult.ticket ?? null,
       },
     })
 
@@ -371,6 +374,7 @@ export async function executeTrade(
         margin,
         slippage,
         orderId: orderResult.orderId,
+        mt5Ticket: orderResult.ticket ?? null,
         attempts: orderResult.attempts,
         totalLatencyMs: orderResult.totalLatencyMs,
       },
@@ -434,6 +438,7 @@ export async function executeTrade(
       margin,
       slippage,
       orderId: orderResult.orderId,
+      mt5Ticket: orderResult.ticket ?? null,
       attempts: orderResult.attempts,
       totalLatencyMs: orderResult.totalLatencyMs,
       strategy,

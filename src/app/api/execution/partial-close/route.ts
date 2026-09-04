@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { executePartialClose, calculatePartialCloseLevels } from "@/lib/trade-execution-engine"
 import { db } from "@/lib/db"
 import logger from "@/lib/trading-logger"
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * GET /api/execution/partial-close?tradeId=xxx
@@ -31,10 +32,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: true, data: { tradeId, levels } })
   } catch (error) {
     logger.error('API', 'Error calculating partial close levels', { details: String(error) })
-    return NextResponse.json(
-      { success: false, error: 'Failed to calculate partial close levels' },
-      { status: 500 },
-    )
+    return apiErrorResponse(error, { route: 'POST /api/execution/partial-close' })
   }
 }
 
@@ -74,9 +72,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, data: result })
   } catch (error) {
     logger.error('API', 'Error executing partial close', { details: String(error) })
-    return NextResponse.json(
-      { success: false, error: 'Failed to execute partial close' },
-      { status: 500 },
-    )
+    return apiErrorResponse(error, { route: 'POST /api/execution/partial-close' })
   }
 }

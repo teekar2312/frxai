@@ -43,14 +43,31 @@
 }
 ```
 
-**Error Format:**
+**Error Format (v2.1 — recovery hints):**
+
+Semua endpoint yang di-wire dengan `src/lib/api-errors.ts` (trades/execute, mt5/connect, execution/*, backtest, ai/decide, ai/enhanced, auto-trading, ai/config) mengembalikan hint pemulihan yang actionable:
 
 ```json
 {
   "success": false,
-  "error": "Deskripsi error"
+  "error": "Bridge request failed after 3 attempts: fetch failed",
+  "code": "BRIDGE_UNREACHABLE",
+  "recovery": "Check that the MT5 bridge service is running (mini-services/mt5-bridge, port 3001) and MT5_BRIDGE_URL is correct; use GET /api/health for a readiness probe.",
+  "retryable": true,
+  "route": "POST /api/trades/execute"
 }
 ```
+
+| Field | Arti |
+|-------|------|
+| `error` | Pesan error (string — backward compatible dengan format lama) |
+| `code` | Kode stabil: `VALIDATION_ERROR`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `UNAUTHORIZED`, `MARKET_CLOSED`, `BRIDGE_UNREACHABLE`, `BRIDGE_TIMEOUT`, `CIRCUIT_BREAKER_OPEN`, `DATABASE_ERROR`, `INTERNAL_ERROR` |
+| `recovery` | Langkah konkret yang bisa dilakukan caller/operator |
+| `retryable` | `true` bila request yang sama bisa berhasil jika diulang |
+| `retryAfterMs` | (opsional) saran jeda retry — circuit breaker juga mengirim header `Retry-After` |
+| `route` | (opsional) endpoint asal, untuk tracing |
+
+Klasifikasi otomatis: ZodError → 400 + detail per field · Prisma P2025 → 404, P2002 → 409 · RetryExhaustedError → 502 · CircuitBreakerOpenError → 503 · pesan market-closed → 409 `MARKET_CLOSED` · fallback → 500 `INTERNAL_ERROR`.
 
 **HTTP Status Codes:**
 
@@ -58,10 +75,15 @@
 |------|------|
 | 200 | Success |
 | 201 | Created |
+| 400 | Validation error (Zod, payload tidak valid) |
+| 401 | Unauthorized (kredensial MT5) |
 | 404 | Not found |
-| 409 | Conflict (duplicate) |
+| 409 | Conflict / duplicate / market closed |
 | 422 | Validation / business rule error |
-| 500 | Internal server error |
+| 429 | Rate limited (lihat `Retry-After` + `X-RateLimit-*`) |
+| 500 | Internal server error / database error |
+| 502 | Bridge unreachable / timeout (setelah retry exhaust) |
+| 503 | Circuit breaker open |
 
 ---
 

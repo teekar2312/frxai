@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { makeDecision, seedDecisionConfig } from '@/lib/ai-decision-engine'
 import { getLlmStatus } from '@/lib/ai-providers'
 import logger from '@/lib/trading-logger'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * POST /api/ai/enhanced — Get LLM-enhanced AI decision
@@ -52,7 +53,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     logger.error('AI_ENHANCED', `Enhanced decision failed: ${msg}`)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'POST /api/ai/enhanced' })
   }
 }
 
@@ -65,6 +66,6 @@ export async function GET() {
     return NextResponse.json({ success: true, data: status })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'POST /api/ai/enhanced' })
   }
 }

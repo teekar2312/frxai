@@ -3,6 +3,7 @@ import { executeTrade } from '@/lib/trade-execution-engine'
 import { preTradeCheck } from '@/lib/risk-engine'
 import { validateSymbol, isMarketOpen, getPricesFromBridge } from '@/lib/mt5-connection'
 import { captureIndicatorSnapshot, fetchCandles } from '@/lib/indicator-pool'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 export async function POST(request: NextRequest) {
   try {
@@ -129,6 +130,6 @@ export async function POST(request: NextRequest) {
     }, { status: 400 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'POST /api/trades/execute' })
   }
 }

@@ -396,6 +396,16 @@ BBRI, BBCA, BMRI, BBNI, TLKM, ASII, UNVR, GOTO, BUKA, ACST, ADRO, ANTM, BRIS, BR
 > persisten, configuration hierarchy, notifikasi Telegram/Discord,
 > backtest engine lengkap, dan monitoring/observability.
 
+### Hardening v2.0.1 — Type Safety & Recovery Hints
+
+| Isu Audit | Solusi v2.0.1 | Status |
+|-----------|----------------|--------|
+| `as any` / `: any` menghilangkan type safety | **Zero `any` di `src/`** (16 dieliminasi): Zod strict schema di route config, factory `default*Factors()`, `Prisma.*GetPayload` (`TradeRecord`/`PendingOrderRecord`), narrowing union | ✅ |
+| `console.log` di production code | Semua di `src/` kini justifiable (logger internals/bootstrap/React boundary); ringkasan rotasi log dialihkan ke `logger.info` → terlihat di UI System Logs | ✅ |
+| Error handling log-tanpa-recovery | `src/lib/api-errors.ts` — 13 route kritis mengembalikan `{ code, recovery, retryable, retryAfterMs }` terklasifikasi (Zod/Prisma/CB/retry/market-closed) | ✅ |
+| Timer cleanup component | Audit menyeluruh: seluruh `useEffect` timer sudah punya cleanup return (terverifikasi manual per komponen) | ✅ |
+| `bun:test` 401 test | +34 test `api-errors.test.ts` (klasifikasi semua domain error) | ✅ |
+
 ### Ringkasan Perbaikan
 
 | # | Isu Audit | Prioritas | Solusi v2 | Status |
@@ -414,7 +424,7 @@ BBRI, BBCA, BMRI, BBNI, TLKM, ASII, UNVR, GOTO, BUKA, ACST, ADRO, ANTM, BRIS, BR
 ### Testing
 
 ```bash
-bun test                  # 367 test, 100% pass
+bun test                  # 401 test, 100% pass
 bun test --coverage       # laporan coverage per file
 bun run lint              # 0 error
 ```

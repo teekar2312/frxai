@@ -3,6 +3,7 @@ import { modifyPositionAtBridge } from '@/lib/mt5-connection'
 import { db } from '@/lib/db'
 import logger from '@/lib/trading-logger'
 import { logAuditTrail } from '@/lib/risk-engine'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * PATCH /api/execution/modify — Modify SL/TP on an open trade
@@ -118,6 +119,6 @@ export async function PATCH(request: NextRequest) {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'PUT /api/execution/modify' })
   }
 }

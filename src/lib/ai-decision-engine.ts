@@ -317,8 +317,8 @@ function mapRange(
   return outMin + ratio * (outMax - outMin)
 }
 
-/** Generate default TechnicalFactors */
-function defaultTechnicalFactors(): TechnicalFactors {
+/** Generate default TechnicalFactors (also used as safe fallbacks by callers) */
+export function defaultTechnicalFactors(): TechnicalFactors {
   return {
     trendDirection: 'SIDEWAYS',
     trendStrength: 0,
@@ -338,8 +338,8 @@ function defaultTechnicalFactors(): TechnicalFactors {
   }
 }
 
-/** Generate default NewsFactors */
-function defaultNewsFactors(): NewsFactors {
+/** Generate default NewsFactors (also used as safe fallbacks by callers) */
+export function defaultNewsFactors(): NewsFactors {
   return {
     recentNewsCount: 0,
     positiveNews: 0,
@@ -351,8 +351,8 @@ function defaultNewsFactors(): NewsFactors {
   }
 }
 
-/** Generate default SentimentFactors */
-function defaultSentimentFactors(): SentimentFactors {
+/** Generate default SentimentFactors (also used as safe fallbacks by callers) */
+export function defaultSentimentFactors(): SentimentFactors {
   return {
     symbolScore: 0,
     marketScore: 0,
@@ -364,8 +364,8 @@ function defaultSentimentFactors(): SentimentFactors {
   }
 }
 
-/** Generate default RiskFactors */
-function defaultRiskFactors(): RiskFactors {
+/** Generate default RiskFactors (also used as safe fallbacks by callers) */
+export function defaultRiskFactors(): RiskFactors {
   return {
     riskScore: 0,
     volatilityRegime: 'NORMAL',

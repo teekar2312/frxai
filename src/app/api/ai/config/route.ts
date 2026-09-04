@@ -1,10 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getDecisionConfig, updateDecisionConfig, STRATEGY_REGISTRY, getDecisionAccuracy } from '@/lib/ai-decision-engine'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * GET /api/ai/config — Get AI decision engine configuration + strategy list + accuracy
  * PUT /api/ai/config — Update AI decision engine configuration
  */
+
+/** Zod-validated subset of DecisionConfig that clients may update. */
+const decisionConfigUpdateSchema = z
+  .object({
+    minConfidenceBuy: z.number().min(0).max(1).optional(),
+    minConfidenceSell: z.number().min(0).max(1).optional(),
+    technicalWeight: z.number().min(0).max(1).optional(),
+    newsWeight: z.number().min(0).max(1).optional(),
+    sentimentWeight: z.number().min(0).max(1).optional(),
+    maxPositionsPerDecision: z.number().int().min(1).max(20).optional(),
+    cooldownSeconds: z.number().int().min(0).max(86_400).optional(),
+    extremeSentimentBlock: z.boolean().optional(),
+    volatilityScalingEnabled: z.boolean().optional(),
+  })
+  .strict()
 
 export async function GET() {
  try {
@@ -46,7 +63,7 @@ export async function GET() {
  })
  } catch (err) {
  const msg = err instanceof Error ? err.message : String(err)
- return NextResponse.json({ success: false, error: msg }, { status: 500 })
+ return apiErrorResponse(err, { route: 'AI-CONFIG' })
  }
 }
 
@@ -54,25 +71,16 @@ export async function PUT(request: NextRequest) {
  try {
  const body = await request.json()
 
- // Allowed update fields
- const allowedKeys = new Set([
- 'minConfidenceBuy',
- 'minConfidenceSell',
- 'technicalWeight',
- 'newsWeight',
- 'sentimentWeight',
- 'maxPositionsPerDecision',
- 'cooldownSeconds',
- 'extremeSentimentBlock',
- 'volatilityScalingEnabled',
- ])
+ const parsed = decisionConfigUpdateSchema.safeParse(body)
+ if (!parsed.success) {
+ const issues = parsed.error.issues.map(i => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ')
+ return NextResponse.json(
+ { success: false, error: `Invalid configuration update: ${issues}` },
+ { status: 400 },
+ )
+ }
 
- const updates: Record<string, unknown> = {}
- for (const [key, value] of Object.entries(body)) {
- if (allowedKeys.has(key)) {
- updates[key] = value
- }
- }
+ const updates = parsed.data
 
  if (Object.keys(updates).length === 0) {
  return NextResponse.json(
@@ -81,7 +89,7 @@ export async function PUT(request: NextRequest) {
  )
  }
 
- const updated = await updateDecisionConfig(updates as any)
+ const updated = await updateDecisionConfig(updates)
 
  return NextResponse.json({
  success: true,
@@ -99,6 +107,6 @@ export async function PUT(request: NextRequest) {
  })
  } catch (err) {
  const msg = err instanceof Error ? err.message : String(err)
- return NextResponse.json({ success: false, error: msg }, { status: 500 })
+ return apiErrorResponse(err, { route: 'AI-CONFIG' })
  }
 }

@@ -17,8 +17,8 @@
 
 import { db } from './db'
 import logger from './trading-logger'
-import { makeDecision, makeMultiStrategyDecision, type AiDecision, STRATEGY_REGISTRY } from './ai-decision-engine'
-import { executeTrade, closeTrade, emergencyCloseAll } from './trade-execution-engine'
+import { makeDecision, makeMultiStrategyDecision, type AiDecision, STRATEGY_REGISTRY, defaultTechnicalFactors, defaultNewsFactors, defaultSentimentFactors, defaultRiskFactors } from './ai-decision-engine'
+import { executeTrade, closeTrade, emergencyCloseAll, type TradeRecord } from './trade-execution-engine'
 import { preTradeCheck } from './risk-engine'
 import { isMarketOpen, getTradingPhase, getPricesFromBridge, getPositionsFromBridge, validateSymbol } from './mt5-connection'
 import mt5Connection from './mt5-connection'
@@ -388,10 +388,10 @@ class AutoTradingLoop {
               decision: 'HOLD',
               confidence: 0,
               reasoning: `Error: ${errMsg}`,
-              technicalFactors: {} as any,
-              newsFactors: {} as any,
-              sentimentFactors: {} as any,
-              riskFactors: {} as any,
+              technicalFactors: defaultTechnicalFactors(),
+              newsFactors: defaultNewsFactors(),
+              sentimentFactors: defaultSentimentFactors(),
+              riskFactors: defaultRiskFactors(),
               suggestedLotSize: 0,
               suggestedSl: 0,
               suggestedTp: 0,
@@ -399,6 +399,7 @@ class AutoTradingLoop {
               timeframe: this.config.timeframe,
               signalSources: [],
               volatilityMultiplier: 1,
+              llmEnhancement: null,
               createdAt: new Date(),
             },
             actionTaken: 'ERROR',
@@ -437,7 +438,7 @@ class AutoTradingLoop {
 
   private async processDecision(
     decision: AiDecision,
-    openPositions: any[],
+    openPositions: TradeRecord[],
   ): Promise<ScanResult> {
     const { symbol, decision: dec, confidence, suggestedLotSize, suggestedSl, suggestedTp } = decision
 
@@ -596,7 +597,7 @@ class AutoTradingLoop {
     }
   }
 
-  private async handleReduce(decision: AiDecision, openPositions: any[]): Promise<void> {
+  private async handleReduce(decision: AiDecision, openPositions: TradeRecord[]): Promise<void> {
     // Find the weakest position (lowest PnL or lowest confidence) and close it
     if (openPositions.length === 0) return
 

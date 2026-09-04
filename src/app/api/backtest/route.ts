@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import logger from '@/lib/trading-logger'
 import { getConfig } from '@/lib/app-config'
+import { apiErrorResponse } from '@/lib/api-errors'
 import {
   runBacktest,
   mergeParams,
@@ -159,7 +160,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: true, data: results })
   } catch (error) {
     logger.error('API', 'Error fetching backtest results', { details: String(error) })
-    return NextResponse.json({ success: false, error: 'Failed to fetch backtest results' }, { status: 500 })
+    return apiErrorResponse(error, { route: 'GET /api/backtest' })
   }
 }
 
@@ -337,7 +338,7 @@ export async function POST(request: NextRequest) {
     )
   } catch (error) {
     logger.error('API', 'Error running backtest', { details: String(error) })
-    return NextResponse.json({ success: false, error: 'Failed to run backtest' }, { status: 500 })
+    return apiErrorResponse(error, { route: 'POST /api/backtest' })
   }
 }
 

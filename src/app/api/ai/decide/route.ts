@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { makeDecision, makeBatchDecision, getDecisionHistory, seedDecisionConfig } from '@/lib/ai-decision-engine'
 import logger from '@/lib/trading-logger'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * POST /api/ai/decide — Make an AI trading decision
@@ -51,12 +52,12 @@ export async function POST(request: Request) {
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error'
       logger.error('AI_ENGINE', `AI decision failed: ${msg}`)
-      return NextResponse.json({ success: false, error: msg }, { status: 500 })
+      return apiErrorResponse(error, { route: 'POST /api/ai/decide' })
     }
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error'
     logger.error('AI_ENGINE', `AI decision failed: ${msg}`)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(error, { route: 'POST /api/ai/decide' })
   }
 }
 
@@ -75,6 +76,6 @@ export async function GET(request: Request) {
   } catch (error) {
     const msg = error instanceof Error ? error.message : 'Unknown error'
     logger.error('AI_ENGINE', `Decision history fetch failed: ${msg}`)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(error, { route: 'POST /api/ai/decide' })
   }
 }

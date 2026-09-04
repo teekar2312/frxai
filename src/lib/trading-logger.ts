@@ -26,6 +26,11 @@ export type LogCategory =
   | "MONEY_MANAGEMENT"
   | "DATA_FEED"
   | "AI_ENGINE"
+  | "AUTO_TRADING"
+  | "AI_ENHANCED"
+  | "LLM_BRIDGE"
+  | "TRADE_MODIFY"
+  | "POSITION_SYNC"
   | "SYSTEM"
   | "NOTIFICATION"
   | "API_RATE_LIMIT"
@@ -309,8 +314,11 @@ export async function cleanupOldLogs(): Promise<CleanupResult> {
   rotation.lastRunAt = new Date()
 
   if (tradingLogsDeleted > 0 || mt5LogsDeleted > 0 || newsFetchLogsDeleted > 0 || notificationLogsDeleted > 0) {
-    console.log(
-      `[Logger-Cleanup] Deleted ${tradingLogsDeleted} TradingLogs (>${rotation.retentionDays}d) + ${mt5LogsDeleted} Mt5ConnectionLogs (>${rotation.mt5LogRetentionDays}d) + ${newsFetchLogsDeleted} NewsFetchLogs (>${rotation.newsLogRetentionDays}d) + ${notificationLogsDeleted} NotificationLogs`
+    // Route through the logger so rotation events are visible in System Logs
+    // (safe: cleanup runs on its own timer, this entry is buffered & flushed after)
+    logger.info('SYSTEM',
+      `Log rotation: deleted ${tradingLogsDeleted} TradingLogs (>${rotation.retentionDays}d) + ${mt5LogsDeleted} Mt5ConnectionLogs (>${rotation.mt5LogRetentionDays}d) + ${newsFetchLogsDeleted} NewsFetchLogs (>${rotation.newsLogRetentionDays}d) + ${notificationLogsDeleted} NotificationLogs`,
+      { metadata: { tradingLogsDeleted, mt5LogsDeleted, newsFetchLogsDeleted, notificationLogsDeleted, totalDeleted: rotation.totalDeleted } }
     )
   }
   return { tradingLogsDeleted, mt5LogsDeleted, newsFetchLogsDeleted, notificationLogsDeleted }

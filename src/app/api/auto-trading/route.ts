@@ -1,10 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { getAutoTradingLoop } from '@/lib/auto-trading-loop'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * GET /api/auto-trading — Get auto-trading loop status
  * POST /api/auto-trading — Start/stop/configure the auto-trading loop
  */
+
+/** Zod-validated subset of AutoTradingConfig that clients may update. */
+const autoTradingConfigUpdateSchema = z
+  .object({
+    scanIntervalMs: z.number().int().min(1_000).max(3_600_000).optional(),
+    mode: z.enum(['SINGLE_STRATEGY', 'MULTI_STRATEGY']).optional(),
+    strategyId: z.string().min(1).optional(),
+    timeframe: z.string().min(1).optional(),
+    maxOpenPositions: z.number().int().min(1).max(50).optional(),
+    watchlist: z.array(z.string().min(1)).min(1).optional(),
+    enabledStrategies: z.array(z.string().min(1)).optional(),
+    adaptiveLearning: z.boolean().optional(),
+    positionSyncIntervalMs: z.number().int().min(1_000).max(3_600_000).optional(),
+    reduceOnConsecutiveLosses: z.number().int().min(0).max(10).optional(),
+    closeAllOnRiskScore: z.number().min(0).max(100).optional(),
+  })
+  .strict()
 
 export async function GET() {
   try {
@@ -21,7 +40,7 @@ export async function GET() {
     })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'AUTO-TRADING' })
   }
 }
 
@@ -46,22 +65,20 @@ export async function POST(request: NextRequest) {
       }
 
       case 'configure': {
-        // Allowed config fields
-        const allowedKeys = new Set([
-          'scanIntervalMs', 'mode', 'strategyId', 'timeframe',
-          'maxOpenPositions', 'watchlist', 'enabledStrategies',
-          'adaptiveLearning', 'positionSyncIntervalMs',
-          'reduceOnConsecutiveLosses', 'closeAllOnRiskScore',
-        ])
-
-        const updates: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(configUpdates)) {
-          if (allowedKeys.has(key)) {
-            updates[key] = value
-          }
+        const parsed = autoTradingConfigUpdateSchema.safeParse(configUpdates)
+        if (!parsed.success) {
+          const issues = parsed.error.issues
+            .map(i => `${i.path.join('.') || '(root)'}: ${i.message}`)
+            .join('; ')
+          return NextResponse.json(
+            { success: false, error: `Invalid configuration update: ${issues}` },
+            { status: 400 },
+          )
         }
 
-        const newConfig = await loop.updateConfig(updates as any)
+        const updates = parsed.data
+
+        const newConfig = await loop.updateConfig(updates)
         return NextResponse.json({ success: true, data: { ...loop.getStatus(), config: newConfig } })
       }
 
@@ -73,6 +90,6 @@ export async function POST(request: NextRequest) {
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'AUTO-TRADING' })
   }
 }

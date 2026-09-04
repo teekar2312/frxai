@@ -3,6 +3,7 @@ import { getPositionsFromBridge } from '@/lib/mt5-connection'
 import { syncPositionsWithBroker, type BrokerPosition } from '@/lib/trade-execution-engine'
 import mt5Connection from '@/lib/mt5-connection'
 import logger from '@/lib/trading-logger'
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * POST /api/execution/sync — Sync local DB positions with broker
@@ -50,6 +51,6 @@ export async function POST() {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('POSITION_SYNC', `Sync failed: ${msg}`)
-    return NextResponse.json({ success: false, error: msg }, { status: 500 })
+    return apiErrorResponse(err, { route: 'POST /api/execution/sync' })
   }
 }

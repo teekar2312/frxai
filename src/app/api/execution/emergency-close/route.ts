@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { emergencyCloseAll } from "@/lib/trade-execution-engine"
 import logger from "@/lib/trading-logger"
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * POST /api/execution/emergency-close
@@ -17,9 +18,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, data: result })
   } catch (error) {
     logger.error('API', 'Error in emergency close', { details: String(error) })
-    return NextResponse.json(
-      { success: false, error: 'Failed to emergency close' },
-      { status: 500 },
-    )
+    return apiErrorResponse(error, { route: 'POST /api/execution/emergency-close' })
   }
 }

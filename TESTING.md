@@ -1,7 +1,7 @@
 # Panduan Testing — FRxAI
 
 > Suite unit test menggunakan **bun test** (built-in, tanpa dependensi tambahan).
-> Status: **367 test / 0 fail / 5.300+ assertions**.
+> Status: **401 test / 0 fail / 5.400+ assertions** (v2.0.1: +34 test api-errors).
 
 ## Menjalankan
 
@@ -24,6 +24,7 @@ tests/
 ├── notifier-format.test.ts   # 19 test — formatter Telegram/Discord (pure), escape, cap
 ├── app-config.test.ts        # 25 test — 4-layer, mutasi, validasi, listener (persist:false)
 ├── metrics.test.ts           # 20 test — counter/gauge/histogram, percentile, Prometheus, request tracking
+├── api-errors.test.ts        # 34 test — klasifikasi error (Zod/Prisma/CB/retry/market-closed), recovery hints, header
 ├── backtest-engine.test.ts   # 69 test — 7 indikator streaming, generator sintetis, 6 strategi,
 │                             #   SL/TP intrabar, END_OF_DATA, akuntansi, determinisme, metrics
 ├── indicator-pool.test.ts    # 52 test — 10 indikator klasik + pool cache + mock generator

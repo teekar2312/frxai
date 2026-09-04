@@ -46,11 +46,18 @@ interface AutoTradingStatus {
   tradesRejected: number
   tradesClosedByAI: number
   lastError: string | null
-  currentDecisions: any[]
+  currentDecisions: AutoTradingDecisionPreview[]
   uptimeSeconds: number
   startedAt: string | null
   brokerPositionsSynced: boolean
   lastSyncAt: string | null
+}
+
+/** Minimal shape of a live decision preview (fields consumed by the UI). */
+interface AutoTradingDecisionPreview {
+  symbol: string
+  decision: string
+  confidence: number
 }
 
 interface AutoTradingConfig {
@@ -363,7 +370,7 @@ export default function AutoTradingDashboard() {
             <div className="space-y-1.5">
               <p className="text-[10px] text-muted-foreground font-medium">Keputusan Saat Ini</p>
               <div className="flex flex-wrap gap-1.5">
-                {status.currentDecisions.map((d: any, i: number) => (
+                {status.currentDecisions.map((d: AutoTradingDecisionPreview, i: number) => (
                   <div key={i} className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px]">
                     <span className="font-mono font-bold">{d.symbol}</span>
                     {getDecisionBadge(d.decision, d.confidence)}
@@ -393,7 +400,7 @@ export default function AutoTradingDashboard() {
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="space-y-1.5">
                   <Label className="text-xs text-muted-foreground">Mode</Label>
-                  <Select value={mode} onValueChange={v => setMode(v as any)}>
+                  <Select value={mode} onValueChange={v => setMode(v === 'SINGLE_STRATEGY' ? 'SINGLE_STRATEGY' : 'MULTI_STRATEGY')}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="MULTI_STRATEGY" className="text-xs">Multi-Strategi (Konsensus)</SelectItem>

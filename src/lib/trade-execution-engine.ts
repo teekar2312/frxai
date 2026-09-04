@@ -14,6 +14,17 @@
  */
 
 import { db } from '@/lib/db'
+import { Prisma } from '@prisma/client'
+
+/**
+ * Prisma Trade row type (replaces former `any` annotations in this module).
+ * `{}` is Prisma's canonical "no extra selection" type argument.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export type TradeRecord = Prisma.TradeGetPayload<{}>
+/** Prisma PendingOrder row type (same `{}` convention). */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export type PendingOrderRecord = Prisma.PendingOrderGetPayload<{}>
 import logger from '@/lib/trading-logger'
 import { executeOrderWithRetry, closePositionAtBridge, closeAllPositionsAtBridge, type OrderExecutionResult } from '@/lib/mt5-connection'
 import { getTradingPhase, validateSymbol } from '@/lib/mt5-connection'
@@ -501,7 +512,7 @@ export async function closeTrade(
   tradeId: string,
   reason: string,
   closePrice?: number,
-): Promise<{ success: boolean; trade?: any; error?: string }> {
+): Promise<{ success: boolean; trade?: TradeRecord; error?: string }> {
   try {
     const trade = await db.trade.findUnique({ where: { id: tradeId } })
     if (!trade) {
@@ -1333,7 +1344,7 @@ export async function executePartialClose(
   tradeId: string,
   closePercentage: number,
   reason?: string,
-): Promise<{ success: boolean; closedTrade?: any; remainingTrade?: any; error?: string }> {
+): Promise<{ success: boolean; closedTrade?: TradeRecord; remainingTrade?: TradeRecord; error?: string }> {
   try {
     // Fetch the original trade
     const trade = await db.trade.findUnique({ where: { id: tradeId } })
@@ -2178,7 +2189,7 @@ export interface ExecuteTradeParams {
 /** Result of the full trade execution pipeline. */
 export interface ExecuteTradeResult {
   success: boolean
-  trade?: any
+  trade?: TradeRecord
   orderResult?: OrderExecutionResult
   error?: string
 }
@@ -2242,7 +2253,7 @@ export async function executeTrade(
   })
 
   // Step 1: Create PendingOrder record
-  let pendingOrder: any
+  let pendingOrder: PendingOrderRecord
   try {
     pendingOrder = await db.pendingOrder.create({
       data: {
@@ -2379,7 +2390,7 @@ export async function executeTrade(
     }
 
     // Create rejected trade record
-    let rejectedTrade: any
+    let rejectedTrade: TradeRecord | undefined
     try {
       rejectedTrade = await db.trade.create({
         data: {
@@ -2459,7 +2470,7 @@ export async function executeTrade(
   const margin = (fillPrice * fillLot * PIP_VALUE_PER_LOT) / leverage
 
   // Create the Trade record
-  let trade: any
+  let trade: TradeRecord | undefined
   try {
     trade = await db.trade.create({
       data: {

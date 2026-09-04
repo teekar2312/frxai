@@ -3,6 +3,7 @@ import { db } from "@/lib/db"
 import { adjustTrailingStop, type TrailingStopResult } from "@/lib/trade-execution-engine"
 import { getTradingPhase } from "@/lib/mt5-connection"
 import logger from "@/lib/trading-logger"
+import { apiErrorResponse } from '@/lib/api-errors'
 
 /**
  * POST /api/execution/trailing-stop
@@ -115,9 +116,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, data: result })
   } catch (error) {
     logger.error('API', 'Error adjusting trailing stop', { details: String(error) })
-    return NextResponse.json(
-      { success: false, error: 'Failed to adjust trailing stop' },
-      { status: 500 },
-    )
+    return apiErrorResponse(error, { route: 'POST /api/execution/trailing-stop' })
   }
 }

@@ -6,7 +6,30 @@ Format berdasarkan [Keep a Changelog](https://keepachangelog.com/), dan proyek i
 
 ---
 
-## [Unreleased]
+## [2.0.1] — Type Safety, Recovery Hints & Code Hygiene
+
+### Critical
+- **Zero `any` di seluruh `src/`** (sebelumnya 16): 7× `as any` + 9× `: any` dieliminasi dengan tipe nyata —
+  - `src/app/api/ai/config` + `auto-trading` PUT/POST: loop allowlist manual diganti **Zod strict schema** (validasi tipe + range + 400 terstruktur per field, tidak lagi silence-ignore / error 500 dari DB)
+  - `auto-trading-loop` fallback error: `{} as any` × 4 → factory `default*Factors()` yang diekspor dari `ai-decision-engine` (+ `llmEnhancement: null` yang sebelumnya hilang)
+  - `trade-execution-engine`: `trade?: any`/`closedTrade?: any`/`pendingOrder: any` dll → `TradeRecord` / `PendingOrderRecord` (`Prisma.*GetPayload`, diekspor untuk reuse)
+  - `AutoTradingDashboard`: `setMode(v as any)` → narrowing union; `currentDecisions: any[]` → interface `AutoTradingDecisionPreview`
+- **`console.log` production di cleanup logger**: ringkasan rotasi log diganti `logger.info('SYSTEM', ...)` dengan metadata hitungan — event rotasi kini terlihat & dapat dicari di UI System Logs (sebelumnya hanya ke stdout). Sisa `console.*` di `src/` kini seluruhnya justifiable: mirror console logger (fungsinya), fallback saat logger/DB gagal (tidak dapat dilog ke dirinya sendiri), output bootstrap env-validation (sebelum logger ada), dan ErrorBoundary React (client-side standar).
+
+### High — Error Handling dengan Recovery Action
+- **`src/lib/api-errors.ts` (baru)**: klasifikasi error terstandar → `{ error, code, recovery, retryable, retryAfterMs?, route? }` —
+  ApiError / RetryExhaustedError (502 BRIDGE_UNREACHABLE|BRIDGE_TIMEOUT) / CircuitBreakerOpenError (503 + `Retry-After` dari `nextRetryAt`) / ZodError (400 + detail per field) / Prisma P2025→404, P2002→409, P2021/P1003→DATABASE_ERROR / status-tagged 401/404/409/429/5xx / deteksi market-closed (409 MARKET_CLOSED) / fallback 500 dengan hint `/api/health`.
+- **13 route kritis di-wire** (`trades/execute`, `mt5/connect`, `execution/*` ×6, `backtest`, `ai/decide`, `ai/enhanced`, `auto-trading`, `ai/config`): catch block kini mengembalikan recovery hint yang actionable, bukan 500 polos.
+- Response backward-compatible (field `error` tetap string); builder murni (`classifyApiError`/`buildApiErrorResponse`) mengikuti pola testable `rate-limit.ts`.
+
+### Type System
+- `LogCategory` union diperluas dengan kategori yang benar-benar digunakan (`AUTO_TRADING`, `AI_ENHANCED`, `LLM_BRIDGE`, `TRADE_MODIFY`, `POSITION_SYNC`) — menghilangkan 34 error `tsc` laten (string literal valid di DB, tidak pernah terdaftar di union).
+
+### Tests
+- `tests/api-errors.test.ts`: 34 test (klasifikasi semua domain, header Retry-After/X-Request-Id, body roundtrip, heuristic market-closed) → **total 401 test / 14 file, 100% pass**.
+
+### Verified
+- Browser E2E: 14 tab render, 0 console error; Auto Trading config (dropdown mode) fungsional; Backtest run end-to-end via UI (POST 201, status COMPLETED); error format baru diverifikasi via curl (JSON invalid → 500 + code INTERNAL_ERROR + recovery + route).
 
 ---
 

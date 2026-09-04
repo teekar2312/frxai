@@ -27,8 +27,11 @@ export async function GET() {
     if (baseBalance === null) baseBalance = 0
 
     // Get live trade data from DB for realistic aggregation
+    // Hot path: polled ~10s by AccountSummary. The aggregation only reads
+    // pnl/margin/commission (plus row count) — select those explicitly.
     const openTrades = await db.trade.findMany({
       where: { status: "OPEN" },
+      select: { pnl: true, margin: true, commission: true },
     })
 
     // WIB midnight = 00:00 WIB = 17:00 UTC previous day
@@ -39,6 +42,8 @@ export async function GET() {
         status: "CLOSED",
         closeTime: { gte: todayStart },
       },
+      // Only pnl is summed (plus row count) for the daily P&L fallback
+      select: { pnl: true },
     })
 
     // Lightweight count queries instead of loading all closed trades into memory

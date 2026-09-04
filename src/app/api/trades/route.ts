@@ -9,9 +9,26 @@ import { SYMBOL_SECTORS } from "@/lib/risk-engine"
 
 export async function GET() {
   try {
+    // Hot path: polled every 5s by TradingPositions. Select only the fields
+    // the table's Trade interface consumes (12 of 46 columns) — the heavy
+    // JSON columns (indicatorSnapshot, partialCloses) are never rendered.
     const trades = await db.trade.findMany({
       where: { status: "OPEN" },
       orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        symbol: true,
+        direction: true,
+        lotSize: true,
+        entryPrice: true,
+        currentPrice: true,
+        sl: true,
+        tp: true,
+        pnl: true,
+        strategy: true,
+        trailingStop: true,
+        trailingDist: true,
+      },
     })
     return NextResponse.json({ success: true, data: trades })
   } catch (error) {

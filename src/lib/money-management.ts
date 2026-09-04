@@ -18,7 +18,7 @@ import { db } from "./db"
 import logger from "./trading-logger"
 import { getRiskConfig } from "./risk-engine"
 import { isMarketOpen } from "./mt5-connection"
-import { BASE_BALANCE } from "./config"
+import { BASE_BALANCE, PIP_VALUE_PER_LOT } from "./config"
 
 export type SizingMethod = "FIXED_FRACTIONAL" | "KELLY" | "FIXED_DOLLAR" | "ANTI_MARTINGALE"
 
@@ -81,7 +81,6 @@ export interface DrawdownRecoveryResult {
 const LEVERAGE = 25
 const MIN_LOT = 0.01
 const LOT_STEP = 0.01
-const PIP_VALUE_PER_LOT = 100000 // For stocks, 1 point * lot * 100000
 const DEFAULT_COMMISSION_PER_LOT = 1 // FINEX charges $1/lot
 
 // ---- Position Sizing ----

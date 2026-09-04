@@ -19,9 +19,13 @@ export async function GET() {
     const ninetyDaysAgo = new Date()
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90)
 
-    const allClosed = await db.trade.findMany({ where: { status: 'CLOSED', closeTime: { gte: ninetyDaysAgo } } })
+    // Aggregation reads only t.pnl for both sums — select it explicitly
+    const allClosed = await db.trade.findMany({
+      where: { status: 'CLOSED', closeTime: { gte: ninetyDaysAgo } },
+      select: { pnl: true },
+    })
     const totalClosedPnl = allClosed.reduce((s, t) => s + t.pnl, 0)
-    const openTrades = await db.trade.findMany({ where: { status: 'OPEN' } })
+    const openTrades = await db.trade.findMany({ where: { status: 'OPEN' }, select: { pnl: true } })
     const totalOpenPnl = openTrades.reduce((s, t) => s + t.pnl, 0)
     const equity = baseBalance + totalClosedPnl + totalOpenPnl
 

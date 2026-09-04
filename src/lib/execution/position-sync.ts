@@ -51,8 +51,23 @@ export async function syncPositionsWithBroker(
   let updated = 0
 
   try {
+    // Enumerated from the sync diff logic: symbol/direction/lotSize/entryPrice
+    // matching, currentPrice/sl/tp mismatch checks, commission for the
+    // synced-out close PnL, sizingMethod for daily performance, id for updates.
     const localOpenTrades = await db.trade.findMany({
       where: { status: 'OPEN' },
+      select: {
+        id: true,
+        symbol: true,
+        direction: true,
+        lotSize: true,
+        entryPrice: true,
+        currentPrice: true,
+        commission: true,
+        sl: true,
+        tp: true,
+        sizingMethod: true,
+      },
     })
 
     // Build lookup maps

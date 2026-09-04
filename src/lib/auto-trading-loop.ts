@@ -18,7 +18,7 @@
 import { db } from './db'
 import logger from './trading-logger'
 import { makeDecision, makeMultiStrategyDecision, type AiDecision, STRATEGY_REGISTRY, defaultTechnicalFactors, defaultNewsFactors, defaultSentimentFactors, defaultRiskFactors } from './ai-decision-engine'
-import { executeTrade, closeTrade, emergencyCloseAll, type TradeRecord } from './trade-execution-engine'
+import { executeTrade, closeTrade, emergencyCloseAll } from './trade-execution-engine'
 import { preTradeCheck } from './risk-engine'
 import { isMarketOpen, getTradingPhase, getPricesFromBridge, getPositionsFromBridge, validateSymbol } from './mt5-connection'
 import mt5Connection from './mt5-connection'
@@ -67,6 +67,19 @@ interface ScanResult {
   actionTaken: 'EXECUTED' | 'REJECTED_RISK' | 'REJECTED_COOLDOWN' | 'SKIPPED' | 'CLOSE_ALL' | 'REDUCE' | 'HOLD' | 'ERROR'
   actionDetails: string
   tradeId?: string
+}
+
+/**
+ * Minimal projection of an open trade used by the scan cycle: position-count
+ * check + symbol dedup (runScanCycle) and weakest-position pick (handleReduce
+ * sorts by pnl, closes by id, logs symbol/pnl). Matches the explicit Prisma
+ * `select` on the openPositions query — Prisma's typed client guarantees any
+ * new downstream field read becomes a compile error.
+ */
+interface OpenPositionSummary {
+  id: string
+  symbol: string
+  pnl: number
 }
 
 // ============================================
@@ -308,7 +321,13 @@ class AutoTradingLoop {
       }
 
       // Check current open positions
-      const openPositions = await db.trade.findMany({ where: { status: 'OPEN' } })
+      // Downstream reads: .length (max-position check), .map(p => p.symbol)
+      // (watchlist dedup), handleReduce (sort by pnl, close by id) — see
+      // OpenPositionSummary. Runs every scan cycle (60s default).
+      const openPositions = await db.trade.findMany({
+        where: { status: 'OPEN' },
+        select: { id: true, symbol: true, pnl: true },
+      })
       if (openPositions.length >= this.config.maxOpenPositions) {
         logger.info('AUTO_TRADING', `Scan skipped: max positions reached (${openPositions.length}/${this.config.maxOpenPositions})`)
         this.scheduleNextScan()
@@ -437,7 +456,7 @@ class AutoTradingLoop {
 
   private async processDecision(
     decision: AiDecision,
-    _openPositions: TradeRecord[],
+    _openPositions: OpenPositionSummary[],
   ): Promise<ScanResult> {
     const { symbol, decision: dec, confidence, suggestedLotSize, suggestedSl, suggestedTp } = decision
 
@@ -596,7 +615,7 @@ class AutoTradingLoop {
     }
   }
 
-  private async handleReduce(decision: AiDecision, openPositions: TradeRecord[]): Promise<void> {
+  private async handleReduce(decision: AiDecision, openPositions: OpenPositionSummary[]): Promise<void> {
     // Find the weakest position (lowest PnL or lowest confidence) and close it
     if (openPositions.length === 0) return
 

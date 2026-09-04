@@ -11,8 +11,7 @@
  *     the original export set)
  */
 
-/** Pip value per standard lot (100 000 units). */
-const PIP_VALUE_PER_LOT = 100_000
+import { PIP_VALUE_PER_LOT } from '@/lib/config'
 
 // ============================================
 // PNL CALCULATION HELPERS

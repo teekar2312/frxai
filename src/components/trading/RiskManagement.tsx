@@ -1,6 +1,7 @@
 'use client'
 
 import { useApiQuery } from '@/hooks/use-api-query'
+import { formatCurrency } from '@/lib/format'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
@@ -127,11 +128,6 @@ function getProgressColor(value: number, max: number): string {
   if (pct < 50) return '[&>div]:bg-emerald-500'
   if (pct < 80) return '[&>div]:bg-amber-500'
   return '[&>div]:bg-red-500'
-}
-
-function formatCurrency(value: number | null | undefined): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return '-'
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(value)
 }
 
 interface HaltReasonItem {

@@ -6,9 +6,9 @@
  * Contains (original lines 82-83, 2169-2620):
  *   - EXECUTION PIPELINE INTEGRATION (ExecuteTradeParams, ExecuteTradeResult,
  *     executeTrade) — full order → trade lifecycle
- *   - Module-private constant PIP_VALUE_PER_LOT (duplicate of the identical
- *     immutable literal in pnl.ts, needed here for slippage/margin math;
- *     kept private to preserve the original export set)
+ *   - PIP_VALUE_PER_LOT now imported from @/lib/config (was a duplicate
+ *     private literal; the value is unchanged: 100_000)
+ *
  */
 
 import { db } from '@/lib/db'
@@ -17,11 +17,9 @@ import { executeOrderWithRetry, type OrderExecutionResult } from '@/lib/mt5-conn
 import { updateDailyPerformance } from '@/lib/money-management'
 import { trackSessionPerformance } from '@/lib/session-manager'
 import { logAuditTrail } from '@/lib/risk-engine'
+import { PIP_VALUE_PER_LOT } from '@/lib/config'
 import type { TradeRecord, PendingOrderRecord } from './types'
 import { tradeEventBus, TRADE_EVENTS } from './lifecycle'
-
-/** Pip value per standard lot (100 000 units). */
-const PIP_VALUE_PER_LOT = 100_000
 
 // ============================================
 // EXECUTION PIPELINE INTEGRATION

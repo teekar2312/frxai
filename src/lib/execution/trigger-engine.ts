@@ -96,8 +96,28 @@ export async function processSlTpForAllOpenTrades(
 
   try {
     const symbols = Array.from(priceUpdate.keys())
+    // Hot path: runs on every price update (price-pipeline). Enumerated from
+    // checkSlTpTrigger's argument object + the trailing-reason check + event
+    // metadata: id, symbol, direction, currentPrice, sl, tp, lotSize,
+    // entryPrice, commission, margin, strategy, trailingStop, lastSlAdjust.
+    // The heavy JSON columns (indicatorSnapshot, partialCloses) are never read.
     const openTrades = await db.trade.findMany({
       where: { status: 'OPEN', symbol: { in: symbols } },
+      select: {
+        id: true,
+        symbol: true,
+        direction: true,
+        currentPrice: true,
+        sl: true,
+        tp: true,
+        lotSize: true,
+        entryPrice: true,
+        commission: true,
+        margin: true,
+        strategy: true,
+        trailingStop: true,
+        lastSlAdjust: true,
+      },
     })
 
     logger.info('TRADE_EXECUTION', `Checking SL/TP for ${openTrades.length} open trades`, {

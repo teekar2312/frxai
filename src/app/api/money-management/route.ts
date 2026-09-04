@@ -17,10 +17,13 @@ export async function GET(request: NextRequest) {
     }
 
     if (action === "risk-of-ruin") {
+      // Stats aggregation reads only t.pnl (win/loss filters, averages) —
+      // select it explicitly instead of full 46-column rows.
       const closedTrades = await db.trade.findMany({
         where: { status: "CLOSED" },
         orderBy: { closeTime: "desc" },
         take: 100,
+        select: { pnl: true },
       })
 
       if (closedTrades.length < 10) {

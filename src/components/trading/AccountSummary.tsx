@@ -1,6 +1,7 @@
 'use client'
 
 import { useApiQuery } from '@/hooks/use-api-query'
+import { formatCurrency } from '@/lib/format'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Wallet,
@@ -47,14 +48,6 @@ const defaultData: AccountData = {
   leverage: '1:25',
   spreadFrom: '0.5 pip',
   commission: '$1/lot',
-}
-
-function formatCurrency(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-  }).format(value)
 }
 
 export default function AccountSummary({ isMarketOpen }: { isMarketOpen: boolean }) {

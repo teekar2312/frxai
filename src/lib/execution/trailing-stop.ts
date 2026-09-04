@@ -447,11 +447,35 @@ export async function processTrailingStopsForAllTrades(
 
   try {
     const symbols = Array.from(priceUpdate.keys())
+    // Hot path: runs on every price update (price-pipeline). Enumerated from
+    // the peak-tracking map + adjustTrailingStop's argument object + the
+    // updateMany/event/audit reads (trailingActivatedAt, breakEvenApplied,
+    // trailingAdjustments). indicatorSnapshot/partialCloses are never read.
     const trailingTrades = await db.trade.findMany({
       where: {
         status: { in: ['OPEN', 'PARTIAL_FILLED'] },
         trailingStop: true,
         symbol: { in: symbols },
+      },
+      select: {
+        id: true,
+        symbol: true,
+        direction: true,
+        entryPrice: true,
+        currentPrice: true,
+        trailingStop: true,
+        trailingDist: true,
+        sl: true,
+        highestPrice: true,
+        lowestPrice: true,
+        lastSlAdjust: true,
+        trailingSteps: true,
+        trailingAdjustments: true,
+        trailingCooldownSec: true,
+        trailingActivatedAt: true,
+        breakEvenApplied: true,
+        commission: true,
+        lotSize: true,
       },
     })
 

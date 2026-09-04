@@ -59,8 +59,26 @@ export async function emergencyCloseAll(
       logger.warn('TRADE_EXECUTION', `Bridge close-all error: ${err instanceof Error ? err.message : String(err)}`)
     }
 
+    // Enumerated from the close loop: fromStatus cast, pnl calc
+    // (direction/entryPrice/currentPrice/lotSize/commission),
+    // pnlPercent (margin), event metadata + daily-performance update
+    // (strategy, slippage, sizingMethod), logs/audit (id, symbol).
     const openTrades = await db.trade.findMany({
       where: { status: { in: ['OPEN', 'PARTIAL_FILLED'] } },
+      select: {
+        id: true,
+        symbol: true,
+        status: true,
+        direction: true,
+        entryPrice: true,
+        currentPrice: true,
+        lotSize: true,
+        margin: true,
+        commission: true,
+        slippage: true,
+        strategy: true,
+        sizingMethod: true,
+      },
     })
 
     logger.warn('TRADE_EXECUTION', `Emergency closing ${openTrades.length} positions`, {

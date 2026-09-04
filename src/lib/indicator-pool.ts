@@ -267,6 +267,7 @@ export function calculateRSI(closes: number[], period: number = 14): number | nu
   }
 
   // Calculate RS and RSI
+  if (avgLoss === 0 && avgGain === 0) return 50 // flat series → neutral
   if (avgLoss === 0) return 100
   const rs = avgGain / avgLoss
   return 100 - 100 / (1 + rs)
@@ -1330,17 +1331,19 @@ export function computeStrategySignal(
           return { signal: 'NEUTRAL', confidence: 0, strength: 0, indicators: emaResults }
         }
 
-        // Check if all EMAs are ascending (fast > slow) for BUY
-        const allAscending = emas.every((val, i) => i === 0 || val > emas[i - 1])
-        const allDescending = emas.every((val, i) => i === 0 || val < emas[i - 1])
+        // emas is ordered fast→slow [EMA10, EMA20, EMA30, EMA50, EMA100].
+        // BULLISH stacking = fast above slow → array values descend.
+        // BEARISH stacking = slow above fast → array values ascend.
+        const bullishStack = emas.every((val, i) => i === 0 || val < emas[i - 1])
+        const bearishStack = emas.every((val, i) => i === 0 || val > emas[i - 1])
 
         // Also check price is above/below the ribbon
         const priceAboveRibbon = currentPrice > emas[emas.length - 1] // above slowest
         const priceBelowRibbon = currentPrice < emas[emas.length - 1] // below slowest
 
-        if (allAscending && priceAboveRibbon) {
+        if (bullishStack && priceAboveRibbon) {
           // Count how many are properly ordered — stronger signal when more aligned
-          const alignment = emas.filter((val, i) => i === 0 || val > emas[i - 1]).length
+          const alignment = emas.filter((val, i) => i === 0 || val < emas[i - 1]).length
           const strength = alignment / emas.length
           return {
             signal: 'BUY',
@@ -1350,8 +1353,8 @@ export function computeStrategySignal(
           }
         }
 
-        if (allDescending && priceBelowRibbon) {
-          const alignment = emas.filter((val, i) => i === 0 || val < emas[i - 1]).length
+        if (bearishStack && priceBelowRibbon) {
+          const alignment = emas.filter((val, i) => i === 0 || val > emas[i - 1]).length
           const strength = alignment / emas.length
           return {
             signal: 'SELL',

@@ -190,20 +190,91 @@ class DedupCache {
   shutdown() { if (this.flushTimer) clearInterval(this.flushTimer) }
 }
 
-// 2. Retention / Cleanup
+// 2. Retention / Cleanup (v2: environment-configurable via env-validation)
+//
+//   LOG_RETENTION_DAYS         (default 30)  — TradingLog retention
+//   MT5_LOG_RETENTION_DAYS     (default 7)   — Mt5ConnectionLog retention
+//   NEWS_LOG_RETENTION_DAYS    (default 14)  — NewsFetchLog retention
+//   LOG_CLEANUP_INTERVAL_HOURS (default 6)   — rotation cycle
+//
+// Runtime overrides remain possible via setRetentionDays() /
+// setMt5LogRetentionDays() / setNewsLogRetentionDays() (e.g. from
+// /api/config PATCH logging.retentionDays).
 
-let retentionDays = 30
-let mt5LogRetentionDays = 7
+import { env as getValidatedEnv } from './env-validation'
+
+interface RotationSettings {
+  retentionDays: number
+  mt5LogRetentionDays: number
+  newsLogRetentionDays: number
+  cleanupIntervalHours: number
+  /** Total rows deleted by this process (observability). */
+  totalDeleted: number
+  lastRunAt: Date | null
+}
+
+const rotation: RotationSettings = (() => {
+  try {
+    const e = getValidatedEnv()
+    return {
+      retentionDays: e.LOG_RETENTION_DAYS,
+      mt5LogRetentionDays: e.MT5_LOG_RETENTION_DAYS,
+      newsLogRetentionDays: e.NEWS_LOG_RETENTION_DAYS,
+      cleanupIntervalHours: e.LOG_CLEANUP_INTERVAL_HOURS,
+      totalDeleted: 0,
+      lastRunAt: null,
+    }
+  } catch {
+    // Env validation hard-failed in strict mode — safe fallbacks
+    return {
+      retentionDays: 30,
+      mt5LogRetentionDays: 7,
+      newsLogRetentionDays: 14,
+      cleanupIntervalHours: 6,
+      totalDeleted: 0,
+      lastRunAt: null,
+    }
+  }
+})()
+
 let cleanupTimer: ReturnType<typeof setInterval> | null = null
 let cleanupInitialized = false
 
-export function setRetentionDays(days: number) { retentionDays = days }
+/** Runtime override — TradingLog retention in days. */
+export function setRetentionDays(days: number) {
+  if (Number.isFinite(days) && days >= 1) rotation.retentionDays = Math.floor(days)
+}
 
-export async function cleanupOldLogs(): Promise<{ tradingLogsDeleted: number; mt5LogsDeleted: number }> {
-  const tradingCutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000)
-  const mt5Cutoff = new Date(Date.now() - mt5LogRetentionDays * 24 * 60 * 60 * 1000)
+/** Runtime override — Mt5ConnectionLog retention in days. */
+export function setMt5LogRetentionDays(days: number) {
+  if (Number.isFinite(days) && days >= 1) rotation.mt5LogRetentionDays = Math.floor(days)
+}
+
+/** Runtime override — NewsFetchLog retention in days. */
+export function setNewsLogRetentionDays(days: number) {
+  if (Number.isFinite(days) && days >= 1) rotation.newsLogRetentionDays = Math.floor(days)
+}
+
+/** Current rotation settings (observability / /api/config introspection). */
+export function getRotationSettings(): Readonly<RotationSettings> {
+  return { ...rotation }
+}
+
+export interface CleanupResult {
+  tradingLogsDeleted: number
+  mt5LogsDeleted: number
+  newsFetchLogsDeleted: number
+  notificationLogsDeleted: number
+}
+
+export async function cleanupOldLogs(): Promise<CleanupResult> {
+  const tradingCutoff = new Date(Date.now() - rotation.retentionDays * 24 * 60 * 60 * 1000)
+  const mt5Cutoff = new Date(Date.now() - rotation.mt5LogRetentionDays * 24 * 60 * 60 * 1000)
+  const newsCutoff = new Date(Date.now() - rotation.newsLogRetentionDays * 24 * 60 * 60 * 1000)
   let tradingLogsDeleted = 0
   let mt5LogsDeleted = 0
+  let newsFetchLogsDeleted = 0
+  let notificationLogsDeleted = 0
 
   try {
     const result = await db.tradingLog.deleteMany({ where: { createdAt: { lt: tradingCutoff } } })
@@ -219,16 +290,40 @@ export async function cleanupOldLogs(): Promise<{ tradingLogsDeleted: number; mt
     console.error("[Logger-Cleanup] Failed to delete old Mt5ConnectionLogs:", err)
   }
 
-  if (tradingLogsDeleted > 0 || mt5LogsDeleted > 0) {
-    console.log(`[Logger-Cleanup] Deleted ${tradingLogsDeleted} TradingLogs (>${retentionDays}d) + ${mt5LogsDeleted} Mt5ConnectionLogs (>${mt5LogRetentionDays}d)`)
+  try {
+    const result = await db.newsFetchLog.deleteMany({ where: { createdAt: { lt: newsCutoff } } })
+    newsFetchLogsDeleted = result.count
+  } catch (err) {
+    console.error("[Logger-Cleanup] Failed to delete old NewsFetchLogs:", err)
   }
-  return { tradingLogsDeleted, mt5LogsDeleted }
+
+  // Notification logs follow the news retention (lightweight audit trail)
+  try {
+    const result = await db.notificationLog.deleteMany({ where: { createdAt: { lt: newsCutoff } } })
+    notificationLogsDeleted = result.count
+  } catch {
+    // Table may not exist yet in older deployments — non-fatal
+  }
+
+  rotation.totalDeleted += tradingLogsDeleted + mt5LogsDeleted + newsFetchLogsDeleted + notificationLogsDeleted
+  rotation.lastRunAt = new Date()
+
+  if (tradingLogsDeleted > 0 || mt5LogsDeleted > 0 || newsFetchLogsDeleted > 0 || notificationLogsDeleted > 0) {
+    console.log(
+      `[Logger-Cleanup] Deleted ${tradingLogsDeleted} TradingLogs (>${rotation.retentionDays}d) + ${mt5LogsDeleted} Mt5ConnectionLogs (>${rotation.mt5LogRetentionDays}d) + ${newsFetchLogsDeleted} NewsFetchLogs (>${rotation.newsLogRetentionDays}d) + ${notificationLogsDeleted} NotificationLogs`
+    )
+  }
+  return { tradingLogsDeleted, mt5LogsDeleted, newsFetchLogsDeleted, notificationLogsDeleted }
 }
 
 function ensureCleanupScheduled() {
   if (cleanupInitialized) return
   cleanupInitialized = true
-  cleanupTimer = setInterval(() => { void cleanupOldLogs() }, 6 * 60 * 60 * 1000)
+  const intervalMs = rotation.cleanupIntervalHours * 60 * 60 * 1000
+  cleanupTimer = setInterval(() => { void cleanupOldLogs() }, intervalMs)
+  if (cleanupTimer && typeof cleanupTimer === 'object' && 'unref' in cleanupTimer) {
+    ;(cleanupTimer as { unref: () => void }).unref()
+  }
 }
 
 // 3. API Rate Limit Tracking
@@ -506,7 +601,10 @@ class LogBuffer {
 
 // Singleton instances
 let _logBuffer: LogBuffer | null = null
-const dedupCache = new DedupCache(30_000) // 30 second dedup window
+// Dedup window: env-configurable via LOG_DEDUP_WINDOW_MS (default 60s)
+const dedupCache = new DedupCache((() => {
+  try { return getValidatedEnv().LOG_DEDUP_WINDOW_MS } catch { return 60_000 }
+})())
 const rateLimitTracker = new RateLimitTracker()
 
 function getBuffer(): LogBuffer {
@@ -514,9 +612,11 @@ function getBuffer(): LogBuffer {
   return _logBuffer
 }
 
-// Minimum log level filter
+// Minimum log level filter (env: LOG_LEVEL, validated)
 const VALID_LOG_LEVELS = new Set<LogLevel>(['DEBUG', 'INFO', 'WARN', 'ERROR', 'CRITICAL', 'FATAL'])
-const envLevel = process.env.LOG_LEVEL?.toUpperCase()
+const envLevel = (() => {
+  try { return getValidatedEnv().LOG_LEVEL } catch { return process.env.LOG_LEVEL?.toUpperCase() as LogLevel | undefined }
+})()
 let minLevel: LogLevel = VALID_LOG_LEVELS.has(envLevel as LogLevel) ? (envLevel as LogLevel) : 'DEBUG'
 
 export function setMinLevel(level: LogLevel) { minLevel = level }

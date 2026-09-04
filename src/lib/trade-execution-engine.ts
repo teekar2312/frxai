@@ -204,6 +204,84 @@ export class TradeEventBus {
 export const tradeEventBus = new TradeEventBus()
 
 // ============================================
+// v2: NOTIFICATION HOOKS (Telegram / Discord)
+// ============================================
+
+/**
+ * Wildcard trade-lifecycle subscriber → notification dispatcher.
+ * Registered once (idempotent). All dispatch failures are swallowed by
+ * the notifier itself — notifications are strictly non-critical.
+ */
+let notificationHookRegistered = false
+export function registerNotificationHook(): void {
+  if (notificationHookRegistered) return
+  notificationHookRegistered = true
+
+  tradeEventBus.on('*', async (event) => {
+    try {
+      // Lazy import avoids module-load cycles (notifier → app-config → logger)
+      const { notifyAsync } = await import('./notifier')
+
+      switch (event.event) {
+        case TRADE_EVENTS.TRADE_OPENED: {
+          const m = (event.metadata ?? {}) as Record<string, unknown>
+          notifyAsync({
+            eventType: 'TRADE_OPENED',
+            title: `Trade opened: ${event.symbol}`,
+            body: `${event.symbol} ${String(m.direction ?? '')} opened via ${event.reason ?? 'signal'}.`,
+            severity: 'INFO',
+            fields: {
+              trade_id: event.tradeId,
+              direction: String(m.direction ?? 'n/a'),
+              lot_size: Number(m.lotSize ?? 0),
+              entry_price: Number(m.entryPrice ?? 0),
+              strategy: String(m.strategy ?? 'n/a'),
+            },
+          })
+          break
+        }
+        case TRADE_EVENTS.TRADE_CLOSED:
+        case TRADE_EVENTS.SL_TRIGGERED:
+        case TRADE_EVENTS.TP_TRIGGERED: {
+          const pnl = Number(event.pnl ?? 0)
+          notifyAsync({
+            eventType: 'TRADE_CLOSED',
+            title: `${event.symbol} closed — ${event.reason}`,
+            body: `Trade closed via ${event.reason}. P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`,
+            severity: pnl < 0 ? 'WARN' : 'INFO',
+            fields: {
+              trade_id: event.tradeId,
+              symbol: event.symbol,
+              reason: event.reason ?? 'n/a',
+              pnl_usd: pnl.toFixed(2),
+              pnl_pct: Number(event.pnlPercent ?? 0).toFixed(2),
+            },
+          })
+          break
+        }
+        case TRADE_EVENTS.MARGIN_CALL_CLOSE:
+        case TRADE_EVENTS.EMERGENCY_CLOSE_ALL: {
+          notifyAsync({
+            eventType: 'RISK_EVENT',
+            title: `Risk action: ${event.event}`,
+            body: `Protective action executed — ${event.reason}.`,
+            severity: 'CRITICAL',
+            fields: { trade_id: event.tradeId, symbol: event.symbol, action: event.event, reason: event.reason ?? 'n/a' },
+          })
+          break
+        }
+        default:
+          break
+      }
+    } catch {
+      // Notification hook must never break trade execution
+    }
+  })
+}
+
+registerNotificationHook()
+
+// ============================================
 // PNL CALCULATION HELPERS
 // ============================================
 

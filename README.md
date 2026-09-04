@@ -376,16 +376,70 @@ BBRI, BBCA, BMRI, BBNI, TLKM, ASII, UNVR, GOTO, BUKA, ACST, ADRO, ANTM, BRIS, BR
 
 | Metrik | Jumlah |
 |--------|--------|
-| Baris kode TypeScript | 27,300+ |
-| File API route | 38 |
-| HTTP endpoint handlers | 58 |
-| Database model (Prisma) | 20 |
-| Core business modules | 10 |
-| Trading UI components | 15 |
-| shadcn/ui components | 50+ |
-| Trading strategies | 7 |
+| Baris kode TypeScript | 30,000+ |
+| File API route | 42 |
+| HTTP endpoint handlers | 66+ |
+| Database model (Prisma) | 25 |
+| Core business modules | 18 |
+| Trading UI components | 16 |
+| Unit tests (bun test) | 367 test / 5,300+ assertions |
+| Trading strategies (backtest engine) | 6 engine nyata |
 | Technical indicators | 10 |
-| Audit & optimization phases | 8 |
+| Audit & optimization phases | 9 |
+
+---
+
+## Hardening v2.0 — Reliability, Testing & Observability
+
+> Peningkatan menyeluruh hasil audit prioritas: unit tests, env validation,
+> retry transient failures, rate limiting, log rotation, circuit breaker
+> persisten, configuration hierarchy, notifikasi Telegram/Discord,
+> backtest engine lengkap, dan monitoring/observability.
+
+### Ringkasan Perbaikan
+
+| # | Isu Audit | Prioritas | Solusi v2 | Status |
+|---|-----------|-----------|-----------|--------|
+| 1 | Tidak ada unit tests | CRITICAL | 13 file test bun, 367 test, modul baru 81–100% coverage | ✅ |
+| 2 | Environment tidak divalidasi | CRITICAL | `env-validation.ts` — Zod runtime validation, fail-fast prod, warning dev | ✅ |
+| 3 | Bridge request tanpa retry | CRITICAL | `retry.ts` — exponential backoff + full jitter + transient classifier | ✅ |
+| 4 | Rate limiting API belum ada | HIGH | `middleware.ts` global (READ/WRITE/AI/DRAFT tier) + 429 + Retry-After | ✅ |
+| 5 | Log rotation tidak konfigurable | HIGH | `LOG_RETENTION_DAYS`, `MT5_LOG_RETENTION_DAYS`, `NEWS_LOG_RETENTION_DAYS`, `LOG_CLEANUP_INTERVAL_HOURS` | ✅ |
+| 6 | Circuit breaker hilang saat restart | HIGH | Auto-persist tiap transisi + restore age-aware saat boot | ✅ |
+| 7 | Configuration management | MEDIUM | `app-config.ts` — 4-layer (default→env→DB→runtime) + hot reload + audit | ✅ |
+| 8 | Notification hooks inkomplit | MEDIUM | Telegram Bot API + Discord webhook, filter, rate cap, retry, log persist | ✅ |
+| 9 | Backtest module minimal | MEDIUM | 6 engine nyata (tanpa mock), 15+ metrics, per-trade ledger, synthetic fallback | ✅ |
+| 10 | Monitoring & observability kurang | MEDIUM | `/api/health` (liveness+readiness), `/api/metrics` (JSON+Prometheus) | ✅ |
+
+### Testing
+
+```bash
+bun test                  # 367 test, 100% pass
+bun test --coverage       # laporan coverage per file
+bun run lint              # 0 error
+```
+
+Coverage modul v2: `backtest-engine` **100%**, `env-validation` **100%**, `retry` **100%**, `rate-limit` **92%**, `indicator-pool` **91%**, `metrics` **84%**, `app-config` **81%** (lines).
+
+### Endpoint Monitoring Baru
+
+| Endpoint | Fungsi |
+|----------|--------|
+| `GET /api/health?type=liveness` | Probe hidup (DB touch) |
+| `GET /api/health?type=readiness` | Sweep penuh: DB, MT5 bridge, memori, disk + audit log |
+| `GET /api/metrics` | Snapshot JSON: counter, gauge, histogram p50/p95/p99 |
+| `GET /api/metrics?format=prometheus` | Eksposisi Prometheus text |
+| `GET /api/config?scope=…` | Inspeksi konfigurasi 4-layer |
+| `PATCH /api/config` | Override runtime (persisted + audit trail) |
+| `GET/PUT /api/notifications/config` | Konfigurasi channel Telegram/Discord |
+| `POST /api/notifications/test` | Kirim notifikasi uji |
+
+### Contoh Environment Tambahan (v2)
+
+Lihat `.env.example` untuk daftar lengkap — di antaranya:
+`BRIDGE_MAX_RETRIES`, `CB_FAILURE_THRESHOLD`, `RATE_LIMIT_*`,
+`LOG_RETENTION_DAYS`, `TELEGRAM_BOT_TOKEN`, `DISCORD_WEBHOOK_URL`,
+`METRICS_SNAPSHOT_INTERVAL_MS`, `BACKTEST_MAX_CANDLES`.
 
 ---
 

@@ -266,6 +266,121 @@ model BacktestResult {
   totalPnl        Float
   config          String   @default("{}") // JSON strategy config
   createdAt       DateTime @default(now())
+  // --- v2: Backtest Engine Expansion ---
+  sortinoRatio    Float?
+  calmarRatio     Float?
+  expectancy      Float?
+  avgTradePnl     Float?
+  grossProfit     Float    @default(0)
+  grossLoss       Float    @default(0)
+  maxConsecWins   Int      @default(0)
+  maxConsecLosses Int      @default(0)
+  commissionTotal Float    @default(0)
+  maxDrawdownAbs  Float    @default(0)
+  finalEquityCurve String  @default("[]") // JSON: equity curve points
+  status          String   @default("COMPLETED") // PENDING, RUNNING, COMPLETED, FAILED
+  error           String?
+  durationMs      Int      @default(0)
+}
+
+model BacktestTrade {
+  id              String   @id @default(cuid())
+  resultId        String   // FK ke BacktestResult.id
+  sequence        Int      @default(0)
+  symbol          String
+  direction       String   // BUY | SELL
+  entryTime       DateTime
+  entryPrice      Float
+  exitTime        DateTime
+  exitPrice       Float
+  lotSize         Float
+  pnl             Float    @default(0)
+  pnlPercent      Float    @default(0)
+  commission      Float    @default(0)
+  exitReason      String?  // SL, TP, SIGNAL, END_OF_DATA
+  equityAfter     Float    @default(0)
+  drawdownAfter   Float    @default(0)
+
+  @@index([resultId, sequence])
+}
+
+// ============================================
+// v2: NOTIFICATION CHANNELS (Telegram / Discord)
+// ============================================
+
+model NotificationLog {
+  id          String   @id @default(cuid())
+  channel     String   // TELEGRAM, DISCORD, WEBHOOK
+  channelTarget String // chat id / webhook id (sanitized)
+  eventType   String   // TRADE_OPENED, TRADE_CLOSED, RISK_EVENT, CIRCUIT_BREAKER, SYSTEM_ERROR, TEST
+  title       String
+  body        String
+  severity    String   @default("INFO") // INFO, WARN, ERROR, CRITICAL
+  status      String   @default("PENDING") // PENDING, SENT, FAILED, SKIPPED
+  attempts    Int      @default(0)
+  lastError   String?
+  payload     String   @default("{}") // JSON: full message payload
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([status, createdAt(sort: Desc)])
+  @@index([eventType, createdAt(sort: Desc)])
+}
+
+model NotificationConfig {
+  id          String   @id @default(cuid())
+  channel     String   @unique // TELEGRAM, DISCORD
+  enabled     Boolean  @default(false)
+  botToken    String?  // Telegram bot token (encrypted at rest in production)
+  chatId      String?  // Telegram chat id
+  webhookUrl  String?  // Discord webhook URL
+  minSeverity String   @default("WARN") // Minimum severity to notify: INFO, WARN, ERROR, CRITICAL
+  events      String   @default("[\"RISK_EVENT\",\"CIRCUIT_BREAKER\",\"TRADE_CLOSED\"]") // JSON: event types
+  rateLimitPerMin   Int @default(20)
+  rateLimitPerHour  Int @default(100)
+  lastSentAt  DateTime?
+  sentToday   Int      @default(0)
+  lastError   String?
+  consecutiveErrors Int @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ============================================
+// v2: HEALTH CHECK & METRICS
+// ============================================
+
+model HealthCheckLog {
+  id          String   @id @default(cuid())
+  checkType   String   // LIVENESS, READINESS
+  status      String   // HEALTHY, DEGRADED, UNHEALTHY
+  database    Boolean  @default(true)
+  mt5Bridge   Boolean  @default(false)
+  diskOk      Boolean  @default(true)
+  latencyMs   Int      @default(0)
+  memoryUsageMb Float  @default(0)
+  details     String   @default("{}") // JSON: component statuses
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+}
+
+model MetricsSnapshot {
+  id          String   @id @default(cuid())
+  metricType  String   // COUNTER, GAUGE, HISTOGRAM
+  name        String   // e.g. api_requests_total, bridge_latency_ms
+  labels      String   @default("{}") // JSON: {route, method, status}
+  value       Float    @default(0)
+  count       Int      @default(0)
+  sum         Float    @default(0)
+  min         Float
+  max         Float
+  p50         Float
+  p95         Float
+  p99         Float
+  capturedAt  DateTime @default(now())
+
+  @@index([name, capturedAt(sort: Desc)])
 }
 
 // ============================================

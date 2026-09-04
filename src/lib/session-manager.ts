@@ -679,6 +679,13 @@ export async function getSessionRiskBudget(equity: number): Promise<SessionRiskB
  * Returns { allowed: true } or { allowed: false, reason: string }.
  */
 export function checkSessionTradingRules(): { allowed: boolean; reason?: string } {
+  // Weekend check first — IDX never trades Sat/Sun, and the phase clock
+  // alone would otherwise report a time-of-day phase on weekends.
+  const dayOfWeek = new Date().getUTCDay()
+  if (dayOfWeek === 0 || dayOfWeek === 6) {
+    return { allowed: false, reason: 'Weekend — IDX market is closed' }
+  }
+
   const phase = getTradingPhase()
 
   if (phase === 'CLOSED') {
@@ -692,11 +699,6 @@ export function checkSessionTradingRules(): { allowed: boolean; reason?: string 
   if (phase === 'PRE_CLOSE') {
     // Allow existing position management but block new entries
     return { allowed: false, reason: 'Pre-close window — no new entries allowed' }
-  }
-
-  const dayOfWeek = new Date().getUTCDay()
-  if (dayOfWeek === 0 || dayOfWeek === 6) {
-    return { allowed: false, reason: 'Weekend — IDX market is closed' }
   }
 
   return { allowed: true }

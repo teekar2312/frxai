@@ -36,7 +36,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
-import { Plus, LineChart, Trash2, Loader2, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, LineChart, Trash2, Loader2, AlertTriangle, ChevronDown, ChevronUp, Cpu } from 'lucide-react'
 import {
   AreaChart,
   Area,
@@ -55,13 +55,14 @@ interface EquityPoint {
 interface SimulatedTrade {
   entryBar: number
   exitBar: number
-  direction: 'LONG' | 'SHORT'
+  /** v1 sends LONG/SHORT; the v2 engine sends BUY/SELL — both are supported */
+  direction: 'LONG' | 'SHORT' | 'BUY' | 'SELL'
   entryPrice: number
   exitPrice: number
   pnl: number
   commission: number
-  sl: number
-  tp: number
+  sl: number | null
+  tp: number | null
 }
 
 interface BacktestResult {
@@ -90,6 +91,20 @@ interface BacktestResult {
   simulatedTrades?: SimulatedTrade[]
   mockWarning?: boolean
   engine?: string
+  // --- v2 engine fields ---
+  sortinoRatio?: number | null
+  calmarRatio?: number | null
+  expectancy?: number | null
+  grossProfit?: number
+  grossLoss?: number
+  maxConsecWins?: number
+  maxConsecLosses?: number
+  commissionTotal?: number
+  dataSource?: 'database' | 'synthetic'
+  engineVersion?: string
+  v2Metrics?: Record<string, unknown>
+  /** v2 GET rows persist the curve here (JSON string) */
+  finalEquityCurve?: string
 }
 
 const SYMBOLS = [
@@ -97,16 +112,50 @@ const SYMBOLS = [
 ]
 
 const STRATEGIES = [
-  'Moving Average Ribbon',
-  'Momentum Scalping',
-  'Pivot Point',
+  'SMA Crossover',
   'EMA Crossover',
-  'RMI Trend Sync',
-  'Linear Regression',
-  'EMA/RSI Filter',
+  'RSI Mean Reversion',
+  'MACD Momentum',
+  'Bollinger Breakout',
+  'Donchian Breakout',
 ]
 
 const TIMEFRAMES = ['1m', '5m', '15m', '30m', '1H', '4H', '1D', '1W']
+
+/** Normalize a raw API result: GET rows keep v2 metadata inside JSON strings. */
+function normalizeResult(raw: BacktestResult): BacktestResult {
+  const out: BacktestResult = { ...raw }
+  // Equity curve: v2 list responses store it as finalEquityCurve (JSON string)
+  if (!out.equityCurve && out.finalEquityCurve) {
+    try {
+      const parsed = JSON.parse(out.finalEquityCurve) as EquityPoint[]
+      if (Array.isArray(parsed)) out.equityCurve = parsed
+    } catch { /* ignore malformed */ }
+  }
+  // dataSource / engineVersion: embedded in the config JSON string on GET rows
+  if (!out.engineVersion || !out.dataSource) {
+    try {
+      const cfg = out.config ? (JSON.parse(out.config) as Record<string, unknown>) : null
+      if (cfg) {
+        if (!out.engineVersion && typeof cfg.engineVersion === 'string') out.engineVersion = cfg.engineVersion
+        if (!out.dataSource && (cfg.dataSource === 'database' || cfg.dataSource === 'synthetic')) {
+          out.dataSource = cfg.dataSource
+        }
+      }
+    } catch { /* ignore malformed */ }
+  }
+  return out
+}
+
+function fmtMetric(v: number | null | undefined, digits = 2, fallback = '—'): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return fallback
+  return v.toFixed(digits)
+}
+
+function fmtUsd(v: number | null | undefined, fallback = '—'): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return fallback
+  return v.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+}
 
 export default function BacktestPanel() {
   const [backtests, setBacktests] = useState<BacktestResult[]>([])
@@ -132,7 +181,7 @@ export default function BacktestPanel() {
       if (res.ok) {
         const json = await res.json()
         if (json.success && Array.isArray(json.data)) {
-          setBacktests(json.data)
+          setBacktests(json.data.map(normalizeResult))
         }
       }
     } catch {
@@ -174,7 +223,7 @@ export default function BacktestPanel() {
       }
 
       // Prepend the new result (API already saved it to DB)
-      setBacktests((prev) => [json.data, ...prev])
+      setBacktests((prev) => [normalizeResult(json.data), ...prev])
       setDialogOpen(false)
       resetForm()
     } catch {
@@ -350,24 +399,43 @@ export default function BacktestPanel() {
         </Dialog>
       </div>
 
-      {/* Equity Curve Chart (when a backtest is selected) */}
-      {selectedBacktest && selectedBacktest.equityCurve && selectedBacktest.equityCurve.length > 0 && (
+      {/* Backtest Detail (when a result is selected) */}
+      {selectedBacktest && (
         <Card>
           <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <CardTitle className="text-sm font-medium">
-                  Equity Curve — {selectedBacktest.name}
+                  Backtest Detail — {selectedBacktest.name}
                 </CardTitle>
-                {/* Mock warning badge */}
+                {/* Mock warning badge (legacy v1 — v2 never mocks) */}
                 {selectedBacktest.mockWarning && (
                   <Badge variant="destructive" className="gap-1 text-xs">
                     <AlertTriangle className="h-3 w-3" />
                     Mock Data
                   </Badge>
                 )}
-                {/* Engine badge for non-mock results */}
-                {!selectedBacktest.mockWarning && selectedBacktest.engine && (
+                {/* v2 data-source badge: synthetic candles were simulated */}
+                {selectedBacktest.dataSource === 'synthetic' && (
+                  <Badge
+                    className="gap-1 text-xs bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-900/40"
+                    title="No real candles in DB — deterministic synthetic series was generated"
+                  >
+                    <AlertTriangle className="h-3 w-3" />
+                    SYNTHETIC DATA
+                  </Badge>
+                )}
+                {/* v2 engine badge */}
+                {selectedBacktest.engineVersion === 'v2' && (
+                  <Badge
+                    className="gap-1 text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-900/40"
+                  >
+                    <Cpu className="h-3 w-3" />
+                    v2 ENGINE
+                  </Badge>
+                )}
+                {/* Legacy engine badge for pre-v2 results */}
+                {!selectedBacktest.mockWarning && selectedBacktest.engine && !selectedBacktest.engineVersion && (
                   <Badge variant="outline" className="text-xs font-mono">
                     {selectedBacktest.engine === 'EMA_CROSSOVER' ? 'EMA' :
                      selectedBacktest.engine === 'SMA_CROSSOVER' ? 'SMA' :
@@ -386,7 +454,103 @@ export default function BacktestPanel() {
               </Button>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            {/* v2 Metrics Grid */}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Sortino</div>
+                <div className="font-mono text-sm font-semibold">
+                  {fmtMetric(selectedBacktest.sortinoRatio)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Calmar</div>
+                <div className="font-mono text-sm font-semibold">
+                  {fmtMetric(selectedBacktest.calmarRatio)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Expectancy</div>
+                <div
+                  className={`font-mono text-sm font-semibold ${
+                    (selectedBacktest.expectancy ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'
+                  }`}
+                >
+                  {(selectedBacktest.expectancy ?? 0) >= 0 ? '+' : ''}
+                  {fmtMetric(selectedBacktest.expectancy)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Gross Profit</div>
+                <div className="font-mono text-sm font-semibold text-emerald-600">
+                  {fmtUsd(selectedBacktest.grossProfit ?? 0)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Gross Loss</div>
+                <div className="font-mono text-sm font-semibold text-red-600">
+                  {fmtUsd(selectedBacktest.grossLoss ?? 0)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Consec W / L</div>
+                <div className="font-mono text-sm font-semibold">
+                  <span className="text-emerald-600">{selectedBacktest.maxConsecWins ?? 0}</span>
+                  <span className="text-muted-foreground"> / </span>
+                  <span className="text-red-600">{selectedBacktest.maxConsecLosses ?? 0}</span>
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Commission</div>
+                <div className="font-mono text-sm font-semibold">
+                  {fmtUsd(selectedBacktest.commissionTotal ?? 0)}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Sharpe</div>
+                <div className="font-mono text-sm font-semibold">
+                  {selectedBacktest.sharpeRatio ?? '—'}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Profit Factor</div>
+                <div className="font-mono text-sm font-semibold">
+                  {selectedBacktest.profitFactor ?? '—'}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Total P&amp;L</div>
+                <div
+                  className={`font-mono text-sm font-semibold ${
+                    selectedBacktest.totalPnl >= 0 ? 'text-emerald-600' : 'text-red-600'
+                  }`}
+                >
+                  {selectedBacktest.totalPnl >= 0 ? '+' : ''}
+                  {selectedBacktest.totalPnl.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Max DD</div>
+                <div className="font-mono text-sm font-semibold">
+                  {selectedBacktest.maxDrawdown}%
+                </div>
+              </div>
+              <div className="rounded-lg border p-2.5">
+                <div className="text-[10px] text-muted-foreground">Total Return</div>
+                <div
+                  className={`font-mono text-sm font-semibold ${
+                    (selectedBacktest.totalReturn ?? 0) >= 0 ? 'text-emerald-600' : 'text-red-600'
+                  }`}
+                >
+                  {selectedBacktest.totalReturn !== undefined
+                    ? `${selectedBacktest.totalReturn >= 0 ? '+' : ''}${selectedBacktest.totalReturn.toFixed(2)}%`
+                    : '—'}
+                </div>
+              </div>
+            </div>
+
+            {/* Equity Curve Chart */}
+            {selectedBacktest.equityCurve && selectedBacktest.equityCurve.length > 0 && (
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={selectedBacktest.equityCurve}>
@@ -432,10 +596,11 @@ export default function BacktestPanel() {
                 </AreaChart>
               </ResponsiveContainer>
             </div>
+            )}
 
             {/* Simulated Trades Detail Section */}
             {selectedBacktest.simulatedTrades && selectedBacktest.simulatedTrades.length > 0 && (
-              <div className="mt-4">
+              <div>
                 <Collapsible open={tradesOpen} onOpenChange={setTradesOpen}>
                   <CollapsibleTrigger asChild>
                     <Button
@@ -474,6 +639,8 @@ export default function BacktestPanel() {
                         <TableBody>
                           {selectedBacktest.simulatedTrades.map((trade, idx) => {
                             const isWin = trade.pnl > 0
+                            // v1 sends LONG/SHORT, v2 engine sends BUY/SELL — normalise for styling
+                            const isLong = trade.direction === 'LONG' || trade.direction === 'BUY'
                             return (
                               <TableRow key={idx}>
                                 <TableCell className="text-muted-foreground text-xs">
@@ -481,9 +648,9 @@ export default function BacktestPanel() {
                                 </TableCell>
                                 <TableCell>
                                   <Badge
-                                    variant={trade.direction === 'LONG' ? 'default' : 'secondary'}
+                                    variant={isLong ? 'default' : 'secondary'}
                                     className={`text-xs font-mono ${
-                                      trade.direction === 'LONG'
+                                      isLong
                                         ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400'
                                         : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
                                     }`}
@@ -506,10 +673,14 @@ export default function BacktestPanel() {
                                   {trade.commission.toFixed(2)}
                                 </TableCell>
                                 <TableCell className="text-right font-mono text-xs text-muted-foreground hidden md:table-cell">
-                                  {trade.sl.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                  {trade.sl !== null && trade.sl !== undefined
+                                    ? trade.sl.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                                    : '—'}
                                 </TableCell>
                                 <TableCell className="text-right font-mono text-xs text-muted-foreground hidden md:table-cell">
-                                  {trade.tp.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                  {trade.tp !== null && trade.tp !== undefined
+                                    ? trade.tp.toLocaleString(undefined, { maximumFractionDigits: 2 })
+                                    : '—'}
                                 </TableCell>
                               </TableRow>
                             )

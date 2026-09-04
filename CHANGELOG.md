@@ -201,3 +201,35 @@ Bersihan dan finalisasi seluruh basis kode untuk kesiapan go-live:
 [0.1.2]: https://github.com/teekar2312/frxai/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/teekar2312/frxai/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/teekar2312/frxai/releases/tag/v0.1.0
+---
+
+## [2.0.0] — Hardening: Reliability, Testing & Observability
+
+### Critical (Audit Prioritas)
+- **Unit tests**: 13 file / 367 test / 5.300+ assertions (bun test), 100% pass. Coverage modul baru 81–100%.
+- **Runtime env validation** (`src/lib/env-validation.ts`): Zod schema 60+ variabel, fail-fast production/strict, warning+safe-default development.
+- **Bridge retry** (`src/lib/retry.ts` + integrasi `mt5-connection.ts`): exponential backoff + full jitter, classifier transient (ECONNRESET/timeout/408/425/429/5xx/MT5 retryable codes), `RetryExhaustedError`, metrics latency bridge.
+
+### High
+- **Rate limiting global** (`src/middleware.ts` + `src/lib/rate-limit.ts`): sliding window per IP × tier (READ 100 / WRITE 20 / AI 10 / DRAFT 5 per window default), 429 + `Retry-After` + `X-RateLimit-*`, `/api/health` & `/api/metrics` exempt.
+- **Log rotation env-configurable**: `LOG_RETENTION_DAYS` (30), `MT5_LOG_RETENTION_DAYS` (7), `NEWS_LOG_RETENTION_DAYS` (14), `LOG_CLEANUP_INTERVAL_HOURS` (6), `LOG_DEDUP_WINDOW_MS` (60s) + cleanup NotificationLog.
+- **Circuit breaker persisten**: auto-persist tiap transisi (kolom Mt5ConnectionState + snapshot SystemConfig), restore saat boot dengan konversi OPEN kadaluarsa → HALF_OPEN, notifikasi operator saat restore non-CLOSED.
+
+### Medium
+- **Configuration management** (`src/lib/app-config.ts`): hierarki 4-layer default→env→DB→runtime, 40 definisi tervalidasi, hot-reload 30s, listener, `/api/config` + AuditTrail.
+- **Notification hooks**: `src/lib/notifier.ts` Telegram (HTML) + Discord (embed) dengan severity/event filter, outbound rate cap, retry transient, auto-disable 10 error beruntun; hook ke tradeEventBus (OPEN/CLOSED/SL/TP/MARGIN_CALL/EMERGENCY) & RiskEvent HIGH/CRITICAL; UI konfigurasi + Send Test + log.
+- **Backtest engine v2** (`src/lib/backtest-engine.ts`): 6 strategi nyata (SMA/EMA crossover, RSI mean-reversion, MACD momentum, Bollinger & Donchian breakout — band/channel sebelumnya, tanpa self-inclusive), ATR SL/TP intrabar (SL prioritas), komisi+slippage, metrics lengkap (Sharpe/Sortino/Calmar/expectancy/PF/gross/streaks/exposure/DD abs), per-trade ledger (BacktestTrade), synthetic candles deterministik fallback (berlabel), tanpa mock.
+- **Monitoring & observability**: `/api/health` (liveness/readiness + HealthCheckLog retensi 24j), `/api/metrics` (JSON + Prometheus text + snapshot DB), `src/lib/metrics.ts` counter/gauge/histogram p50/p95/p99, X-Request-Id correlation.
+
+### Bug fixes (ditemukan oleh test suite)
+- `env-validation.ts`: duplikat export `EnvSchema` (ESM SyntaxError di bun) — dihapus.
+- `app-config.ts`: `setConfigValue` melempar `ReferenceError: newValue is not defined` pada path sukses — diperbaiki.
+- `rate-limit.ts`: prune menghapus bucket sebelum hit pertama → budget efektif +1 — guard `createdAt`.
+- `backtest-engine.ts` + `indicator-pool.ts`: RSI flat-series mengembalikan 100 → 50 (neutral).
+- `backtest-engine.ts`: `Ema.ready` true saat warm-up — kini konsisten dengan `update()`.
+- `indicator-pool.ts`: sinyal `ma-ribbon` terbalik (bullish stacking dikira bearish) — BUY/SELL dikoreksi.
+- `mt5-connection.ts` `getTradingPhase` + `session-manager.ts`: weekend (Sabtu/Minggu) kini CLOSED, cek weekend didahulukan di `checkSessionTradingRules`.
+- Backtest breakout: band/channel membandingkan bar saat ini terhadap band sebelumnya.
+
+### Database
+- Model baru: `BacktestTrade`, `NotificationLog`, `NotificationConfig`, `HealthCheckLog`, `MetricsSnapshot`; kolom v2 di `BacktestResult`.

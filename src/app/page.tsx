@@ -24,6 +24,7 @@ import {
   Clock,
   History,
   Zap,
+  Activity,
 } from 'lucide-react'
 import AccountSummary from '@/components/trading/AccountSummary'
 import StockWatchlist from '@/components/trading/StockWatchlist'
@@ -43,6 +44,7 @@ import SentimentFilter from '@/components/trading/SentimentFilter'
 import AiEnginePanel from '@/components/trading/AiEnginePanel'
 import AutoTradingDashboard from '@/components/trading/AutoTradingDashboard'
 import AiProviderSettings from '@/components/trading/AiProviderSettings'
+import SystemHealthPanel from '@/components/trading/SystemHealthPanel'
 import { useLiveNotifications } from '@/lib/notification-hooks'
 
 const NAV_ITEMS = [
@@ -57,6 +59,7 @@ const NAV_ITEMS = [
   { id: 'backtest', label: 'Backtest', icon: FlaskConical },
   { id: 'sessions', label: 'Sessions', icon: Globe },
   { id: 'logs', label: 'System Logs', icon: Terminal },
+  { id: 'system', label: 'System Health', icon: Activity },
   { id: 'audit', label: 'Audit', icon: ShieldCheck },
   { id: 'history', label: 'Trade History', icon: History },
 ] as const
@@ -276,6 +279,10 @@ export default function TradingDashboard() {
 
           <TabsContent value="logs" className="space-y-6">
             <LogViewer />
+          </TabsContent>
+
+          <TabsContent value="system" className="space-y-6">
+            <SystemHealthPanel />
           </TabsContent>
 
           <TabsContent value="backtest" className="space-y-6">

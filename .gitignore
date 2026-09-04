@@ -30,11 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)                          
-.env
-.env.local
-.env.production
-.env.development
+# env files — NEVER commit real .env; only the template is tracked
+.env*
+!.env.example
 
 # vercel
 .vercel
@@ -49,13 +47,20 @@ local-*
 *.log
 dev.log
 dev.out.log
-test
-prompt
+/test
+/prompt
 
 server.log
-# Skills directory
-/skills/tool-results/
-dev.log
-*.db-journal
-skills/
+
+# database (SQLite runtime data — recreate with `bun run db:push`)
+db/*.db
+db/*.db-journal
+
+# internal agent / tooling artifacts
 tool-results/
+worklog.md
+upload/
+download/
+
+# Skills directory
+/skills/

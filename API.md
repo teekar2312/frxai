@@ -1234,3 +1234,85 @@ Semua error mengikuti format uniform:
 | 409 | Conflict | Duplicate alert |
 | 422 | Validation | Risk check failed, invalid params |
 | 500 | Server Error | Database error, MT5 connection failed |
+
+---
+
+## v2.0 — Hardening Endpoints (Monitoring, Config, Notifications)
+
+### Health & Metrics
+
+#### `GET /api/health`
+Liveness & readiness probe. **Exempt dari rate limiting.**
+
+| Param | Nilai | Deskripsi |
+|-------|-------|-----------|
+| `type` | `liveness` (default) / `readiness` | Kedalaman pemeriksaan |
+
+Response `200` (HEALTHY/DEGRADED) atau `503` (UNHEALTHY):
+```json
+{
+  "success": true,
+  "data": {
+    "status": "HEALTHY", "type": "readiness", "version": "2.0.0",
+    "uptimeSeconds": 3600, "latencyMs": 12, "timestamp": "…",
+    "checks": {
+      "database": { "ok": true, "latencyMs": 3 },
+      "mt5Bridge": { "ok": true, "latencyMs": 8, "detail": "bridge reachable" },
+      "memory": { "ok": true, "detail": "rss=1333MB heap=166MB" },
+      "disk": { "ok": true },
+      "environment": { "ok": true, "detail": "optional credentials missing: …" }
+    }
+  }
+}
+```
+Readiness dipersist ke `HealthCheckLog` (retensi 24 jam).
+
+#### `GET /api/metrics`
+| Param | Nilai | Deskripsi |
+|-------|-------|-----------|
+| `format` | `json` (default) / `prometheus` | Format eksposisi |
+| `snapshot` | `true` | Paksa persist snapshot ke `MetricsSnapshot` |
+
+JSON: counter/gauge/histogram (p50/p95/p99) + stats rate limiter. Prometheus: text exposition (`# HELP`, `# TYPE`, label escapes).
+
+### Rate Limiting (semua `/api/*`)
+
+Header respons: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `X-RateLimit-Tier`, `X-Request-Id`.
+Response `429`:
+```json
+{ "success": false, "error": { "code": "RATE_LIMITED", "message": "Rate limit exceeded (AI): max 10 requests per window. Retry after 45s.", "tier": "AI", "limit": 10, "retryAfterSec": 45, "resetAt": "…" } }
+```
+Tier default per window: READ 100, WRITE 20, AI 10, DRAFT 5 — env: `RATE_LIMIT_*`.
+
+### Configuration
+
+#### `GET /api/config?scope=trading|risk|bridge|rateLimit|logging|notifications|backtest|monitoring`
+Entri dengan nilai efektif + asal layer (`runtime` > `database` > `env` > `default`).
+
+#### `PATCH /api/config`
+Body `{ "key": "trading.leverage", "value": 30 }` → override runtime (persisted ke SystemConfig + AuditTrail). Key immutable ditolak; validasi per-definisi.
+
+#### `DELETE /api/config?key=trading.leverage`
+Reset override → kembali ke layer bawah.
+
+### Notifications
+
+#### `GET /api/notifications?channel=&status=&eventType=&limit=`
+Log notifikasi terbaru + statistik (total/sent/failed/pending).
+
+#### `GET /api/notifications/config`
+State channel Telegram/Discord (kredensial dimasking) — envConfigured, enabled, minSeverity, events, consecutiveErrors, lastError.
+
+#### `PUT /api/notifications/config`
+Body `{ "channel": "TELEGRAM", "enabled": true, "chatId": "12345", "minSeverity": "WARN", "events": ["RISK_EVENT","TRADE_CLOSED"] }`.
+
+#### `POST /api/notifications/test`
+Kirim event TEST ke semua channel aktif → hasil per-channel (`SENT`/`FAILED`/`SKIPPED`).
+
+### Backtest v2
+
+#### `POST /api/backtest`
+Strategi v2: `SMA Crossover`, `EMA Crossover`, `RSI Mean Reversion`, `MACD Momentum`, `Bollinger Breakout`, `Donchian Breakout`.
+Label lama tetap diterima (mapping otomatis). Bila candle historis tidak mencukupi, engine menjalankan simulasi NYATA atas candle sintetis deterministik (`dataSource: "synthetic"`, berlabel di UI).
+
+Response tambahan: `sortinoRatio`, `calmarRatio`, `expectancy`, `grossProfit/Loss`, `maxConsecWins/Losses`, `commissionTotal`, `maxDrawdownAbs`, `finalEquityCurve`, `simulatedTrades[]` (ledger lengkap per transaksi dengan `equityAfter`/`drawdownAfter`), `v2Metrics`, `dataSource`, `engine`, `engineVersion`.

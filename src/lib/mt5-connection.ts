@@ -22,25 +22,88 @@
 
 import { db } from "./db"
 import logger, { type LogCategory } from "./trading-logger"
+import { env } from "./env-validation"
+import { executeWithRetry, isTransientError, withStatus, type RetryAttemptInfo } from "./retry"
+import { observeHistogram, incrementCounter } from "./metrics"
+import { getConfig } from "./app-config"
 
 // ============================================
-// MT5 BRIDGE CLIENT
+// MT5 BRIDGE CLIENT (retry-hardened)
 // ============================================
 
 const MT5_BRIDGE_URL = process.env.MT5_BRIDGE_URL || 'http://localhost:3001'
 
-async function bridgeRequest<T>(path: string, options?: RequestInit): Promise<T> {
-  const url = `${MT5_BRIDGE_URL}${path}`
-  const res = await fetch(url, {
-    ...options,
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    signal: AbortSignal.timeout(15_000),
-  })
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`Bridge ${res.status}: ${body}`)
+/** Extra classifier: bridge HTTP-level errors + MT5 codes worth retrying. */
+function isBridgeRetryable(err: unknown): boolean {
+  if (err instanceof Error) {
+    const msg = err.message ?? ''
+    // Bridge transport hiccups
+    if (/\bBridge (5\d\d|408|429)\b/.test(msg)) return true
+    // MT5 bridge business errors that are documented transient
+    if (/\b(10004|10006|10008|10021|10027)\b/.test(msg)) return true
   }
-  return res.json() as Promise<T>
+  return isTransientError(err)
+}
+
+/**
+ * Bridge request with retry for TRANSIENT failures (timeouts, connection
+ * resets, HTTP 408/425/429/5xx, MT5 retryable codes).
+ *
+ * Non-transient failures (HTTP 4xx validation, auth errors, MT5 hard
+ * rejects) fail fast without burning retries.
+ */
+async function bridgeRequest<T>(path: string, options?: RequestInit): Promise<T> {
+  const timeoutMs = env().BRIDGE_TIMEOUT_MS
+  const url = `${MT5_BRIDGE_URL}${path}`
+  const startedAt = Date.now()
+
+  const onRetry = (info: RetryAttemptInfo) => {
+    logger.warn('MT5_CONNECTION' as LogCategory, `Bridge transient failure — retrying ${path}`, {
+      metadata: {
+        attempt: info.attempt,
+        nextDelayMs: info.nextDelayMs,
+        attemptsLeft: info.attemptsLeft,
+        error: info.error instanceof Error ? info.error.message : String(info.error),
+      },
+    } as never)
+  }
+
+  const outcome = await executeWithRetry(
+    async (attempt) => {
+      const res = await fetch(url, {
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      if (!res.ok) {
+        const body = await res.text().catch(() => '')
+        throw withStatus(new Error(`Bridge ${res.status}: ${body.slice(0, 300)}`), res.status)
+      }
+      // Empty-body success (204 etc.) → tolerate JSON parse
+      const text = await res.text().catch(() => '')
+      if (!text) return {} as T
+      try {
+        return JSON.parse(text) as T
+      } catch {
+        throw new Error(`Bridge 502: invalid JSON from ${path} (attempt ${attempt})`)
+      }
+    },
+    {
+      maxAttempts: 1 + getConfig<number>('bridge.maxRetries'),
+      baseDelayMs: getConfig<number>('bridge.retryBaseDelayMs'),
+      maxDelayMs: getConfig<number>('bridge.retryMaxDelayMs'),
+      jitterRatio: 1,
+      isRetryable: isBridgeRetryable,
+      onRetry,
+    }
+  )
+
+  // Observability
+  const latency = Date.now() - startedAt
+  observeHistogram('bridge_request_latency_ms', latency, { path })
+  incrementCounter('bridge_requests_total', { path, outcome: outcome.succeededAfterRetry ? 'retried' : 'first_try' })
+
+  return outcome.result
 }
 
 // ============================================
@@ -631,6 +694,9 @@ const PHASE_BOUNDARIES_UTC = {
  */
 export function getTradingPhase(now?: Date): TradingPhase {
   const d = now || new Date()
+  // IDX does not trade on weekends (Saturday=6, Sunday=0 UTC)
+  const dayOfWeek = d.getUTCDay()
+  if (dayOfWeek === 0 || dayOfWeek === 6) return "CLOSED"
   // Get UTC hours and minutes as decimal for comparison
   const utcDecimal = d.getUTCHours() + d.getUTCMinutes() / 60 + d.getUTCSeconds() / 3600
 
@@ -1472,6 +1538,22 @@ interface CircuitBreakerConfig {
   recoveryTimeoutMs: number
   /** Maximum calls allowed during HALF_OPEN probe */
   halfOpenMaxAttempts: number
+  /**
+   * Persistence hook — invoked (fire-and-forget) on every state transition
+   * so the breaker survives process restarts. Wired to the database by
+   * default (see CIRCUIT BREAKER STATE PERSISTENCE below).
+   */
+  onStateChange?: (snapshot: CircuitBreakerSnapshot) => void
+}
+
+/** Serializable state snapshot for persistence & restoration. */
+export interface CircuitBreakerSnapshot {
+  state: CircuitBreakerState
+  failureCount: number
+  successCount: number
+  halfOpenAttempts: number
+  openedAt: string | null
+  capturedAt: string
 }
 
 /**
@@ -1544,6 +1626,7 @@ export class CircuitBreaker {
     this._halfOpenAttempts = 0
     this._openedAt = null
     logger.info("MT5_CONNECTION", "Circuit breaker manually reset to CLOSED")
+    this._emitStateChange()
   }
 
   /** Manually trip the circuit breaker to OPEN. */
@@ -1551,6 +1634,53 @@ export class CircuitBreaker {
     this._state = "OPEN"
     this._openedAt = new Date()
     logger.warn("MT5_CONNECTION", `Circuit breaker manually tripped to OPEN (${this._failureCount} failures)`)
+    this._emitStateChange()
+  }
+
+  /** Capture a serializable snapshot (for persistence/tests). */
+  snapshot(): CircuitBreakerSnapshot {
+    return {
+      state: this._state,
+      failureCount: this._failureCount,
+      successCount: this._successCount,
+      halfOpenAttempts: this._halfOpenAttempts,
+      openedAt: this._openedAt ? this._openedAt.toISOString() : null,
+      capturedAt: new Date().toISOString(),
+    }
+  }
+
+  /**
+   * Restore state from a persisted snapshot (e.g. after a server restart).
+   * Age-aware: an OPEN breaker whose recovery timeout already elapsed is
+   * restored as HALF_OPEN so recovery probing resumes immediately.
+   */
+  restore(snapshot: CircuitBreakerSnapshot): void {
+    this._failureCount = snapshot.failureCount ?? 0
+    this._successCount = snapshot.successCount ?? 0
+    this._halfOpenAttempts = snapshot.halfOpenAttempts ?? 0
+    const openedAt = snapshot.openedAt ? new Date(snapshot.openedAt) : null
+    const validOpenedAt = openedAt && !isNaN(openedAt.getTime()) ? openedAt : null
+
+    this._state = snapshot.state === "OPEN" || snapshot.state === "HALF_OPEN" ? snapshot.state : "CLOSED"
+    this._openedAt = validOpenedAt
+
+    if (this._state === "OPEN" && validOpenedAt) {
+      // If recovery timeout already elapsed while the server was down,
+      // resume as HALF_OPEN so probes start immediately.
+      if (Date.now() - validOpenedAt.getTime() >= this._config.recoveryTimeoutMs) {
+        this._state = "HALF_OPEN"
+        this._halfOpenAttempts = 0
+        logger.info("MT5_CONNECTION", "Circuit breaker restored OPEN→HALF_OPEN (recovery timeout elapsed during downtime)")
+      }
+    }
+
+    logger.info("MT5_CONNECTION", `Circuit breaker state restored: ${this._state} (failures: ${this._failureCount})`)
+  }
+
+  private _emitStateChange(): void {
+    try {
+      this._config.onStateChange?.(this.snapshot())
+    } catch { /* persistence must never break the breaker */ }
   }
 
   private _onSuccess(): void {
@@ -1562,9 +1692,13 @@ export class CircuitBreaker {
       this._halfOpenAttempts = 0
       this._openedAt = null
       logger.info("MT5_CONNECTION", "HALF_OPEN probe succeeded → CLOSED")
+      this._emitStateChange()
     } else {
       // In CLOSED state, reset failure counter on success
-      this._failureCount = 0
+      if (this._failureCount !== 0) {
+        this._failureCount = 0
+        this._emitStateChange()
+      }
     }
   }
 
@@ -1579,6 +1713,7 @@ export class CircuitBreaker {
         "MT5_CONNECTION",
         `HALF_OPEN probe failed → OPEN (failures: ${this._failureCount})`
       )
+      this._emitStateChange()
     } else if (this._failureCount >= this._config.failureThreshold) {
       // Threshold reached → trip to OPEN
       this._state = "OPEN"
@@ -1587,6 +1722,12 @@ export class CircuitBreaker {
         "MT5_CONNECTION",
         `CLOSED → OPEN (failures: ${this._failureCount}/${this._config.failureThreshold})`
       )
+      this._emitStateChange()
+    } else if (this._failureCount % 1 === 0) {
+      // Persist failure counter growth (debounced: only meaningful counts)
+      if (this._failureCount >= Math.max(1, Math.floor(this._config.failureThreshold / 2))) {
+        this._emitStateChange()
+      }
     }
   }
 
@@ -1597,6 +1738,7 @@ export class CircuitBreaker {
         this._state = "HALF_OPEN"
         this._halfOpenAttempts = 0
         logger.info("MT5_CONNECTION", "OPEN → HALF_OPEN (recovery timeout elapsed)")
+        this._emitStateChange()
       }
     }
   }
@@ -1607,38 +1749,155 @@ export class CircuitBreaker {
   }
 }
 
-/** Shared module-level circuit breaker instance — preserves state across calls */
-const defaultCircuitBreaker = new CircuitBreaker()
-
-// ============================================
-// CIRCUIT BREAKER STATE PERSISTENCE
-// ============================================
-
 /**
- * Persist the circuit breaker state to Mt5ConnectionState in the database.
+ * Shared module-level circuit breaker instance — preserves state across
+ * calls AND restarts:
+ *   - onStateChange → auto-persists every transition to the database
+ *     (both the Mt5ConnectionState columns and a rich SystemConfig snapshot)
+ *   - scheduleCircuitBreakerRestore() → reloads state at process boot
  */
-export async function persistCircuitBreakerState(cb: CircuitBreaker): Promise<void> {
+const defaultCircuitBreaker = new CircuitBreaker({
+  onStateChange: (snapshot) => {
+    // Fire-and-forget persistence — never blocks the protected call
+    void persistCircuitBreakerSnapshot(snapshot)
+    void mirrorSnapshotToSystemConfig(snapshot)
+  },
+})
+
+// ============================================
+// CIRCUIT BREAKER STATE PERSISTENCE (v2)
+// ============================================
+
+/** Row id for the singleton MT5 connection state. */
+const CB_STATE_ROW_ID = 'main'
+let restoreAttempted = false
+
+/** Mirror the full snapshot into SystemConfig for lossless restore. */
+function mirrorSnapshotToSystemConfig(snapshot: CircuitBreakerSnapshot): void {
+  void db.systemConfig
+    .upsert({
+      where: { key: '__circuit_breaker_snapshot__' },
+      create: { key: '__circuit_breaker_snapshot__', value: JSON.stringify(snapshot) },
+      update: { value: JSON.stringify(snapshot) },
+    })
+    .catch(() => { /* best effort mirror */ })
+}
+
+/** Persist a snapshot to Mt5ConnectionState (columns incl. openUntil). */
+export async function persistCircuitBreakerSnapshot(snapshot: CircuitBreakerSnapshot): Promise<void> {
+  if (!env().CB_PERSIST_ENABLED) return
   try {
+    const openedAt = snapshot.openedAt ? new Date(snapshot.openedAt) : null
+    const openUntil =
+      snapshot.state === 'OPEN' && openedAt && !isNaN(openedAt.getTime())
+        ? new Date(openedAt.getTime() + env().CB_RECOVERY_TIMEOUT_MS)
+        : null
     await db.mt5ConnectionState.upsert({
-      where: { id: 'main' },
+      where: { id: CB_STATE_ROW_ID },
       create: {
-        id: 'main',
-        circuitState: cb.state,
-        circuitFailureCount: cb.failureCount,
-        circuitLastFailure: cb.state === 'OPEN' ? new Date() : null,
+        id: CB_STATE_ROW_ID,
+        circuitState: snapshot.state,
+        circuitFailureCount: snapshot.failureCount,
+        circuitLastFailure: snapshot.state === 'OPEN' || snapshot.state === 'HALF_OPEN' ? new Date() : null,
+        circuitOpenUntil: openUntil,
       },
       update: {
-        circuitState: cb.state,
-        circuitFailureCount: cb.failureCount,
-        circuitLastFailure: cb.state === 'OPEN' ? new Date() : null,
+        circuitState: snapshot.state,
+        circuitFailureCount: snapshot.failureCount,
+        circuitLastFailure: snapshot.state === 'OPEN' || snapshot.state === 'HALF_OPEN' ? new Date() : null,
+        circuitOpenUntil: openUntil,
       },
     })
   } catch (err) {
     logger.error('MT5_CONNECTION', 'Failed to persist circuit breaker state', {
       details: err instanceof Error ? err.stack : undefined,
-    })
+    } as never)
   }
 }
+
+/**
+ * Back-compat wrapper — persist a breaker's current state.
+ */
+export async function persistCircuitBreakerState(cb: CircuitBreaker): Promise<void> {
+  await persistCircuitBreakerSnapshot(cb.snapshot())
+}
+
+/**
+ * RESTORE the circuit breaker state from the database.
+ *
+ * Called automatically once per process (lazy, idempotent) so a restart
+ * does not wipe a tripped breaker — the OPEN state and failure count
+ * survive, and an expired OPEN becomes HALF_OPEN for immediate probing.
+ *
+ * Returns the restored snapshot (or null when nothing was persisted).
+ */
+export async function restoreCircuitBreakerFromDb(cb: CircuitBreaker = defaultCircuitBreaker): Promise<CircuitBreakerSnapshot | null> {
+  try {
+    // Prefer the rich snapshot stored in SystemConfig (v2)
+    const sys = await db.systemConfig.findUnique({ where: { key: '__circuit_breaker_snapshot__' } })
+    if (sys) {
+      try {
+        const snapshot = JSON.parse(sys.value) as CircuitBreakerSnapshot
+        if (snapshot && typeof snapshot.state === 'string' && snapshot.state !== 'CLOSED') {
+          cb.restore(snapshot)
+          return snapshot
+        }
+        if (snapshot && typeof snapshot.state === 'string' && snapshot.state === 'CLOSED' && (snapshot.failureCount ?? 0) > 0) {
+          cb.restore(snapshot)
+          return snapshot
+        }
+      } catch { /* fall through to legacy restore */ }
+    }
+
+    // Legacy restore from Mt5ConnectionState columns
+    const row = await db.mt5ConnectionState.findUnique({ where: { id: CB_STATE_ROW_ID } })
+    if (!row) return null
+    const snapshot: CircuitBreakerSnapshot = {
+      state: (row.circuitState as CircuitBreakerState) ?? 'CLOSED',
+      failureCount: row.circuitFailureCount ?? 0,
+      successCount: 0,
+      halfOpenAttempts: 0,
+      openedAt: row.circuitLastFailure ? row.circuitLastFailure.toISOString() : null,
+      capturedAt: new Date().toISOString(),
+    }
+    if (snapshot.state === 'CLOSED' && snapshot.failureCount === 0) return null
+    cb.restore(snapshot)
+    return snapshot
+  } catch (err) {
+    logger.error('MT5_CONNECTION', 'Failed to restore circuit breaker state', {
+      details: err instanceof Error ? err.message : String(err),
+    } as never)
+    return null
+  }
+}
+
+/**
+ * Lazy one-shot restore wired at module load. Runs in the background so
+ * imports never block; double invocation is a no-op.
+ */
+function scheduleCircuitBreakerRestore(): void {
+  if (restoreAttempted) return
+  restoreAttempted = true
+  void (async () => {
+    const snapshot = await restoreCircuitBreakerFromDb(defaultCircuitBreaker)
+    if (snapshot && snapshot.state !== 'CLOSED') {
+      logger.warn('MT5_CONNECTION', `Restored non-closed circuit breaker after restart: ${snapshot.state} (failures: ${snapshot.failureCount})`)
+      // Also dispatch a notification so operators know the breaker carried over
+      try {
+        const { notifyAsync } = await import('./notifier')
+        notifyAsync({
+          eventType: 'CIRCUIT_BREAKER',
+          title: 'Circuit breaker state restored after restart',
+          body: `The MT5 circuit breaker resumed in ${snapshot.state} state with ${snapshot.failureCount} recorded failure(s).`,
+          severity: snapshot.state === 'OPEN' ? 'ERROR' : 'WARN',
+          fields: { state: snapshot.state, failures: snapshot.failureCount, opened_at: snapshot.openedAt ?? 'n/a' },
+        })
+      } catch { /* notifier is optional */ }
+    }
+  })()
+}
+
+scheduleCircuitBreakerRestore()
 
 // ============================================
 // CONNECTION QUALITY SCORE

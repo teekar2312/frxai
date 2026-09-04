@@ -1426,6 +1426,26 @@ export async function logRiskEvent(params: {
         actionTaken: params.actionTaken,
       },
     })
+
+    // v2: dispatch Telegram/Discord notification for HIGH/CRITICAL risk events
+    if (params.severity === "HIGH" || params.severity === "CRITICAL") {
+      try {
+        const { notifyAsync } = await import("./notifier")
+        notifyAsync({
+          eventType: "RISK_EVENT",
+          title: `Risk event: ${params.eventType}`,
+          body: params.message,
+          severity: params.severity === "CRITICAL" ? "CRITICAL" : "ERROR",
+          fields: {
+            event_type: params.eventType,
+            severity: params.severity,
+            action_taken: params.actionTaken ?? "NONE",
+          },
+        })
+      } catch {
+        // Notification dispatch must never break risk logging
+      }
+    }
   } catch (err) {
     logger.error("RISK_MANAGEMENT", "Failed to log risk event", {
       details: err instanceof Error ? err.stack : undefined,

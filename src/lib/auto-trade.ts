@@ -74,8 +74,12 @@ export async function executeSignalAsTrade(
   const slAbs = side === "BUY" ? openPrice - slPips * meta.pipSize : openPrice + slPips * meta.pipSize;
   const tpAbs = side === "BUY" ? openPrice + tpPips * meta.pipSize : openPrice - tpPips * meta.pipSize;
 
-  // Lot size from risk
-  const pipValuePerLot = symbol === "XAUUSD" ? 1 : 10;
+  // Lot size from risk.
+  // pipValuePerLot = $ per pip per 1.0 standard lot:
+  //   - FX pairs (EURUSD/GBPUSD/USDJPY): 1 lot = 100,000 units, pipSize × 100,000 ≈ $10/pip
+  //   - XAUUSD: 1 lot = 100 oz, pipSize = 0.1, so 1 pip = $0.1 × 100 oz = $10/pip
+  // All pairs → $10/pip/lot. (Previous code had XAUUSD=1 which was 10x too small.)
+  const pipValuePerLot = 10;
   const riskAmount = (acc.balance * risk.riskPerTrade) / 100;
   const lotSize = Math.max(0.01, +(riskAmount / (slPips * pipValuePerLot)).toFixed(2));
 
@@ -108,7 +112,18 @@ export async function executeSignalAsTrade(
     },
   });
 
-  if (signalId) await db.signal.update({ where: { id: signalId }, data: { status: "EXECUTED" } });
+  // P3-12: reconcile Signal row with ACTUAL executed values (not LLM's raw suggestions)
+  if (signalId) {
+    await db.signal.update({
+      where: { id: signalId },
+      data: {
+        status: "EXECUTED",
+        entry: openPrice,        // actual fill price
+        stopLoss: slAbs,         // actual SL
+        takeProfit: tpAbs,       // actual TP
+      },
+    });
+  }
 
   const notional = lotSize * 100000 * openPrice;
   const marginUsed = notional / 500;

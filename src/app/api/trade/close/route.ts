@@ -21,8 +21,10 @@ export async function POST(req: Request) {
       ? (closePrice - trade.openPrice) / meta.pipSize
       : (trade.openPrice - closePrice) / meta.pipSize;
   const pips = +pipsRaw.toFixed(1);
-  // PnL: pips * pipValuePerLot * lotSize. pipValue ≈ $10/lot for USD-quoted FX, $1 for XAU per 0.1 pip
-  const pipValue = trade.symbol === "XAUUSD" ? 1 : 10; // $ per pip per lot (approx)
+  // PnL: pips × pipValuePerLot × lotSize.
+  // pipValue = $ per pip per 1.0 lot = $10 for ALL pairs:
+  //   FX: pipSize × 100,000 units ≈ $10; XAUUSD: pipSize 0.1 × 100 oz = $10
+  const pipValue = 10; // $ per pip per lot
   const pnl = +(pips * pipValue * trade.lotSize).toFixed(2);
 
   const updated = await db.trade.update({

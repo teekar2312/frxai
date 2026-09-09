@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils";
 const fmtUsd = (v: number) =>
   `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const pipValuePerLot = (s: Pair) => (s === "XAUUSD" ? 1 : 10);
+const pipValuePerLot = (_s: Pair) => 10; // $10/pip/lot for all pairs (FX & XAUUSD)
 
 interface LotCalc {
   balance: number;
@@ -474,7 +474,7 @@ export function RiskSection() {
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-400" />
                 <span>
                   Rumus: <span className="tnum text-foreground">Lot = Risk$ / (SL pips × pip value)</span>.
-                  Pip value: {PAIRS.find((p) => p.symbol === calc.symbol)?.symbol === "XAUUSD" ? "$1/pip/lot" : "$10/pip/lot"}.
+                  Pip value: $10/pip/lot (all pairs).
                 </span>
               </div>
             </div>

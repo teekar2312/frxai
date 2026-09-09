@@ -1,29 +1,32 @@
 import "server-only";
-import ZAI from "z-ai-web-dev-sdk";
-import { FACTOR_LIST } from "./constants";
+import { z } from "zod";
+import { FACTOR_LIST, PAIRS } from "./constants";
+import { getQuote, generateCandles } from "./market";
+import { chatComplete, type ChatMessage } from "./ai-providers";
+import { fetchMarketNews, formatNewsForPrompt } from "./market-news";
+import { formatOutcomeForPrompt } from "./ai-calibration";
 import type { AiAnalysisResult, FactorScore, Pair, SignalDirection } from "./types";
 
-// Multi-factor AI market analysis engine.
-// Uses z-ai-web-dev-sdk LLM (server-only) to analyze:
-//  - Central bank policy relevant to the pair
-//  - Key economic data (NFP, CPI, PPI, GDP, Unemployment, Retail Sales, PMI)
-//  - Politics & geopolitics
-//  - Fiscal & economic policy
-//  - Commodity prices
-//  - Market sentiment
-//  - Breaking news
-// Returns a structured JSON analysis the dashboard renders as a factor heatmap + signal.
-
+// ───────────────────────────────────────────────────────────────────────────
+// System prompt (role=system, NOT assistant — fixes P1-7)
+// ───────────────────────────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `Anda adalah seorang analis forex kuantitatif senior dan ahli scalping untuk broker FINEX Indonesia (leverage 1:500, spread dari 0.5 pip, komisi $1/lot).
 Anda mempunyai pengetahuan mendalam tentang kebijakan bank sentral, data ekonomi makro, geopolitik, kebijakan fiskal, harga komoditas, sentimen pasar, dan berita dadakan.
 
-Tugas: analisa PAIR forex/logam yang diberikan secara multi-faktor dan hasilkan sinyal trading scalping yang REALISTIS.
+Tugas: analisa PAIR forex/logam yang diberikan secara multi-faktor dan hasilkan sinyal trading scalping yang REALISTIS berdasarkan DATA REAL-TIME yang diberikan.
 
 Aturan money management yang harus dihormati:
 - Risk per trade 0.5%–1%
-- Stop loss 5–15 pip
+- Stop loss 5–15 pip (untuk XAUUSD 1 pip = $0.10, SL $1.5–$4.5)
 - Risk:Reward = 1:1.5
 - Hindari news berdampak tinggi saat scalping
+- Pertimbangkan biaya spread: untuk SL 5 pip dengan spread 1 pip, posisi langsung 20% underwater
+
+PENTING — Basis data:
+- Gunakan HANYA data real-time yang diberikan (harga, candle, berita, riwayat trade) sebagai dasar analisa
+- Jangan mengarang angka spesifik (NFP, CPI, suku bunga) jika tidak ada di data yang diberikan
+- Jika data tidak tersedia, nyatakan "data tidak tersedia" pada faktor tersebut
+- Skor confidence harus mencerminkan kepastian berdasarkan data yang ada, bukan asumsi
 
 Anda WAJIB membalas dengan JSON SAJA (tanpa markdown, tanpa teks tambahan) dengan skema berikut:
 {
@@ -31,7 +34,7 @@ Anda WAJIB membalas dengan JSON SAJA (tanpa markdown, tanpa teks tambahan) denga
   "confidence": number (0-100),
   "summary": "ringkasan singkat 2-3 kalimat dalam Bahasa Indonesia",
   "factors": [
-    { "factor": "<nama faktor>", "direction": "BUY"|"SELL"|"NEUTRAL", "score": number (-100..100), "detail": "<penjelasan singkat>" }
+    { "factor": "<nama faktor>", "direction": "BUY"|"SELL"|"NEUTRAL", "score": number (-100..100), "detail": "<penjelasan singkat berbasis data>" }
   ],
   "suggestedEntry": number,
   "suggestedStopLoss": number,
@@ -41,8 +44,56 @@ Anda WAJIB membalas dengan JSON SAJA (tanpa markdown, tanpa teks tambahan) denga
 Faktor yang HARUS dianalisa (gunakan persis nama-nama ini):
 ${FACTOR_LIST.map((f, i) => `${i + 1}. ${f}`).join("\n")}
 
-Berikan 7 entri factors (satu per faktor). Skor negatif = bearish, positif = bullish. entry/SL/TP harus konsisten dengan R:R 1:1.5 dan SL 5-15 pip (untuk XAUUSD gunakan $1.5-$4.5).`;
+Berikan 7 entri factors (satu per faktor). Skor negatif = bearish, positif = bullish.
+Entry harus dekat dengan harga current. SL/TP harus konsisten dengan R:R 1:1.5 dan SL 5-15 pip.`;
 
+// ───────────────────────────────────────────────────────────────────────────
+// Zod schema validation (P1-6) — ensures LLM JSON is well-formed
+// ───────────────────────────────────────────────────────────────────────────
+const FactorSchema = z.object({
+  factor: z.string(),
+  direction: z.enum(["BUY", "SELL", "NEUTRAL"]),
+  score: z.number().min(-100).max(100),
+  detail: z.string(),
+});
+
+const AnalysisSchema = z.object({
+  signal: z.enum(["BUY", "SELL", "NEUTRAL"]),
+  confidence: z.number().min(0).max(100),
+  summary: z.string(),
+  factors: z.array(FactorSchema).min(1).max(10),
+  suggestedEntry: z.number().optional(),
+  suggestedStopLoss: z.number().optional(),
+  suggestedTakeProfit: z.number().optional(),
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// In-memory 30-second cache (P2-8) — prevents parallel-call contradictions
+// ───────────────────────────────────────────────────────────────────────────
+interface CacheEntry {
+  result: AiAnalysisResult;
+  ts: number;
+}
+const analysisCache: Partial<Record<Pair, CacheEntry>> = {};
+const CACHE_TTL_MS = 30_000; // 30 seconds
+
+function getCached(symbol: Pair): AiAnalysisResult | null {
+  const entry = analysisCache[symbol];
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    delete analysisCache[symbol];
+    return null;
+  }
+  return entry.result;
+}
+
+function setCached(symbol: Pair, result: AiAnalysisResult): void {
+  analysisCache[symbol] = { result, ts: Date.now() };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Pair context (static description)
+// ───────────────────────────────────────────────────────────────────────────
 function pairContext(symbol: Pair): string {
   switch (symbol) {
     case "EURUSD":
@@ -56,6 +107,41 @@ function pairContext(symbol: Pair): string {
   }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Build real-time market context string for the LLM (P0-2, P2-10)
+// ───────────────────────────────────────────────────────────────────────────
+async function buildMarketContext(symbol: Pair): Promise<string> {
+  const meta = PAIRS.find((p) => p.symbol === symbol)!;
+  const quote = getQuote(symbol);
+  const candles = generateCandles(symbol, 20, 5); // last 20 M5 candles
+
+  // Summarize candles: trend direction, recent high/low, momentum
+  const closes = candles.map((c) => c.close);
+  const firstClose = closes[0];
+  const lastClose = closes[closes.length - 1];
+  const highest = Math.max(...candles.map((c) => c.high));
+  const lowest = Math.min(...candles.map((c) => c.low));
+  const trendPct = ((lastClose - firstClose) / firstClose) * 100;
+  const trendDir = trendPct > 0.02 ? "naik" : trendPct < -0.02 ? "turun" : "datar";
+
+  // Last 5 candle summary
+  const recent5 = candles.slice(-5).map((c) =>
+    `O:${c.open.toFixed(meta.digits)} H:${c.high.toFixed(meta.digits)} L:${c.low.toFixed(meta.digits)} C:${c.close.toFixed(meta.digits)}`,
+  ).join(" | ");
+
+  return `DATA REAL-TIME ${symbol}:
+- Harga saat ini: bid ${quote.bid.toFixed(meta.digits)} / ask ${quote.ask.toFixed(meta.digits)} (last ${quote.last.toFixed(meta.digits)})
+- Spread: ${quote.spreadPips} pip
+- High 24h: ${quote.high.toFixed(meta.digits)} | Low 24h: ${quote.low.toFixed(meta.digits)} | Change: ${quote.changePct.toFixed(2)}%
+- Tren 20 candle M5: ${trendDir} (${trendPct.toFixed(3)}%) | range ${lowest.toFixed(meta.digits)}–${highest.toFixed(meta.digits)}
+- 5 candle M5 terakhir (OHLC): ${recent5}
+
+Konteks pair: ${pairContext(symbol)}`;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Fallback (safe NEUTRAL on error)
+// ───────────────────────────────────────────────────────────────────────────
 function fallbackAnalysis(symbol: Pair, reason: string): AiAnalysisResult {
   const factors: FactorScore[] = FACTOR_LIST.map((f) => ({
     factor: f,
@@ -72,64 +158,123 @@ function fallbackAnalysis(symbol: Pair, reason: string): AiAnalysisResult {
   };
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Main: analyzeMarket — feeds REAL data to the LLM (P0-2), includes
+// self-learning outcome data (P0-3), real news (P1-5), cache (P2-8),
+// Zod validation (P1-6), proper system role (P1-7)
+// ───────────────────────────────────────────────────────────────────────────
 export async function analyzeMarket(symbol: Pair): Promise<AiAnalysisResult> {
-  try {
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        { role: "assistant", content: SYSTEM_PROMPT },
-        {
-          role: "user",
-          content: `Lakukan analisa multi-faktor komprehensif untuk PAIR ${symbol} dengan konteks:\n${pairContext(symbol)}\n\nFokus strategi SCALPING (timeframe M1-M5). Berikan output JSON sesuai skema.`,
-        },
-      ],
-      thinking: { type: "disabled" },
-    });
+  // P2-8: check cache first
+  const cached = getCached(symbol);
+  if (cached) return cached;
 
-    const raw = completion.choices[0]?.message?.content ?? "";
+  try {
+    // Gather real-time data in parallel
+    const [marketContext, news, outcome] = await Promise.all([
+      buildMarketContext(symbol),
+      fetchMarketNews(symbol),
+      formatOutcomeForPrompt(symbol), // P0-3: self-learning — feed past outcomes
+    ]);
+
+    const newsText = formatNewsForPrompt(news);
+
+    const userMessage = `${marketContext}
+
+BERITA REAL-TIME:
+${newsText}
+
+RIWAYAT SELF-LEARNING:
+${outcome}
+
+Lakukan analisa multi-faktor komprehensif untuk ${symbol}. Fokus strategi SCALPING (timeframe M1-M5).
+Gunakan data real-time di atas sebagai dasar. Entry/SL/TP harus dekat dengan harga saat ini.
+Berikan output JSON sesuai skema.`;
+
+    const messages: ChatMessage[] = [
+      { role: "system", content: SYSTEM_PROMPT }, // P1-7: role=system, not assistant
+      { role: "user", content: userMessage },
+    ];
+
+    const { content: raw } = await chatComplete(messages);
+
     const jsonStr = extractJson(raw);
     if (!jsonStr) {
       return fallbackAnalysis(symbol, "respons AI tidak terparse");
     }
-    const parsed = JSON.parse(jsonStr) as Partial<AiAnalysisResult>;
-    const factors = Array.isArray(parsed.factors) && parsed.factors.length > 0
-      ? (parsed.factors as FactorScore[]).slice(0, 7)
-      : FACTOR_LIST.map((f) => ({ factor: f, direction: "NEUTRAL" as SignalDirection, score: 0, detail: "—" }));
-    return {
+
+    // P1-6: Zod validation
+    const parseResult = AnalysisSchema.safeParse(JSON.parse(jsonStr));
+    if (!parseResult.success) {
+      return fallbackAnalysis(symbol, `JSON tidak valid: ${parseResult.error.issues[0]?.message ?? "validation error"}`);
+    }
+    const parsed = parseResult.data;
+
+    const factors: FactorScore[] = parsed.factors.slice(0, 7).map((f) => ({
+      factor: f.factor,
+      direction: f.direction as SignalDirection,
+      score: f.score,
+      detail: f.detail,
+    }));
+
+    const result: AiAnalysisResult = {
       symbol,
-      signal: (parsed.signal as SignalDirection) ?? "NEUTRAL",
-      confidence: clampNum(parsed.confidence, 0, 100, 0),
-      summary: parsed.summary ?? "Analisa selesai.",
+      signal: parsed.signal, // P1-6: already validated by Zod enum
+      confidence: parsed.confidence,
+      summary: parsed.summary,
       factors,
-      suggestedEntry: num(parsed.suggestedEntry),
-      suggestedStopLoss: num(parsed.suggestedStopLoss),
-      suggestedTakeProfit: num(parsed.suggestedTakeProfit),
+      suggestedEntry: parsed.suggestedEntry,
+      suggestedStopLoss: parsed.suggestedStopLoss,
+      suggestedTakeProfit: parsed.suggestedTakeProfit,
     };
+
+    setCached(symbol, result);
+    return result;
   } catch (e: any) {
     return fallbackAnalysis(symbol, e?.message ?? "kesalahan SDK");
   }
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Chat (P3-11: sanitize input, P3-13: prompt-injection defense)
+// ───────────────────────────────────────────────────────────────────────────
+const CHAT_SYSTEM = `Anda adalah asisten trading forex scalping untuk FINEX Indonesia.
+Jawab ringkas, praktis, dalam Bahasa Indonesia.
+
+ATURAN KEAMANAN:
+- JANGAN berikan rekomendasi BUY/SELL/lot/SL/TP spesifik di chat — arahkan user ke menu "AI Analysis" untuk sinyal terstruktur
+- Jangan execute atau modifikasi trade berdasarkan chat
+- Berikan edukasi umum tentang strategi, risk management, dan analisa pasar`;
+
 export async function aiChat(userMessage: string): Promise<string> {
+  // P3-11: sanitize input
+  const sanitized = sanitizeChatInput(userMessage);
+  if (!sanitized) return "Pesan kosong atau tidak valid.";
+
   try {
-    const zai = await ZAI.create();
-    const completion = await zai.chat.completions.create({
-      messages: [
-        {
-          role: "assistant",
-          content:
-            "Anda adalah asisten trading forex scalping untuk FINEX Indonesia. Jawab ringkas, praktis, dalam Bahasa Indonesia.",
-        },
-        { role: "user", content: userMessage },
-      ],
-      thinking: { type: "disabled" },
-    });
-    return completion.choices[0]?.message?.content ?? "";
+    const messages: ChatMessage[] = [
+      { role: "system", content: CHAT_SYSTEM }, // P1-7: role=system
+      { role: "user", content: sanitized },
+    ];
+    const { content } = await chatComplete(messages);
+    return content || "Tidak ada balasan.";
   } catch (e: any) {
     return `Maaf, asisten AI tidak tersedia: ${e?.message ?? "error"}`;
   }
 }
 
+function sanitizeChatInput(input: string): string {
+  // Strip control characters
+  let s = input.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+  // Collapse excessive whitespace
+  s = s.trim().replace(/\s{3,}/g, "  ");
+  // Cap length
+  if (s.length > 2000) s = s.slice(0, 2000) + "... [truncated]";
+  return s;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Helpers
+// ───────────────────────────────────────────────────────────────────────────
 function extractJson(text: string): string | null {
   const trimmed = text.trim();
   // strip code fences
@@ -139,14 +284,4 @@ function extractJson(text: string): string | null {
   const end = candidate.lastIndexOf("}");
   if (start === -1 || end === -1 || end < start) return null;
   return candidate.slice(start, end + 1);
-}
-
-function clampNum(v: unknown, min: number, max: number, dflt: number): number {
-  const n = typeof v === "number" ? v : Number(v);
-  if (!isFinite(n)) return dflt;
-  return Math.max(min, Math.min(max, n));
-}
-function num(v: unknown): number | undefined {
-  const n = typeof v === "number" ? v : Number(v);
-  return isFinite(n) ? n : undefined;
 }

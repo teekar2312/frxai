@@ -516,7 +516,7 @@ export function AiSection() {
       {/* Status Model AI */}
       <Panel
         title="Status Model AI"
-        description="Multi-provider LLM dengan self-learning memory"
+        description="Multi-provider LLM dengan self-learning feedback loop"
         actions={
           <Pill tone="accent">
             <Cpu className="size-3" /> Self-Learning Aktif
@@ -559,13 +559,86 @@ export function AiSection() {
         <div className="mt-4 flex items-start gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
           <Brain className="mt-0.5 size-4 shrink-0 text-violet-400" />
           <p className="text-xs text-muted-foreground">
-            Model belajar mandiri dari setiap analisa (self-learning memory
-            tersimpan di database). Semua hasil analisa multi-faktor dipersist
-            untuk meningkatkan akurasi keputusan di masa depan.
+            <span className="font-medium text-violet-300">Self-Learning Loop Aktif.</span>{" "}
+            Riwayat 10 trade AI terakhir per pair (win/loss, avg pips, win rate)
+            di-feed ke prompt analisa berikutnya untuk menyesuaikan confidence.
+            Semua analisa &amp; outcome trade dipersist di database untuk
+            kalibrasi akurasi berkelanjutan.
           </p>
         </div>
       </Panel>
+
+      {/* Calibration Panel — AI signal accuracy per pair (P2-9) */}
+      <CalibrationPanel />
     </div>
+  );
+}
+
+/**
+ * Calibration Panel — displays AI signal accuracy per pair based on
+ * closed AI-source trades. Shows win rate, net pips, total signals.
+ */
+function CalibrationPanel() {
+  const [calib, setCalib] = useState<Array<{
+    symbol: string; totalSignals: number; wins: number; losses: number;
+    winRate: number; avgPips: number; netPips: number; calibrated: boolean;
+  }> | null>(null);
+
+  useEffect(() => {
+    fetch("/api/ai/calibration")
+      .then((r) => r.json())
+      .then((d) => setCalib(d?.calibration ?? []))
+      .catch(() => setCalib([]));
+  }, []);
+
+  if (!calib || calib.length === 0) return null;
+  const hasData = calib.some((c) => c.totalSignals > 0);
+
+  return (
+    <Panel
+      title="Kalibrasi Akurasi AI"
+      description="Win rate sinyal AI berdasarkan trade closed (self-learning feedback)"
+    >
+      {!hasData ? (
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+          <Brain className="size-4 text-violet-400" />
+          <span>
+            Belum ada trade AI yang closed. Kalibrasi akan muncul setelah ada
+            minimal 1 trade AI yang ditutup. Data ini juga di-feed ke prompt
+            analisa untuk self-learning.
+          </span>
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {calib.map((c) => {
+            const tone = c.totalSignals === 0 ? "default" : c.winRate >= 50 ? "up" : "down";
+            return (
+              <div
+                key={c.symbol}
+                className="rounded-lg border border-border bg-muted/20 p-3"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-semibold">{c.symbol}</span>
+                  {c.calibrated ? (
+                    <Pill tone="accent">calibrated</Pill>
+                  ) : c.totalSignals > 0 ? (
+                    <Pill>learning</Pill>
+                  ) : null}
+                </div>
+                <div className="mt-2 text-2xl font-bold tnum">
+                  {c.totalSignals > 0 ? `${c.winRate.toFixed(0)}%` : "—"}
+                </div>
+                <div className={cn("text-xs tnum", tone === "up" ? "text-emerald-400" : tone === "down" ? "text-rose-400" : "text-muted-foreground")}>
+                  {c.totalSignals > 0
+                    ? `${c.wins}W / ${c.losses}L · ${c.netPips >= 0 ? "+" : ""}${c.netPips}p`
+                    : "no data"}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Panel>
   );
 }
 

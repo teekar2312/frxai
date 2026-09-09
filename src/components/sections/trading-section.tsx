@@ -58,7 +58,7 @@ const fmtUsd = (v: number) =>
 const meta = (s: Pair) => PAIRS.find((p) => p.symbol === s)!;
 const fmtPrice = (s: Pair, v: number | null | undefined) =>
   v == null ? "—" : v.toFixed(meta(s).digits);
-const pipValue = (s: Pair) => (s === "XAUUSD" ? 1 : 10);
+const pipValue = (_s: Pair) => 10; // $10/pip/lot for all pairs (FX & XAUUSD)
 
 function livePnl(trade: TradeRow, quotes: Record<Pair, Quote>) {
   if (trade.status === "CLOSED")

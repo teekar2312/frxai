@@ -16,6 +16,13 @@ model Account {
   broker        String   @default("FINEX Indonesia")
   login         String?
   server        String?
+  // MT5 credentials (stored locally; used by the MT5 Python bridge on the
+  // user's Windows machine to call MetaTrader5.login(login, password, server))
+  mt5Account    String?  // MT5 account number (trading login)
+  mt5Password   String?  // MT5 password (or investor password for read-only)
+  mt5Server     String?  // e.g. "FINEX-Live01" / "FINEX-Demo"
+  mt5AccountType String  @default("demo") // "demo" | "real"
+  mt5Terminal   String   @default("MetaTrader5") // terminal path/exe name
   leverage      String   @default("1:500")
   currency      String   @default("USD")
   balance       Float    @default(10000)

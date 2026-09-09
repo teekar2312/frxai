@@ -8,13 +8,20 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Eye,
+  EyeOff,
   KeyRound,
   Link2,
+  LogOut,
+  PlugZap,
   Save,
+  Server,
   Settings as SettingsIcon,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   TrendingUp,
+  User,
   Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -76,15 +83,36 @@ export function SettingsSection() {
   const [keyDraft, setKeyDraft] = useState<ApiKeys>(apiKeys);
   const [savingKeys, setSavingKeys] = useState(false);
 
+  // MT5 credentials state
+  interface Mt5Creds {
+    mt5Account: string;
+    mt5Password: string;
+    mt5Server: string;
+    mt5AccountType: "demo" | "real";
+    mt5Terminal: string;
+    hasPassword: boolean;
+  }
+  const [mt5Creds, setMt5Creds] = useState<Mt5Creds>({
+    mt5Account: "",
+    mt5Password: "",
+    mt5Server: "FINEX-Live01",
+    mt5AccountType: "demo",
+    mt5Terminal: "MetaTrader5",
+    hasPassword: false,
+  });
+  const [mt5Connecting, setMt5Connecting] = useState(false);
+  const [showMt5Password, setShowMt5Password] = useState(false);
+
   // Fetch all configs on mount
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [tr, rk, ks] = await Promise.all([
+        const [tr, rk, ks, mt5] = await Promise.all([
           fetch("/api/config/trading").then((r) => r.json()),
           fetch("/api/config/risk").then((r) => r.json()),
           fetch("/api/config/keys").then((r) => r.json()),
+          fetch("/api/mt5/credentials").then((r) => r.json()),
         ]);
         if (!mounted) return;
         if (tr?.config) setTradingCfg(tr.config);
@@ -92,6 +120,16 @@ export function SettingsSection() {
         if (ks?.keys) {
           setApiKeys(ks.keys);
           setKeyDraft(ks.keys);
+        }
+        if (mt5?.credentials) {
+          setMt5Creds({
+            mt5Account: mt5.credentials.mt5Account ?? "",
+            mt5Password: mt5.credentials.mt5Password ?? "",
+            mt5Server: mt5.credentials.mt5Server ?? "FINEX-Live01",
+            mt5AccountType: mt5.credentials.mt5AccountType ?? "demo",
+            mt5Terminal: mt5.credentials.mt5Terminal ?? "MetaTrader5",
+            hasPassword: mt5.credentials.hasPassword ?? false,
+          });
         }
       } catch {
         /* ignore */
@@ -175,19 +213,82 @@ export function SettingsSection() {
     }
   };
 
-  // --- MT5 connect ---
+  // --- MT5 connect (with credentials) ---
   const handleMt5Connect = async () => {
+    // Validate
+    if (!/^\d{4,12}$/.test(mt5Creds.mt5Account)) {
+      toast.error("Nomor akun MT5 tidak valid", {
+        description: "Harus 4-12 digit angka.",
+      });
+      return;
+    }
+    const pwd = mt5Creds.mt5Password.includes("•") ? "" : mt5Creds.mt5Password;
+    if (!pwd && !mt5Creds.hasPassword) {
+      toast.error("Password MT5 wajib diisi");
+      return;
+    }
+    if (!mt5Creds.mt5Server.trim()) {
+      toast.error("Server MT5 wajib diisi");
+      return;
+    }
+    setMt5Connecting(true);
     try {
-      const res = await fetch("/api/mt5/connect", { method: "POST" });
+      // 1) Save credentials first
+      await fetch("/api/mt5/credentials", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mt5Account: mt5Creds.mt5Account,
+          mt5Password: pwd || undefined, // don't send masked
+          mt5Server: mt5Creds.mt5Server,
+          mt5AccountType: mt5Creds.mt5AccountType,
+          mt5Terminal: mt5Creds.mt5Terminal,
+        }),
+      });
+      // 2) Connect (bridge reads saved creds)
+      const res = await fetch("/api/mt5/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mt5Account: mt5Creds.mt5Account,
+          mt5Password: pwd || undefined,
+          mt5Server: mt5Creds.mt5Server,
+          mt5AccountType: mt5Creds.mt5AccountType,
+          mt5Terminal: mt5Creds.mt5Terminal,
+        }),
+      });
       const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Gagal menyambungkan MT5");
+      }
       if (data?.account) {
         setAccount(data.account);
         toast.success("MT5 Terhubung", {
-          description: `Login ${data.account.login} @ ${data.account.server}`,
+          description: `Akun ${mt5Creds.mt5Account} @ ${mt5Creds.mt5Server} (${mt5Creds.mt5AccountType})`,
+        });
+      }
+    } catch (e) {
+      toast.error("Gagal menyambungkan MT5", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    } finally {
+      setMt5Connecting(false);
+    }
+  };
+
+  // --- MT5 disconnect ---
+  const handleMt5Disconnect = async () => {
+    try {
+      const res = await fetch("/api/mt5/disconnect", { method: "POST" });
+      const data = await res.json();
+      if (data?.account) {
+        setAccount(data.account);
+        toast.info("MT5 Diputus", {
+          description: "Kredensial tetap tersimpan untuk reconnect cepat.",
         });
       }
     } catch {
-      toast.error("Gagal menyambungkan MT5");
+      toast.error("Gagal memutus MT5");
     }
   };
 
@@ -485,8 +586,8 @@ export function SettingsSection() {
           </Panel>
 
           <Panel
-            title="Koneksi MT5"
-            description="Status bridge ke MetaTrader 5"
+            title="Kredensial Akun MT5"
+            description="Masukkan nomor akun, password & server MT5 Anda untuk trading"
             actions={
               account.mt5Connected ? (
                 <Badge
@@ -503,63 +604,248 @@ export function SettingsSection() {
               )
             }
           >
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="space-y-2">
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Credentials form */}
+              <div className="space-y-3">
                 <div className="flex items-center gap-2 text-sm">
-                  <Link2 className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-medium">Status Koneksi</span>
+                  <User className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Detail Login MT5</span>
                 </div>
-                <div className="rounded-lg border border-border bg-card/60 p-3 text-sm">
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="mt5-account" className="text-xs">
+                    Nomor Akun MT5 <span className="text-rose-400">*</span>
+                  </Label>
+                  <Input
+                    id="mt5-account"
+                    inputMode="numeric"
+                    pattern="\d{4,12}"
+                    value={mt5Creds.mt5Account}
+                    onChange={(e) =>
+                      setMt5Creds((c) => ({
+                        ...c,
+                        mt5Account: e.target.value.replace(/\D/g, "").slice(0, 12),
+                      }))
+                    }
+                    placeholder="cth: 90123456"
+                    autoComplete="off"
+                    disabled={account.mt5Connected}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Nomor akun trading MT5 Anda (4-12 digit). Diberikan broker saat registrasi.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="mt5-password" className="text-xs">
+                    Password MT5 <span className="text-rose-400">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="mt5-password"
+                      type={showMt5Password ? "text" : "password"}
+                      value={mt5Creds.mt5Password}
+                      onFocus={(e) => {
+                        if (e.target.value.includes("•")) {
+                          setMt5Creds((c) => ({ ...c, mt5Password: "" }));
+                        }
+                      }}
+                      onChange={(e) =>
+                        setMt5Creds((c) => ({ ...c, mt5Password: e.target.value }))
+                      }
+                      placeholder={
+                        mt5Creds.hasPassword ? "•••••••• (tersimpan, ketik untuk ganti)" : "Masukkan password MT5..."
+                      }
+                      autoComplete="off"
+                      disabled={account.mt5Connected}
+                      className="pr-10"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowMt5Password((s) => !s)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      tabIndex={-1}
+                      aria-label={showMt5Password ? "Sembunyikan password" : "Tampilkan password"}
+                    >
+                      {showMt5Password ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Password master atau investor (read-only). Disimpan lokal di database.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="mt5-server" className="text-xs">
+                    Server MT5 <span className="text-rose-400">*</span>
+                  </Label>
+                  <Input
+                    id="mt5-server"
+                    value={mt5Creds.mt5Server}
+                    onChange={(e) =>
+                      setMt5Creds((c) => ({ ...c, mt5Server: e.target.value }))
+                    }
+                    placeholder="cth: FINEX-Live01 / FINEX-Demo"
+                    autoComplete="off"
+                    disabled={account.mt5Connected}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Nama server trading FINEX Indonesia (cek di aplikasi MT5 → File → Open Account).
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Tipe Akun</Label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {(["demo", "real"] as const).map((t) => (
+                        <button
+                          key={t}
+                          type="button"
+                          onClick={() => setMt5Creds((c) => ({ ...c, mt5AccountType: t }))}
+                          disabled={account.mt5Connected}
+                          className={`rounded-md border px-3 py-1.5 text-xs font-medium uppercase transition-colors ${
+                            mt5Creds.mt5AccountType === t
+                              ? t === "real"
+                                ? "border-rose-500/40 bg-rose-500/10 text-rose-400"
+                                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-400"
+                              : "border-border text-muted-foreground hover:bg-muted/40"
+                          }`}
+                        >
+                          {t === "real" ? "Real" : "Demo"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mt5-terminal" className="text-xs">
+                      Terminal
+                    </Label>
+                    <Input
+                      id="mt5-terminal"
+                      value={mt5Creds.mt5Terminal}
+                      onChange={(e) =>
+                        setMt5Creds((c) => ({ ...c, mt5Terminal: e.target.value }))
+                      }
+                      placeholder="MetaTrader5"
+                      autoComplete="off"
+                      disabled={account.mt5Connected}
+                    />
+                  </div>
+                </div>
+
+                {mt5Creds.mt5AccountType === "real" && (
+                  <div className="flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/5 p-2.5">
+                    <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-400" />
+                    <p className="text-[11px] leading-relaxed text-rose-300/90">
+                      <span className="font-semibold">Akun Real.</span> Trading dengan uang sungguhan. Pastikan risk management (0.5-1%/trade, anti-MC 3%) aktif. Mulai dengan lot kecil (0.01).
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
                   {account.mt5Connected ? (
-                    <div className="space-y-1.5">
-                      <KVRow k="Broker" v={account.broker} />
-                      <KVRow k="Login" v={account.login ?? "—"} mono />
-                      <KVRow k="Server" v={account.server ?? "—"} />
-                      <KVRow k="Leverage" v={account.leverage} mono />
-                      <KVRow k="Currency" v={account.currency} mono />
-                    </div>
+                    <Button variant="destructive" size="sm" onClick={handleMt5Disconnect}>
+                      <LogOut className="h-3.5 w-3.5" />
+                      Putuskan MT5
+                    </Button>
                   ) : (
-                    <div className="flex flex-col items-start gap-2">
-                      <p className="text-xs text-muted-foreground">
-                        Bridge MT5 belum terhubung. Klik di bawah untuk
-                        menyambungkan (simulasi sandbox).
-                      </p>
-                      <Button size="sm" onClick={handleMt5Connect}>
-                        <Link2 className="h-3.5 w-3.5" />
-                        Sambungkan MT5
-                      </Button>
-                    </div>
+                    <Button size="sm" onClick={handleMt5Connect} disabled={mt5Connecting}>
+                      {mt5Connecting ? (
+                        <>
+                          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                          Menghubungkan...
+                        </>
+                      ) : (
+                        <>
+                          <PlugZap className="h-3.5 w-3.5" />
+                          Sambungkan MT5
+                        </>
+                      )}
+                    </Button>
                   )}
+                  <span className="text-[10px] text-muted-foreground">
+                    Kredensial disimpan lokal & dipakai oleh MT5 bridge di mesin Windows Anda.
+                  </span>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm">
-                  <Wallet className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-medium">Info Akun</span>
+              {/* Status + account info */}
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Link2 className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">Status Koneksi</span>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card/60 p-3 text-sm">
+                    {account.mt5Connected ? (
+                      <div className="space-y-1.5">
+                        <KVRow k="Broker" v={account.broker} />
+                        <KVRow k="Login" v={account.login ?? "—"} mono />
+                        <KVRow k="Server" v={account.server ?? "—"} />
+                        <KVRow k="Leverage" v={account.leverage} mono />
+                        <KVRow k="Currency" v={account.currency} mono />
+                        <KVRow
+                          k="Tipe"
+                          v={mt5Creds.mt5AccountType === "real" ? "REAL" : "DEMO"}
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2">
+                        <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <p className="text-xs text-muted-foreground">
+                          Belum terhubung. Isi kredensial di kiri lalu klik <span className="text-foreground">Sambungkan MT5</span>.
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <MiniStat label="Balance" value={`$${formatMoney(account.balance)}`} />
-                  <MiniStat label="Equity" value={`$${formatMoney(account.equity)}`} />
-                  <MiniStat
-                    label="Free Margin"
-                    value={`$${formatMoney(account.freeMargin)}`}
-                  />
-                  <MiniStat
-                    label="Margin Used"
-                    value={`$${formatMoney(account.margin)}`}
-                  />
-                  <MiniStat
-                    label="Daily Loss Used"
-                    value={`${account.dailyLossUsed.toFixed(2)}%`}
-                    tone="down"
-                  />
-                  <MiniStat
-                    label="Daily Loss Limit"
-                    value={`${account.dailyLossLimit}%`}
-                    tone="warn"
-                  />
+
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Wallet className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">Info Akun</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <MiniStat label="Balance" value={`$${formatMoney(account.balance)}`} />
+                    <MiniStat label="Equity" value={`$${formatMoney(account.equity)}`} />
+                    <MiniStat
+                      label="Free Margin"
+                      value={`$${formatMoney(account.freeMargin)}`}
+                    />
+                    <MiniStat
+                      label="Margin Used"
+                      value={`$${formatMoney(account.margin)}`}
+                    />
+                    <MiniStat
+                      label="Daily Loss Used"
+                      value={`${account.dailyLossUsed.toFixed(2)}%`}
+                      tone="down"
+                    />
+                    <MiniStat
+                      label="Daily Loss Limit"
+                      value={`${account.dailyLossLimit}%`}
+                      tone="warn"
+                    />
+                  </div>
                 </div>
+              </div>
+            </div>
+
+            {/* How-to-verify guide */}
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
+              <Server className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-400" />
+              <div className="text-[11px] leading-relaxed text-muted-foreground">
+                <span className="font-medium text-violet-300">Cara mendapatkan detail akun MT5:</span>
+                <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+                  <li>Buka aplikasi <span className="text-foreground">MetaTrader 5</span> di Windows 11 Anda.</li>
+                  <li><span className="text-foreground">File → Open Account</span> atau cek email registrasi FINEX Indonesia untuk nomor akun & server.</li>
+                  <li>Login di MT5 desktop untuk memastikan server & kredensial benar.</li>
+                  <li>Masukkan detail yang sama di form kiri, lalu klik <span className="text-foreground">Sambungkan MT5</span>.</li>
+                </ol>
+                <p className="mt-2">
+                  Dashboard ini berkomunikasi dengan <span className="text-foreground">MT5 Python bridge</span> yang berjalan di mesin Windows Anda (library <code className="rounded bg-muted px-1">MetaTrader5</code>). Bridge membaca kredensial tersimpan untuk eksekusi order otomatis.
+                </p>
               </div>
             </div>
           </Panel>

@@ -129,20 +129,14 @@ export function TradingShell() {
   }, [quotes]);
 
   const connectMt5 = useCallback(async () => {
-    try {
-      const res = await fetch("/api/mt5/connect", { method: "POST" });
-      const data = await res.json();
-      if (data?.account) {
-        setAccount(data.account);
-        pushToast({
-          title: "MT5 Terhubung",
-          description: `Broker: ${data.account.broker} • Login ${data.account.login ?? "—"}`,
-        });
-      }
-    } catch {
-      pushToast({ title: "Gagal menyambungkan MT5", variant: "destructive" });
-    }
-  }, [setAccount, pushToast]);
+    // Navigate the user to Settings → Broker/MT5 to enter credentials.
+    // The connect endpoint requires account number + password + server.
+    setSection("settings");
+    pushToast({
+      title: "Masukkan kredensial MT5",
+      description: "Buka tab Broker / MT5 di Settings, isi nomor akun + password + server, lalu klik Sambungkan.",
+    });
+  }, [setSection, pushToast]);
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">

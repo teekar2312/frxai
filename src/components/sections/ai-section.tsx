@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Bot,
   Brain,
@@ -17,6 +17,7 @@ import {
   Zap,
   MessageSquare,
   History,
+  Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -94,14 +95,33 @@ function directionMeta(d: SignalDirection): DirectionMeta {
 
 export function AiSection() {
   const tradingCfg = useStore((s) => s.tradingCfg);
+  // The pair currently being viewed in the detail panel
   const [symbol, setSymbol] = useState<Pair>(tradingCfg.pairs[0] ?? "EURUSD");
   const [providerLabel, setProviderLabel] = useState("Z.ai");
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<AiAnalysisResult | null>(null);
+  // Multi-pair results map
+  const [results, setResults] = useState<Record<string, AiAnalysisResult>>({});
+  // Per-pair loading state (for the summary grid spinners)
+  const [pairLoading, setPairLoading] = useState<Record<string, boolean>>({});
+  const [doneCount, setDoneCount] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
   const [lastTime, setLastTime] = useState<Date | null>(null);
   const [executing, setExecuting] = useState(false);
   const [signal, setSignal] = useState<SignalResult | null>(null);
   const [signalReason, setSignalReason] = useState<string | null>(null);
+
+  // Active pairs to analyze — from trading config (Settings). Fallback to all.
+  const activePairs = useMemo<Pair[]>(() => {
+    if (tradingCfg.pairs.length > 0) return tradingCfg.pairs as Pair[];
+    return PAIRS.map((p) => p.symbol);
+  }, [tradingCfg.pairs]);
+
+  // Keep the viewed symbol within the active pairs set
+  useEffect(() => {
+    if (!activePairs.includes(symbol) && activePairs.length > 0) {
+      setSymbol(activePairs[0]);
+    }
+  }, [activePairs, symbol]);
 
   // chat state
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -131,31 +151,69 @@ export function AiSection() {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // The result currently shown in the detail panel
+  const result = results[symbol] ?? null;
+
+  /**
+   * Analyze ALL active pairs in parallel.
+   * Each pair calls /api/ai/analyze independently and updates the results
+   * map as soon as it resolves, so the user sees results streaming in.
+   */
   async function runAnalysis() {
+    if (activePairs.length === 0) {
+      toast.error("Tidak ada pair aktif", {
+        description: "Pilih pair di Settings terlebih dahulu.",
+      });
+      return;
+    }
     setLoading(true);
-    setResult(null);
+    setResults({});
     setSignal(null);
     setSignalReason(null);
-    try {
-      const res = await fetch("/api/ai/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol }),
-      });
-      if (!res.ok) throw new Error("Analisa gagal");
-      const data = await res.json();
-      setResult(data.analysis as AiAnalysisResult);
-      setLastTime(new Date());
-      toast.success("Analisa AI selesai", {
-        description: `${symbol}: ${data.analysis.signal} @ ${data.analysis.confidence}% confidence`,
-      });
-    } catch (e) {
-      toast.error("Gagal menganalisa", {
-        description: e instanceof Error ? e.message : "Unknown error",
-      });
-    } finally {
-      setLoading(false);
-    }
+    setDoneCount(0);
+    setTotalCount(activePairs.length);
+    // mark all as loading
+    const initialLoading: Record<string, boolean> = {};
+    for (const p of activePairs) initialLoading[p] = true;
+    setPairLoading(initialLoading);
+
+    const startTime = Date.now();
+    let completed = 0;
+
+    // Fire all requests in parallel; update state as each resolves
+    await Promise.all(
+      activePairs.map(async (p) => {
+        try {
+          const res = await fetch("/api/ai/analyze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ symbol: p }),
+          });
+          if (!res.ok) throw new Error("Analisa gagal");
+          const data = await res.json();
+          const analysis = data.analysis as AiAnalysisResult;
+          setResults((prev) => ({ ...prev, [p]: analysis }));
+        } catch (e) {
+          // leave this pair without a result; surface a toast
+          toast.error(`Analisa ${p} gagal`, {
+            description: e instanceof Error ? e.message : "Unknown error",
+          });
+        } finally {
+          completed += 1;
+          setDoneCount(completed);
+          setPairLoading((prev) => ({ ...prev, [p]: false }));
+        }
+      }),
+    );
+
+    setLastTime(new Date());
+    setLoading(false);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const successCount = activePairs.filter((p) => results[p] || completed > 0).length;
+    toast.success(`Analisa ${activePairs.length} pair selesai`, {
+      description: `${elapsed}s · klik kartu pair untuk lihat detail heatmap`,
+    });
+    void successCount;
   }
 
   async function executeSignal() {
@@ -234,26 +292,31 @@ export function AiSection() {
   }
 
   const sig = result ? directionMeta(result.signal) : null;
+  const progressPct = totalCount > 0 ? (doneCount / totalCount) * 100 : 0;
 
   return (
     <div className="space-y-5">
       <SectionHeader
         title="Pusat Analisa AI Multi-Faktor"
-        description="Analisa kebijakan bank sentral, data ekonomi, geopolitik, komoditas, sentimen & breaking news."
+        description="Analisa kebijakan bank sentral, data ekonomi, geopolitik, komoditas, sentimen & breaking news — untuk semua pair aktif."
         icon={<Brain className="size-5" />}
         actions={
           <>
             <Pill tone="accent">
               <Sparkles className="size-3" /> {providerLabel}
             </Pill>
+            <Pill tone="default" className="hidden sm:inline-flex">
+              <Layers className="size-3" /> {activePairs.length} pair aktif
+            </Pill>
+            {/* View selector — picks which pair's detail to show */}
             <Select value={symbol} onValueChange={(v) => setSymbol(v as Pair)}>
               <SelectTrigger size="sm" className="w-[120px]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {PAIRS.map((p) => (
-                  <SelectItem key={p.symbol} value={p.symbol}>
-                    {p.symbol}
+                {activePairs.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {p}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -264,7 +327,9 @@ export function AiSection() {
               ) : (
                 <Zap className="size-4" />
               )}
-              Analisa Sekarang
+              {loading
+                ? `Menganalisa ${doneCount}/${totalCount}...`
+                : "Analisa Semua Pair"}
             </Button>
           </>
         }
@@ -282,16 +347,32 @@ export function AiSection() {
         ))}
       </div>
 
+      {/* Multi-pair summary grid — shows all pair results at a glance */}
+      <PairSummaryGrid
+        pairs={activePairs}
+        results={results}
+        pairLoading={pairLoading}
+        loading={loading}
+        doneCount={doneCount}
+        totalCount={totalCount}
+        progressPct={progressPct}
+        selected={symbol}
+        onSelect={setSymbol}
+        onRun={runAnalysis}
+      />
+
       {/* Main grid */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        {/* LEFT — Hasil Analisa */}
+        {/* LEFT — Hasil Analisa (detail of selected pair) */}
         <div className="lg:col-span-2">
           <Panel
-            title="Hasil Analisa"
+            title="Hasil Analisa Detail"
             description={
               lastTime
-                ? `Terakhir dianalisa: ${lastTime.toLocaleTimeString("id-ID")}`
-                : "Belum ada analisa"
+                ? `${symbol} · Terakhir dianalisa: ${lastTime.toLocaleTimeString("id-ID")}`
+                : result
+                  ? `${symbol} · siap`
+                  : "Belum ada analisa"
             }
             actions={
               result && sig ? (
@@ -301,13 +382,13 @@ export function AiSection() {
               ) : undefined
             }
           >
-            {loading ? (
+            {loading && !result ? (
               <LoadingState symbol={symbol} />
             ) : !result ? (
               <EmptyState
                 icon={<Brain className="size-10" />}
                 title="Belum ada hasil analisa"
-                description="Pilih pair lalu klik 'Analisa Sekarang'. AI memproses 7 faktor pasar (~10-20 detik)."
+                description={`Klik 'Analisa Semua Pair' untuk menganalisa ${activePairs.length} pair aktif sekaligus. AI memproses 7 faktor pasar per pair (~10-20 detik).`}
               />
             ) : (
               <ResultBody
@@ -377,25 +458,33 @@ export function AiSection() {
               <Panel title="Riwayat Analisa" description="Tersimpan untuk self-learning AI">
                 {lastTime ? (
                   <div className="space-y-3">
-                    <div className="rounded-lg border border-border bg-muted/30 p-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm font-medium">{symbol}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {lastTime.toLocaleString("id-ID")}
-                        </span>
-                      </div>
-                      <div className="mt-2 flex items-center gap-2">
-                        {sig && (
-                          <Pill tone={sig.tone}>
-                            <sig.Icon className="size-3" /> {sig.label}
-                          </Pill>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          Confidence{" "}
-                          <span className="tnum">{result?.confidence}%</span>
-                        </span>
-                      </div>
-                    </div>
+                    {activePairs.map((p) => {
+                      const r = results[p];
+                      if (!r) return null;
+                      const m = directionMeta(r.signal);
+                      return (
+                        <div
+                          key={p}
+                          className="rounded-lg border border-border bg-muted/30 p-3"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-medium">{p}</span>
+                            <span className="text-xs text-muted-foreground">
+                              {lastTime.toLocaleString("id-ID")}
+                            </span>
+                          </div>
+                          <div className="mt-2 flex items-center gap-2">
+                            <Pill tone={m.tone}>
+                              <m.Icon className="size-3" /> {m.label}
+                            </Pill>
+                            <span className="text-xs text-muted-foreground">
+                              Confidence{" "}
+                              <span className="tnum">{r.confidence}%</span>
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                     <p className="text-xs text-muted-foreground">
                       Setiap analisa disimpan di database untuk memory
                       self-learning AI. Model memperbaiki keputusan dari setiap
@@ -468,6 +557,151 @@ export function AiSection() {
         </div>
       </Panel>
     </div>
+  );
+}
+
+/**
+ * Grid of all active pairs with their analysis results at a glance.
+ * Each card shows: symbol, signal badge, confidence, mini score bar.
+ * Clicking a card selects it for the detail panel below.
+ */
+function PairSummaryGrid({
+  pairs,
+  results,
+  pairLoading,
+  loading,
+  doneCount,
+  totalCount,
+  progressPct,
+  selected,
+  onSelect,
+  onRun,
+}: {
+  pairs: Pair[];
+  results: Record<string, AiAnalysisResult>;
+  pairLoading: Record<string, boolean>;
+  loading: boolean;
+  doneCount: number;
+  totalCount: number;
+  progressPct: number;
+  selected: Pair;
+  onSelect: (p: Pair) => void;
+  onRun: () => void;
+}) {
+  if (pairs.length === 0) {
+    return (
+      <Panel title="Pair Aktif" description="Tidak ada pair terpilih">
+        <EmptyState
+          icon={<Layers className="size-8" />}
+          title="Belum ada pair aktif"
+          description="Pilih pair di Settings → tab Trading terlebih dahulu."
+        />
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel
+      title="Ringkasan Semua Pair Aktif"
+      description={
+        loading
+          ? `Menganalisa ${doneCount}/${totalCount} pair...`
+          : results && Object.keys(results).length > 0
+            ? `${Object.keys(results).length} pair dianalisa — klik kartu untuk lihat detail`
+            : "Klik 'Analisa Semua Pair' untuk menganalisa sekaligus"
+      }
+      actions={
+        loading ? (
+          <span className="text-xs tnum text-muted-foreground">
+            {doneCount}/{totalCount}
+          </span>
+        ) : (
+          <Button size="sm" variant="outline" onClick={onRun}>
+            <Zap className="size-3.5" /> Analisa Ulang
+          </Button>
+        )
+      }
+    >
+      {/* Progress bar while loading */}
+      {loading && (
+        <div className="mb-3">
+          <Progress value={progressPct} className="h-1.5 [&_[data-slot=progress-indicator]]:bg-violet-500" />
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        {pairs.map((p) => {
+          const r = results[p];
+          const isLoadingThis = pairLoading[p];
+          const m = r ? directionMeta(r.signal) : null;
+          const isSelected = p === selected;
+          return (
+            <button
+              key={p}
+              onClick={() => onSelect(p)}
+              className={cn(
+                "rounded-lg border p-3 text-left transition-all hover:border-primary/40 hover:bg-muted/40",
+                isSelected
+                  ? "border-primary/60 bg-primary/5 ring-1 ring-primary/20"
+                  : "border-border bg-muted/20",
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-semibold">{p}</span>
+                {isLoadingThis ? (
+                  <Loader2 className="size-3.5 animate-spin text-violet-400" />
+                ) : m ? (
+                  <m.Icon className={cn("size-4", m.color)} />
+                ) : (
+                  <Minus className="size-3.5 text-muted-foreground/40" />
+                )}
+              </div>
+              <div className="mt-2 flex items-end justify-between">
+                {isLoadingThis ? (
+                  <span className="text-[11px] text-muted-foreground">
+                    menganalisa...
+                  </span>
+                ) : r ? (
+                  <>
+                    <span
+                      className={cn(
+                        "text-base font-bold tnum",
+                        m!.color,
+                      )}
+                    >
+                      {m!.label}
+                    </span>
+                    <span className="text-xs tnum text-muted-foreground">
+                      {r.confidence}%
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground/60">
+                    belum dianalisa
+                  </span>
+                )}
+              </div>
+              {/* mini confidence bar */}
+              {r && (
+                <div className="mt-2 h-1 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className={cn(
+                      "h-full rounded-full",
+                      m!.tone === "up"
+                        ? "bg-emerald-500"
+                        : m!.tone === "down"
+                          ? "bg-rose-500"
+                          : "bg-violet-500",
+                    )}
+                    style={{ width: `${r.confidence}%` }}
+                  />
+                </div>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </Panel>
   );
 }
 

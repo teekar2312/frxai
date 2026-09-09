@@ -95,6 +95,7 @@ function directionMeta(d: SignalDirection): DirectionMeta {
 
 export function AiSection() {
   const tradingCfg = useStore((s) => s.tradingCfg);
+  const upsertTrade = useStore((s) => s.upsertTrade);
   // The pair currently being viewed in the detail panel
   const [symbol, setSymbol] = useState<Pair>(tradingCfg.pairs[0] ?? "EURUSD");
   const [providerLabel, setProviderLabel] = useState("Z.ai");
@@ -231,9 +232,17 @@ export function AiSection() {
       const data = await res.json();
       if (data.signal) {
         setSignal(data.signal as SignalResult);
-        toast.success("Sinyal dihasilkan", {
-          description: `${data.signal.side} ${symbol} @ ${data.signal.entry}`,
-        });
+        if (data.trade) {
+          // Signal was auto-executed as a real trade
+          upsertTrade(data.trade);
+          toast.success("Sinyal dieksekusi sebagai trade", {
+            description: `${data.trade.side} ${data.trade.symbol} ${data.trade.lotSize} lot @ ${data.trade.openPrice} | SL ${data.trade.slPips}p TP ${data.trade.tpPips}p`,
+          });
+        } else {
+          toast.success("Sinyal dihasilkan", {
+            description: data.reason ?? `${data.signal.side} ${symbol} @ ${data.signal.entry}`,
+          });
+        }
       } else {
         setSignalReason((data.reason as string) ?? "Sinyal dilewati");
         toast.info("Sinyal dilewati", {

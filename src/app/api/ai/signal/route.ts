@@ -2,17 +2,29 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { analyzeMarket } from "@/lib/ai";
 import { log } from "@/lib/server-config";
-import type { Pair } from "@/lib/types";
+import { executeSignalAsTrade } from "@/lib/auto-trade";
+import type { Pair, Side } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Generate a concrete trading signal from the AI analysis
+interface SignalBody {
+  symbol: Pair;
+  /** When true (default), a strong signal auto-executes a Trade. Set false for "preview only". */
+  autoExecute?: boolean;
+}
+
+// Generate a concrete trading signal from the AI analysis.
+// When the signal is strong (confidence >= 55%, non-NEUTRAL) AND autoExecute is
+// true, the signal is immediately converted into an OPEN Trade (source="AI")
+// and the Signal row is marked EXECUTED.
 export async function POST(req: Request) {
-  const { symbol } = (await req.json()) as { symbol: Pair };
+  const { symbol, autoExecute = true } = (await req.json()) as SignalBody;
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
 
   const analysis = await analyzeMarket(symbol);
+
+  // Weak / neutral signal -> skip
   if (analysis.signal === "NEUTRAL" || analysis.confidence < 55) {
     await db.signal.create({
       data: {
@@ -35,6 +47,7 @@ export async function POST(req: Request) {
     });
   }
 
+  // Strong signal -> create Signal row (PENDING initially)
   const signal = await db.signal.create({
     data: {
       symbol,
@@ -50,17 +63,37 @@ export async function POST(req: Request) {
   });
   await log("AI", "SIGNAL", `AI signal ${symbol} → ${analysis.signal} @ ${analysis.confidence}% | entry ${analysis.suggestedEntry} SL ${analysis.suggestedStopLoss} TP ${analysis.suggestedTakeProfit}`);
 
-  return NextResponse.json({
-    signal: {
-      id: signal.id,
+  const signalOut = {
+    id: signal.id,
+    symbol,
+    side: analysis.signal,
+    entry: analysis.suggestedEntry,
+    stopLoss: analysis.suggestedStopLoss,
+    takeProfit: analysis.suggestedTakeProfit,
+    confidence: analysis.confidence,
+    reason: analysis.summary,
+  };
+
+  // Auto-execute: convert the strong signal into a real Trade
+  if (autoExecute) {
+    const { trade, reason } = await executeSignalAsTrade(
       symbol,
-      side: analysis.signal,
-      entry: analysis.suggestedEntry,
-      stopLoss: analysis.suggestedStopLoss,
-      takeProfit: analysis.suggestedTakeProfit,
-      confidence: analysis.confidence,
-      reason: analysis.summary,
-    },
-    analysis,
-  });
+      analysis.signal as Side,
+      analysis.confidence,
+      analysis.suggestedEntry,
+      analysis.suggestedStopLoss,
+      analysis.suggestedTakeProfit,
+      analysis.summary,
+      signal.id,
+    );
+    return NextResponse.json({
+      signal: signalOut,
+      trade,
+      reason: trade ? `Sinyal dieksekusi otomatis: ${analysis.signal} ${symbol} ${trade.lotSize} lot @ ${trade.openPrice}` : reason,
+      analysis,
+    });
+  }
+
+  // autoExecute=false -> signal stays PENDING (preview mode)
+  return NextResponse.json({ signal: signalOut, trade: null, analysis });
 }

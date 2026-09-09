@@ -3,7 +3,7 @@ import { db } from "@/lib/db";
 import { ensureAccount, getConfig, log } from "@/lib/server-config";
 import { PAIRS } from "@/lib/constants";
 import { getQuote } from "@/lib/market";
-import type { Pair, RiskConfig, Side, TradeRow } from "@/lib/types";
+import type { Pair, RiskConfig, Side, TradingConfig, TradeRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +36,47 @@ export async function POST(req: Request) {
     dailyTarget: 2,
     autoMode: false,
   });
+  const trading = await getConfig<TradingConfig>("trading", {
+    pairs: [],
+    timeframes: [],
+    sessions: [],
+    avoidWeekends: true,
+    autoMode: false,
+    trailingAuto: false,
+    indicatorAuto: false,
+    riskAuto: false,
+  });
+
+  // Weekend gate (applies to manual trades too)
+  const now = new Date();
+  if (trading.avoidWeekends && (now.getUTCDay() === 0 || now.getUTCDay() === 6)) {
+    await log("WARN", "RISK", `Trade rejected: weekend (avoidWeekends active)`);
+    return NextResponse.json(
+      { error: "Trading dihentikan pada hari Sabtu & Minggu (avoidWeekends aktif)." },
+      { status: 400 },
+    );
+  }
+
+  // Session gate (applies to manual trades too)
+  if (trading.sessions.length > 0) {
+    const h = now.getUTCHours();
+    const inRange = (a: number, b: number) => (a < b ? h >= a && h < b : h >= a || h < b);
+    const sessionMap: Record<string, [number, number]> = {
+      Sydney: [21, 6], Tokyo: [0, 9], London: [7, 16],
+      NewYork: [12, 21], LondonNewYork: [12, 16], NewYorkTokyo: [21, 0],
+    };
+    const inSession = trading.sessions.some((s) => {
+      const r = sessionMap[s];
+      return r ? inRange(r[0], r[1]) : false;
+    });
+    if (!inSession) {
+      await log("WARN", "RISK", `Trade rejected: outside configured sessions (${trading.sessions.join(", ")})`);
+      return NextResponse.json(
+        { error: `Di luar sesi trading terkonfigurasi: ${trading.sessions.join(", ")}.` },
+        { status: 400 },
+      );
+    }
+  }
 
   // Enforce max open positions
   const openCount = await db.trade.count({ where: { status: "OPEN" } });

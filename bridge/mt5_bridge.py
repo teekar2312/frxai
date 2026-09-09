@@ -322,6 +322,40 @@ def check_closed_positions() -> None:
                  f"{r['symbol']} @ {close_price} PnL={pnl}")
 
 
+# --------------------------- Publish real ticks ----------------------------
+PUBLISHED_PAIRS = ["EURUSD", "USDJPY", "GBPUSD", "XAUUSD"]
+
+
+def publish_ticks() -> None:
+    """Baca tick real dari MT5 untuk setiap pair, POST ke dashboard.
+    Dashboard menyimpan di market-cache; /api/market prefer real ticks."""
+    quotes = []
+    for sym in PUBLISHED_PAIRS:
+        if not mt5.symbol_select(sym, True):
+            continue
+        tick = mt5.symbol_info_tick(sym)
+        if tick is None:
+            continue
+        info = mt5.symbol_info(sym)
+        digits = info.digits if info else 5
+        # hitung spread dalam pips (approx)
+        pip_size = 0.01 if sym in ("USDJPY",) else (0.1 if sym == "XAUUSD" else 0.0001)
+        spread_pips = (tick.ask - tick.bid) / pip_size if pip_size else 0.0
+        quotes.append({
+            "symbol": sym,
+            "bid": float(tick.bid),
+            "ask": float(tick.ask),
+            "spreadPips": round(spread_pips, 2),
+            "changePct": 0.0,
+            "last": float(tick.last) if tick.last else float((tick.bid + tick.ask) / 2),
+            "high": float(tick.last) if tick.last else float(tick.ask),
+            "low": float(tick.last) if tick.last else float(tick.bid),
+            "ts": int(tick.time_msc) if hasattr(tick, "time_msc") else int(time.time() * 1000),
+        })
+    if quotes:
+        api_post("/api/market/ticks", {"quotes": quotes})
+
+
 # ------------------------------- Loop utama --------------------------------
 def main_loop() -> None:
     global terminal_pid
@@ -353,6 +387,7 @@ def main_loop() -> None:
             if ts and not ts.get("running", True):
                 log.info("Dashboard minta stop terminal. Shutdown bridge.")
                 break
+            publish_ticks()                        # publish tick real ke dashboard
             sync_account_state()
             for trade in fetch_pending_orders():  # eksekusi order baru
                 send_order_to_mt5(trade)

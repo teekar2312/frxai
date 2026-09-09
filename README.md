@@ -61,8 +61,11 @@ Lihat [docs/INDICATORS.md](docs/INDICATORS.md) untuk daftar lengkap & konfiguras
 
 ### Trading Manual & Otomatis
 - Order manual (symbol, side, lot, SL, TP, trailing stop)
-- AI auto-trade toggle
-- Trailing stop manual atau otomatis oleh AI
+- **AI auto-trade** — toggle ON di top bar, scheduler berjalan tiap 90 detik: analisa AI multi-faktor per pair (round-robin) + eksekusi otomatis jika sinyal kuat (confidence ≥ 55%) + lot sizing otomatis dari risk config
+- **Trailing stop otomatis** — saat `trailingAuto` ON, AI trades otomatis dapat trailing stop; poller 5 detik menggeser SL toward price (ratchet)
+- **AI auto-select indikator** — saat `indicatorAuto` ON, 5 indikator scalping optimal (EMA, RSI, ATR, Supertrend, Bollinger Bands) diaktifkan otomatis
+- **AI auto-adjust risiko** — saat `riskAuto` ON, `riskPerTrade` disesuaikan berdasarkan performa (turun setelah 3 loss beruntun, naik saat win streak)
+- **Weekend & session gate** — `avoidWeekends` + `sessions` memblokir trading di luar jam/market yang dikonfigurasi (berlaku untuk manual + auto)
 - Pemilihan indikator/sesi/timeframe/pair manual atau otomatis oleh AI
 
 ### Integrasi MT5

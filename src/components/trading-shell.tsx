@@ -123,6 +123,71 @@ export function TradingShell() {
     };
   }, [setAccount, setTradingCfg]);
 
+  // Persist autoMode to backend whenever it changes (top-bar switch)
+  const toggleAutoMode = useCallback(
+    async (v: boolean) => {
+      setTradingCfg({ autoMode: v });
+      try {
+        await fetch("/api/config/trading", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ autoMode: v }),
+        });
+        pushToast({
+          title: v ? "AI Auto-Trade AKTIF" : "AI Auto-Trade OFF",
+          description: v
+            ? "Scheduler berjalan tiap 90s: analisa AI + eksekusi sinyal + trailing stop + auto-select indikator + auto-adjust risiko."
+            : "Auto-trade dihentikan. Posisi terbuka tetap dipantau.",
+        });
+      } catch {
+        /* ignore */
+      }
+    },
+    [setTradingCfg, pushToast],
+  );
+
+  // Auto-trade scheduler: when autoMode is ON, fire /api/auto-trade/tick every 90s
+  useEffect(() => {
+    if (!tradingCfg.autoMode) return;
+    let cancelled = false;
+    const runTick = async () => {
+      if (cancelled) return;
+      try {
+        const res = await fetch("/api/auto-trade/tick", { method: "POST" });
+        const data = await res.json();
+        if (data?.result?.executed && data.result.trade) {
+          pushToast({
+            title: `AI Trade: ${data.result.trade.side} ${data.result.trade.symbol}`,
+            description: `${data.result.trade.lotSize} lot @ ${data.result.trade.openPrice} | conf ${data.result.confidence}%`,
+          });
+        }
+      } catch {
+        /* ignore — next tick will retry */
+      }
+    };
+    // Fire one immediately, then every 90s
+    runTick();
+    const id = setInterval(runTick, 90_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [tradingCfg.autoMode, pushToast]);
+
+  // Trailing-stop poller: every 5s, run trailing pass when there are open trades
+  const openTradeCount = useStore((s) => s.trades.filter((t) => t.status === "OPEN").length);
+  useEffect(() => {
+    if (openTradeCount === 0) return;
+    const id = setInterval(async () => {
+      try {
+        await fetch("/api/trade/trail", { method: "POST" });
+      } catch {
+        /* ignore */
+      }
+    }, 5_000);
+    return () => clearInterval(id);
+  }, [openTradeCount]);
+
   const totalPnl = useMemo(() => {
     const trades = useStore.getState().trades.filter((t) => t.status === "OPEN");
     return trades.reduce((s, t) => s + (t.pnl || 0), 0);
@@ -263,7 +328,7 @@ export function TradingShell() {
                 <span className="text-xs">AI Auto</span>
                 <Switch
                   checked={tradingCfg.autoMode}
-                  onCheckedChange={(v) => setTradingCfg({ autoMode: v })}
+                  onCheckedChange={(v) => toggleAutoMode(v)}
                 />
               </div>
 

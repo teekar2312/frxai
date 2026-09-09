@@ -66,4 +66,4 @@ server.log
 Thumbs.db
 *.swp
 .vscode/
-.idea/
+.idea/tool-results/

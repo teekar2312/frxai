@@ -29,13 +29,18 @@ import requests
 import MetaTrader5 as mt5
 
 # ----------------------------- Konfigurasi ---------------------------------
-# Path ke SQLite DB dashboard. Sesuaikan dengan lokasi folder frxai di mesin Anda.
-# Default: C:\frxai\db\custom.db  (ubah bila dashboard berada di folder lain)
-DB_PATH = os.environ.get("DASHBOARD_DB", r"C:\frxai\db\custom.db")
+# Path ke SQLite DB dashboard. Auto-detected: cari db/custom.db relatif terhadap
+# lokasi script ini (bridge/mt5_bridge.py -> ../db/custom.db). Override via
+# environment variable DASHBOARD_DB bila perlu.
+_SCRIPT_DIR = Path(__file__).resolve().parent          # .../frxai/bridge
+_PROJECT_ROOT = _SCRIPT_DIR.parent                      # .../frxai
+_AUTO_DB_PATH = _PROJECT_ROOT / "db" / "custom.db"      # .../frxai/db/custom.db
+
+DB_PATH = os.environ.get("DASHBOARD_DB", str(_AUTO_DB_PATH))
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3000")
 POLL_INTERVAL = float(os.environ.get("BRIDGE_POLL_INTERVAL", "2"))
 TERMINAL_WARMUP_SEC = 8
-LOG_FILE = Path(__file__).resolve().parent / "mt5_bridge.log"
+LOG_FILE = _SCRIPT_DIR / "mt5_bridge.log"
 MAGIC_NUMBER = 20251101  # magic number bridge — filter posisi milik bridge
 
 logging.basicConfig(
@@ -56,7 +61,16 @@ running: bool = True                  # flag loop utama
 def db() -> sqlite3.Connection:
     """Buka koneksi ke SQLite dashboard. Prisma schema: tabel Account (1 baris)."""
     if not Path(DB_PATH).exists():
-        raise FileNotFoundError(f"DB dashboard tidak ditemukan: {DB_PATH}")
+        raise FileNotFoundError(
+            f"DB dashboard tidak ditemukan: {DB_PATH}\n"
+            f"\nSolusi:\n"
+            f"  1. Pastikan dashboard sudah pernah dijalankan (npm run dev) sekali\n"
+            f"     agar Prisma membuat file db/custom.db\n"
+            f"  2. Atau set environment variable DASHBOARD_DB ke path yang benar:\n"
+            f'     set DASHBOARD_DB=C:\\Users\\Anda\\frxai\\db\\custom.db\n'
+            f"  3. Lokasi script sekarang: {_SCRIPT_DIR}\n"
+            f"  4. Project root terdeteksi: {_PROJECT_ROOT}"
+        )
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn

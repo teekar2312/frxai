@@ -52,3 +52,17 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Database (contains MT5 credentials — NEVER commit)
+/db/*.db
+/db/*.db-journal
+
+# Internal agent notes & worklog (not for public repo)
+/agent-ctx/
+/worklog.md
+
+# OS / editor
+Thumbs.db
+*.swp
+.vscode/
+.idea/

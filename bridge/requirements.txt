@@ -1,0 +1,9 @@
+# MT5 Python Bridge dependencies
+# Install: pip install -r bridge/requirements.txt
+#
+# Catatan: library MetaTrader5 HANYA berjalan di Windows (64-bit).
+# Pastikan Python Anda 64-bit: python -c "import struct; print(struct.calcsize('P')*8)"
+# Harus cetak: 64
+
+MetaTrader5>=5.0.45
+requests>=2.31.0

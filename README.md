@@ -183,13 +183,14 @@ Buka `http://localhost:3000` di browser. Dashboard akan muncul dengan tema dark 
 
 ### Setup Trading Real (Windows 11)
 
-Untuk trading dengan akun real FINEX Indonesia, Anda perlu menjalankan **MT5 Python Bridge** di mesin Windows Anda. Panduan lengkap: [docs/MT5-BRIDGE.md](docs/MT5-BRIDGE.md).
+Untuk trading dengan akun real FINEX Indonesia, Anda perlu menjalankan **MT5 Python Bridge** di mesin Windows Anda. Script bridge sudah tersedia di folder [`bridge/`](bridge/). Panduan lengkap: [docs/MT5-BRIDGE.md](docs/MT5-BRIDGE.md).
 
 Ringkasan:
 1. Install MetaTrader 5 desktop dari FINEX Indonesia
-2. Install Python 3.14 + library `MetaTrader5`
-3. Jalankan bridge script yang membaca kredensial dari dashboard
-4. Di dashboard: Settings → Broker/MT5 → isi nomor akun, password, server, path terminal → Sambungkan MT5
+2. Install Python 3.14 + dependencies: `pip install -r bridge/requirements.txt`
+3. Di dashboard: Settings → Broker/MT5 → isi nomor akun, password, server, path terminal
+4. Jalankan bridge: `python bridge/mt5_bridge.py`
+5. Bridge akan auto-launch terminal MT5 + login + sync account state
 
 ---
 
@@ -266,6 +267,10 @@ frxai/
 │       ├── types.ts               # Shared TypeScript types
 │       └── utils.ts               # cn() helper
 ├── docs/                          # Dokumentasi
+├── bridge/                        # MT5 Python Bridge (Windows 11)
+│   ├── mt5_bridge.py              # Script bridge runnable
+│   ├── requirements.txt           # Python dependencies
+│   └── README.md                  # Panduan bridge
 ├── examples/                      # WebSocket examples
 ├── public/                        # Static assets
 ├── .env.example                   # Environment template

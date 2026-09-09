@@ -66,4 +66,10 @@ server.log
 Thumbs.db
 *.swp
 .vscode/
-.idea/tool-results/
+.idea/
+
+# MT5 bridge logs (auto-generated)
+/bridge/*.log
+
+# Tool artifacts
+/tool-results/

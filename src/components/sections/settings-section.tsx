@@ -103,6 +103,21 @@ export function SettingsSection() {
   const [mt5Connecting, setMt5Connecting] = useState(false);
   const [showMt5Password, setShowMt5Password] = useState(false);
 
+  // MT5 terminal app state
+  interface Mt5Terminal {
+    path: string;
+    running: boolean;
+    pid: number | null;
+    autoStart: boolean;
+  }
+  const [mt5Terminal, setMt5Terminal] = useState<Mt5Terminal>({
+    path: "",
+    running: false,
+    pid: null,
+    autoStart: true,
+  });
+  const [terminalBusy, setTerminalBusy] = useState(false);
+
   // Fetch all configs on mount
   useEffect(() => {
     let mounted = true;
@@ -129,6 +144,14 @@ export function SettingsSection() {
             mt5AccountType: mt5.credentials.mt5AccountType ?? "demo",
             mt5Terminal: mt5.credentials.mt5Terminal ?? "MetaTrader5",
             hasPassword: mt5.credentials.hasPassword ?? false,
+          });
+        }
+        if (mt5?.terminal) {
+          setMt5Terminal({
+            path: mt5.terminal.path ?? "",
+            running: mt5.terminal.running ?? false,
+            pid: mt5.terminal.pid ?? null,
+            autoStart: mt5.terminal.autoStart ?? true,
           });
         }
       } catch {
@@ -266,6 +289,8 @@ export function SettingsSection() {
         toast.success("MT5 Terhubung", {
           description: `Akun ${mt5Creds.mt5Account} @ ${mt5Creds.mt5Server} (${mt5Creds.mt5AccountType})`,
         });
+        // refresh terminal status (auto-start may have launched the app)
+        refreshTerminalStatus();
       }
     } catch (e) {
       toast.error("Gagal menyambungkan MT5", {
@@ -289,6 +314,100 @@ export function SettingsSection() {
       }
     } catch {
       toast.error("Gagal memutus MT5");
+    }
+  };
+
+  // --- MT5 terminal: save path + auto-start ---
+  const handleTerminalConfigSave = async () => {
+    try {
+      await fetch("/api/mt5/credentials", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mt5TerminalPath: mt5Terminal.path,
+          mt5AutoStartTerminal: mt5Terminal.autoStart,
+        }),
+      });
+      toast.success("Konfigurasi terminal disimpan");
+    } catch {
+      toast.error("Gagal menyimpan konfigurasi terminal");
+    }
+  };
+
+  // --- MT5 terminal: launch the app ---
+  const handleStartTerminal = async () => {
+    if (!mt5Terminal.path.trim()) {
+      toast.error("Path terminal MT5 belum diisi", {
+        description: "Isi path ke terminal64.exe terlebih dahulu, lalu Simpan.",
+      });
+      return;
+    }
+    // save path first
+    setTerminalBusy(true);
+    try {
+      await fetch("/api/mt5/credentials", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mt5TerminalPath: mt5Terminal.path,
+          mt5AutoStartTerminal: mt5Terminal.autoStart,
+        }),
+      });
+      const res = await fetch("/api/mt5/start-terminal", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Gagal menjalankan terminal");
+      }
+      setMt5Terminal((t) => ({ ...t, running: true, pid: data.pid ?? null }));
+      toast.success("Terminal MT5 dijalankan", {
+        description: data.alreadyRunning
+          ? "Terminal sudah berjalan sebelumnya"
+          : `PID ${data.pid} · ${mt5Terminal.path}`,
+      });
+    } catch (e) {
+      toast.error("Gagal menjalankan terminal MT5", {
+        description: e instanceof Error ? e.message : "Unknown error",
+      });
+    } finally {
+      setTerminalBusy(false);
+    }
+  };
+
+  // --- MT5 terminal: stop the app ---
+  const handleStopTerminal = async () => {
+    setTerminalBusy(true);
+    try {
+      const res = await fetch("/api/mt5/stop-terminal", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error("Gagal menghentikan terminal");
+      setMt5Terminal((t) => ({ ...t, running: false, pid: null }));
+      // also reflect disconnected account state
+      const st = await fetch("/api/config/account").then((r) => r.json());
+      if (st?.account) setAccount(st.account);
+      toast.info("Terminal MT5 dihentikan", {
+        description: "Koneksi bridge juga diputus.",
+      });
+    } catch (e) {
+      toast.error("Gagal menghentikan terminal");
+    } finally {
+      setTerminalBusy(false);
+    }
+  };
+
+  // --- MT5 terminal: refresh status ---
+  const refreshTerminalStatus = async () => {
+    try {
+      const res = await fetch("/api/mt5/terminal-status");
+      const data = await res.json();
+      setMt5Terminal((t) => ({
+        ...t,
+        running: data.running ?? false,
+        pid: data.pid ?? null,
+        path: data.path ?? t.path,
+        autoStart: data.autoStart ?? t.autoStart,
+      }));
+    } catch {
+      /* ignore */
     }
   };
 
@@ -846,6 +965,189 @@ export function SettingsSection() {
                 <p className="mt-2">
                   Dashboard ini berkomunikasi dengan <span className="text-foreground">MT5 Python bridge</span> yang berjalan di mesin Windows Anda (library <code className="rounded bg-muted px-1">MetaTrader5</code>). Bridge membaca kredensial tersimpan untuk eksekusi order otomatis.
                 </p>
+              </div>
+            </div>
+          </Panel>
+
+          {/* MT5 Terminal Application Panel */}
+          <Panel
+            title="Aplikasi Terminal MT5"
+            description="Jalankan aplikasi MetaTrader 5 desktop (terminal64.exe) dari dashboard"
+            actions={
+              <Badge
+                variant="outline"
+                className={
+                  mt5Terminal.running
+                    ? "gap-1.5 border-emerald-500/40 text-emerald-400"
+                    : "text-muted-foreground"
+                }
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${mt5Terminal.running ? "bg-emerald-500 live-dot" : "bg-muted-foreground/50"}`}
+                />
+                {mt5Terminal.running ? "Berjalan" : "Berhenti"}
+              </Badge>
+            }
+          >
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Config + controls */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <Server className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Lokasi terminal64.exe</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="mt5-terminal-path" className="text-xs">
+                    Path Terminal MT5
+                  </Label>
+                  <Input
+                    id="mt5-terminal-path"
+                    value={mt5Terminal.path}
+                    onChange={(e) =>
+                      setMt5Terminal((t) => ({ ...t, path: e.target.value }))
+                    }
+                    placeholder='C:\Program Files\MetaTrader 5\terminal64.exe'
+                    autoComplete="off"
+                    className="tnum text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Path lengkap ke executable terminal MT5 di Windows Anda. Klik kanan shortcut MT5 → Properties → "Target" untuk menyalin.
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                  <div className="flex items-center gap-2">
+                    <PlugZap className="h-4 w-4 text-violet-400" />
+                    <div>
+                      <div className="text-sm font-medium">Auto-start terminal</div>
+                      <div className="text-xs text-muted-foreground">
+                        Jalankan terminal otomatis sebelum connect bridge
+                      </div>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={mt5Terminal.autoStart}
+                    onCheckedChange={(v) =>
+                      setMt5Terminal((t) => ({ ...t, autoStart: v }))
+                    }
+                    aria-label="Auto-start terminal"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleTerminalConfigSave}
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    Simpan Konfigurasi
+                  </Button>
+                  {mt5Terminal.running ? (
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={handleStopTerminal}
+                      disabled={terminalBusy}
+                    >
+                      {terminalBusy ? (
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      ) : (
+                        <LogOut className="h-3.5 w-3.5" />
+                      )}
+                      Hentikan Terminal
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={handleStartTerminal}
+                      disabled={terminalBusy}
+                    >
+                      {terminalBusy ? (
+                        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                      ) : (
+                        <PlugZap className="h-3.5 w-3.5" />
+                      )}
+                      Jalankan Terminal
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={refreshTerminalStatus}
+                  >
+                    <Activity className="h-3.5 w-3.5" />
+                    Refresh
+                  </Button>
+                </div>
+              </div>
+
+              {/* Status display */}
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Activity className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">Status Terminal</span>
+                  </div>
+                  <div className="rounded-lg border border-border bg-card/60 p-3 text-sm">
+                    <div className="space-y-1.5">
+                      <KVRow
+                        k="Status"
+                        v={mt5Terminal.running ? "BERJALAN" : "BERHENTI"}
+                      />
+                      <KVRow
+                        k="PID"
+                        v={mt5Terminal.pid != null ? String(mt5Terminal.pid) : "—"}
+                        mono
+                      />
+                      <KVRow
+                        k="Path"
+                        v={mt5Terminal.path || "— belum dikonfigurasi —"}
+                        mono
+                      />
+                      <KVRow
+                        k="Auto-start"
+                        v={mt5Terminal.autoStart ? "Aktif" : "Nonaktif"}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {mt5Terminal.running && (
+                  <div className="flex items-start gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5">
+                    <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    <p className="text-[11px] leading-relaxed text-emerald-300/90">
+                      Terminal MT5 berjalan. Bridge Python dapat memanggil{" "}
+                      <code className="rounded bg-muted px-1">MetaTrader5.initialize()</code>{" "}
+                      lalu{" "}
+                      <code className="rounded bg-muted px-1">.login()</code> untuk koneksi akun.
+                    </p>
+                  </div>
+                )}
+                {!mt5Terminal.running && (
+                  <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 p-2.5">
+                    <ShieldAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                    <p className="text-[11px] leading-relaxed text-amber-300/90">
+                      Terminal MT5 belum berjalan. Bridge Python tidak dapat terhubung ke MetaTrader 5. Klik{" "}
+                      <span className="font-semibold">Jalankan Terminal</span> di kiri.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* How launch works */}
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-violet-500/20 bg-violet-500/5 p-3">
+              <Server className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-400" />
+              <div className="text-[11px] leading-relaxed text-muted-foreground">
+                <span className="font-medium text-violet-300">Cara kerja launch terminal:</span>
+                <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+                  <li>Isi path ke <code className="rounded bg-muted px-1">terminal64.exe</code> di Windows 11 Anda (cth: <code className="rounded bg-muted px-1">C:\Program Files\MetaTrader 5\terminal64.exe</code>).</li>
+                  <li>Klik <span className="text-foreground">Jalankan Terminal</span> — bridge Python menjalankan <code className="rounded bg-muted px-1">subprocess.Popen([path])</code>.</li>
+                  <li>Bridge menunggu <code className="rounded bg-muted px-1">MetaTrader5.initialize(path)</code> sukses, lalu <code className="rounded bg-muted px-1">.login(account, password, server)</code>.</li>
+                  <li>Aktifkan <span className="text-foreground">Auto-start</span> agar terminal otomatis dijalankan setiap kali klik "Sambungkan MT5".</li>
+                </ol>
               </div>
             </div>
           </Panel>

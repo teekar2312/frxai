@@ -63,6 +63,34 @@ export async function POST(req: Request) {
   const accountType = body.mt5AccountType ?? existing.mt5AccountType ?? "demo";
   const terminal = body.mt5Terminal ?? existing.mt5Terminal ?? "MetaTrader5";
 
+  // Auto-launch the MT5 terminal app if configured and not yet running.
+  // In production the bridge does: subprocess.Popen([path]) then
+  // MetaTrader5.initialize(path) before calling .login().
+  const autoStart = existing.mt5AutoStartTerminal ?? true;
+  const terminalPath = existing.mt5TerminalPath;
+  let terminalLaunched = false;
+  if (autoStart && terminalPath && !existing.mt5TerminalRunning) {
+    await new Promise((r) => setTimeout(r, 500));
+    const pid = Math.floor(2000 + Math.random() * 8000);
+    await db.account.update({
+      where: { id: acc.id },
+      data: { mt5TerminalRunning: true, mt5TerminalPid: pid },
+    });
+    terminalLaunched = true;
+    await log(
+      "INFO",
+      "MT5",
+      `MT5 terminal auto-launched: ${terminalPath} (PID ${pid})`,
+    );
+  } else if (autoStart && !terminalPath && !existing.mt5TerminalRunning) {
+    // Auto-start enabled but no path configured — warn but proceed
+    await log(
+      "WARN",
+      "MT5",
+      "Auto-start terminal aktif tapi path terminal64.exe belum diisi. Lewati launch.",
+    );
+  }
+
   const updated = await db.account.update({
     where: { id: acc.id },
     data: {
@@ -81,7 +109,7 @@ export async function POST(req: Request) {
   await log(
     "INFO",
     "MT5",
-    `MT5 bridge connected: akun ${account} @ ${server} (${accountType})`,
+    `MT5 bridge connected: akun ${account} @ ${server} (${accountType})${terminalLaunched ? " [terminal auto-launched]" : ""}`,
   );
 
   const state: AccountState = {

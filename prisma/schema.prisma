@@ -23,6 +23,11 @@ model Account {
   mt5Server     String?  // e.g. "FINEX-Live01" / "FINEX-Demo"
   mt5AccountType String  @default("demo") // "demo" | "real"
   mt5Terminal   String   @default("MetaTrader5") // terminal path/exe name
+  // MT5 terminal application (the desktop app) launch config
+  mt5TerminalPath String? // full path to terminal64.exe, e.g. "C:\Program Files\MetaTrader 5\terminal64.exe"
+  mt5TerminalRunning Boolean @default(false) // whether the MT5 terminal app is running
+  mt5AutoStartTerminal Boolean @default(true) // auto-launch terminal before connecting
+  mt5TerminalPid  Int?    // OS process id of the launched terminal (set by bridge)
   leverage      String   @default("1:500")
   currency      String   @default("USD")
   balance       Float    @default(10000)

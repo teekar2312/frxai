@@ -22,6 +22,12 @@ export async function GET() {
       mt5Terminal: acc.mt5Terminal,
       hasPassword: !!acc.mt5Password,
     },
+    terminal: {
+      path: acc.mt5TerminalPath ?? "",
+      running: acc.mt5TerminalRunning,
+      pid: acc.mt5TerminalPid,
+      autoStart: acc.mt5AutoStartTerminal,
+    },
   });
 }
 
@@ -33,6 +39,8 @@ export async function PUT(req: Request) {
     mt5Server?: string;
     mt5AccountType?: "demo" | "real";
     mt5Terminal?: string;
+    mt5TerminalPath?: string;
+    mt5AutoStartTerminal?: boolean;
   };
 
   const data: any = {};
@@ -62,6 +70,8 @@ export async function PUT(req: Request) {
   }
   if (body.mt5AccountType !== undefined) data.mt5AccountType = body.mt5AccountType;
   if (body.mt5Terminal !== undefined) data.mt5Terminal = body.mt5Terminal;
+  if (body.mt5TerminalPath !== undefined) data.mt5TerminalPath = body.mt5TerminalPath || null;
+  if (body.mt5AutoStartTerminal !== undefined) data.mt5AutoStartTerminal = body.mt5AutoStartTerminal;
 
   await db.account.update({ where: { id: acc.id }, data });
   return NextResponse.json({ ok: true });

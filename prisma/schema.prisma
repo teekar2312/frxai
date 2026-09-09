@@ -1,0 +1,149 @@
+// AI Forex Trading Dashboard — FINEX Indonesia
+// Prisma schema (SQLite)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Broker / MT5 account configuration
+model Account {
+  id            String   @id @default(cuid())
+  broker        String   @default("FINEX Indonesia")
+  login         String?
+  server        String?
+  leverage      String   @default("1:500")
+  currency      String   @default("USD")
+  balance       Float    @default(10000)
+  equity        Float    @default(10000)
+  margin        Float    @default(0)
+  freeMargin    Float    @default(10000)
+  marginLevel   Float    @default(0)
+  mt5Connected  Boolean  @default(false)
+  dailyLossUsed Float    @default(0)
+  dailyLossLimit Float   @default(3) // % of balance
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// Open & closed trades
+model Trade {
+  id           String   @id @default(cuid())
+  ticket       String   @unique
+  symbol       String
+  side         String   // BUY | SELL
+  lotSize      Float
+  openPrice    Float
+  closePrice   Float?
+  stopLoss     Float?
+  takeProfit   Float?
+  trailingStop Boolean  @default(false)
+  trailingPips Float?
+  slPips       Float?
+  tpPips       Float?
+  pnl          Float    @default(0)
+  pips         Float    @default(0)
+  status       String   @default("OPEN") // OPEN | CLOSED
+  source       String   @default("MANUAL") // MANUAL | AI
+  strategy     String?
+  openedAt     DateTime @default(now())
+  closedAt     DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// App configuration (singleton-style key/value JSON store)
+model Configuration {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   // JSON string
+  updatedAt DateTime @updatedAt
+}
+
+// Indicator enable/config state
+model IndicatorConfig {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  enabled   Boolean  @default(false)
+  autoMode  Boolean  @default(false)
+  params    String   @default("{}") // JSON params
+  category  String   @default("trend")
+  updatedAt DateTime @updatedAt
+}
+
+// Price + email alerts
+model Alert {
+  id        String   @id @default(cuid())
+  type      String   // PRICE | EMAIL | NEWS
+  symbol    String?
+  condition String?  // ABOVE | BELOW
+  price     Float?
+  message   String?
+  email     String?
+  active    Boolean  @default(true)
+  triggered Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// System / error / trade logs
+model Log {
+  id        String   @id @default(cuid())
+  level     String   // INFO | WARN | ERROR | TRADE | AI
+  source    String   @default("SYSTEM")
+  message   String
+  meta      String?
+  createdAt DateTime @default(now())
+}
+
+// Backtest runs
+model Backtest {
+  id           String   @id @default(cuid())
+  symbol       String
+  timeframe    String
+  strategy     String
+  fromDate     String
+  toDate       String
+  initialCapital Float
+  finalCapital Float
+  totalTrades  Int
+  wins         Int
+  losses       Int
+  winRate      Float
+  profitFactor Float
+  maxDrawdown  Float
+  netProfit    Float
+  result       String   // JSON full result
+  createdAt    DateTime @default(now())
+}
+
+// AI market analysis records (self-learning memory)
+model AiAnalysis {
+  id         String   @id @default(cuid())
+  symbol     String
+  factors    String   // JSON of factor breakdown
+  summary    String
+  signal     String   // BUY | SELL | NEUTRAL
+  confidence Float
+  provider   String
+  createdAt  DateTime @default(now())
+}
+
+// Generated trading signals
+model Signal {
+  id         String   @id @default(cuid())
+  symbol     String
+  side       String   // BUY | SELL
+  entry      Float
+  stopLoss   Float
+  takeProfit Float
+  confidence Float
+  reason     String
+  source     String   @default("AI")
+  status     String   @default("PENDING") // PENDING | EXECUTED | EXPIRED | SKIPPED
+  createdAt  DateTime @default(now())
+}

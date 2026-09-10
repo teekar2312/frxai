@@ -44,3 +44,14 @@ export async function DELETE(req: Request) {
   await db.alert.delete({ where: { id } });
   return NextResponse.json({ ok: true });
 }
+
+// H2: PATCH — toggle alert active state (persisted)
+export async function PATCH(req: Request) {
+  const { id, active } = (await req.json()) as { id: string; active: boolean };
+  const updated = await db.alert.update({
+    where: { id },
+    data: { active },
+  });
+  await log("INFO", "ALERT", `Alert ${updated.symbol ?? ""} ${active ? "diaktifkan" : "dinonaktifkan"}`);
+  return NextResponse.json({ ok: true, alert: { id: updated.id, active: updated.active } });
+}

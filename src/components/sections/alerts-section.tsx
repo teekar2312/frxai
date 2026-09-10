@@ -144,12 +144,26 @@ export function AlertsSection() {
     }
   };
 
-  const handleToggleActive = (a: AlertRow) => {
-    // No update endpoint on backend — reflect locally only.
-    setAlerts(alerts.map((x) => (x.id === a.id ? { ...x, active: !x.active } : x)));
-    toast.success(a.active ? "Alert dinonaktifkan (lokal)" : "Alert diaktifkan (lokal)", {
-      description: "Status aktif tersimpan sesi ini.",
-    });
+  // H2: persist active toggle to backend (was local-only, lost on refresh)
+  const handleToggleActive = async (a: AlertRow) => {
+    const newActive = !a.active;
+    // optimistic update
+    setAlerts(alerts.map((x) => (x.id === a.id ? { ...x, active: newActive } : x)));
+    try {
+      const res = await fetch("/api/alerts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: a.id, active: newActive }),
+      });
+      if (!res.ok) throw new Error("PATCH failed");
+      toast.success(newActive ? "Alert diaktifkan" : "Alert dinonaktifkan", {
+        description: "Status tersimpan permanen.",
+      });
+    } catch {
+      // revert on failure
+      setAlerts(alerts.map((x) => (x.id === a.id ? { ...x, active: a.active } : x)));
+      toast.error("Gagal mengubah status alert");
+    }
   };
 
   const handleTestEmail = () => {

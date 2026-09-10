@@ -118,7 +118,11 @@
   * {
     @apply border-border outline-ring/50;
   }
-  html {
+  /* M11: color-scheme per-theme (was hardcoded dark globally) */
+  :root {
+    color-scheme: light;
+  }
+  .dark {
     color-scheme: dark;
   }
   body {
@@ -133,7 +137,7 @@
   font-family: var(--font-geist-mono), ui-monospace, monospace;
 }
 
-/* Custom scrollbar for long lists */
+/* Custom scrollbar for long lists — theme-aware (M12) */
 .scroll-thin::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -142,11 +146,11 @@
   background: transparent;
 }
 .scroll-thin::-webkit-scrollbar-thumb {
-  background: oklch(1 0 0 / 12%);
+  background: var(--border);
   border-radius: 9999px;
 }
 .scroll-thin::-webkit-scrollbar-thumb:hover {
-  background: oklch(1 0 0 / 22%);
+  background: var(--muted-foreground);
 }
 
 /* Subtle pulse for live dot */
@@ -158,10 +162,10 @@
   animation: live-pulse 1.6s ease-in-out infinite;
 }
 
-/* Grid background for terminal feel */
+/* Grid background for terminal feel — theme-aware (M12) */
 .terminal-grid {
   background-image:
-    linear-gradient(oklch(1 0 0 / 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, oklch(1 0 0 / 0.025) 1px, transparent 1px);
+    linear-gradient(color-mix(in oklch, var(--foreground) 3%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklch, var(--foreground) 3%, transparent) 1px, transparent 1px);
   background-size: 28px 28px;
 }

@@ -180,6 +180,7 @@ export function AiSection() {
 
     const startTime = Date.now();
     let completed = 0;
+    let succeeded = 0; // H1: track real success count
 
     // Fire all requests in parallel; update state as each resolves
     await Promise.all(
@@ -194,6 +195,7 @@ export function AiSection() {
           const data = await res.json();
           const analysis = data.analysis as AiAnalysisResult;
           setResults((prev) => ({ ...prev, [p]: analysis }));
+          succeeded++; // H1: count real successes
         } catch (e) {
           // leave this pair without a result; surface a toast
           toast.error(`Analisa ${p} gagal`, {
@@ -210,11 +212,10 @@ export function AiSection() {
     setLastTime(new Date());
     setLoading(false);
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    const successCount = activePairs.filter((p) => results[p] || completed > 0).length;
-    toast.success(`Analisa ${activePairs.length} pair selesai`, {
+    // H1: real success count in toast
+    toast.success(`Analisa ${succeeded}/${activePairs.length} pair selesai`, {
       description: `${elapsed}s · klik kartu pair untuk lihat detail heatmap`,
     });
-    void successCount;
   }
 
   async function executeSignal() {
@@ -958,7 +959,7 @@ function ResultBody({
           </div>
         </div>
         <div className="space-y-2.5">
-          {result.factors.map((f, i) => (
+          {result.factors?.map((f, i) => (
             <FactorRow key={i} factor={f} />
           ))}
         </div>

@@ -91,6 +91,13 @@ export function BacktestSection() {
   }, [setBacktests]);
 
   async function run() {
+    // M9: validate date range
+    if (fromDate && toDate && new Date(fromDate) > new Date(toDate)) {
+      toast.error("Rentang tanggal tidak valid", {
+        description: "Tanggal mulai harus sebelum tanggal akhir.",
+      });
+      return;
+    }
     setRunning(true);
     try {
       const res = await fetch("/api/backtest/run", {
@@ -347,28 +354,28 @@ export function BacktestSection() {
                       <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
                         <stop
                           offset="0%"
-                          stopColor="#10b981"
+                          stopColor="var(--chart-1)"
                           stopOpacity={0.4}
                         />
                         <stop
                           offset="100%"
-                          stopColor="#10b981"
+                          stopColor="var(--chart-1)"
                           stopOpacity={0}
                         />
                       </linearGradient>
                     </defs>
                     <CartesianGrid
                       strokeDasharray="3 3"
-                      stroke="rgba(255,255,255,0.05)"
+                      stroke="var(--border)"
                     />
                     <XAxis
                       dataKey="x"
-                      stroke="rgba(255,255,255,0.3)"
+                      stroke="var(--border)"
                       fontSize={10}
                       tickLine={false}
                     />
                     <YAxis
-                      stroke="rgba(255,255,255,0.3)"
+                      stroke="var(--border)"
                       fontSize={10}
                       tickLine={false}
                       width={64}
@@ -376,12 +383,13 @@ export function BacktestSection() {
                     />
                     <Tooltip
                       contentStyle={{
-                        background: "rgba(20,20,25,0.95)",
-                        border: "1px solid rgba(255,255,255,0.1)",
+                        background: "var(--popover)",
+                        border: "1px solid var(--border)",
                         borderRadius: 8,
                         fontSize: 12,
+                        color: "var(--popover-foreground)",
                       }}
-                      labelStyle={{ color: "rgba(255,255,255,0.6)" }}
+                      labelStyle={{ color: "var(--muted-foreground)" }}
                       formatter={(v: number) => [
                         `$${v.toFixed(2)}`,
                         "Equity",
@@ -391,7 +399,7 @@ export function BacktestSection() {
                     <Area
                       type="monotone"
                       dataKey="y"
-                      stroke="#10b981"
+                      stroke="var(--chart-1)"
                       strokeWidth={2}
                       fill="url(#eqGrad)"
                     />
@@ -433,12 +441,15 @@ export function BacktestSection() {
                 {backtests.map((b) => (
                   <TableRow
                     key={b.id}
-                    className="cursor-pointer"
-                    onClick={() =>
-                      toast.info(`${b.symbol} • ${b.strategy}`, {
+                    className="cursor-pointer hover:bg-muted/30"
+                    onClick={() => {
+                      // H11: load backtest stats into result panel (was toast-only)
+                      setResult(b);
+                      setChartData([]);
+                      toast.info(`Backtest dimuat: ${b.symbol} • ${b.strategy}`, {
                         description: `${b.totalTrades} trades • ${b.winRate.toFixed(1)}% win • PF ${b.profitFactor.toFixed(2)}`,
-                      })
-                    }
+                      });
+                    }}
                   >
                     <TableCell className="font-medium">{b.symbol}</TableCell>
                     <TableCell>{b.timeframe}</TableCell>

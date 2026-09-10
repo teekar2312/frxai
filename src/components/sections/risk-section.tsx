@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Calculator,
@@ -79,6 +79,8 @@ export function RiskSection() {
   });
 
   // Fetch risk config on mount
+  // C3: use pristineRef to skip the spurious save on initial load
+  const pristineRef = useRef(true);
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -92,8 +94,8 @@ export function RiskSection() {
           ...c,
           riskPct: (data.config as RiskConfig).riskPerTrade,
         }));
-        // allow save effect to fire only after initial load completes
-        setTimeout(() => setLoaded(true), 0);
+        setLoaded(true);
+        // pristineRef stays true — only cleared when user calls update()
       } catch {
         setLoaded(true);
       }
@@ -103,9 +105,9 @@ export function RiskSection() {
     };
   }, [setRiskCfg]);
 
-  // Debounced save on cfg change
+  // Debounced save on cfg change — C3: skip while pristine (just loaded)
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || pristineRef.current) return;
     const id = setTimeout(() => {
       fetch("/api/config/risk", {
         method: "PUT",
@@ -120,6 +122,7 @@ export function RiskSection() {
 
   const update = useCallback(
     (patch: Partial<RiskConfig>) => {
+      pristineRef.current = false; // C3: user-initiated change — allow save
       setCfg((prev) => {
         const next = { ...prev, ...patch };
         setRiskCfg(next);

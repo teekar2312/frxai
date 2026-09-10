@@ -5,11 +5,11 @@ import { toast } from "sonner";
 import {
   AlertTriangle,
   Bot,
+  Eraser,
   Info,
   RefreshCw,
   Search,
   Terminal,
-  Trash2,
   TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,8 @@ export function LogsSection() {
   const [level, setLevel] = useState<Level>("ALL");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  // H3: live clock for the panel header (was frozen at mount)
+  const [liveClock, setLiveClock] = useState(new Date());
 
   const fetchLogs = useCallback(
     async (lvl: Level) => {
@@ -83,6 +85,12 @@ export function LogsSection() {
   useEffect(() => {
     fetchLogs(level);
   }, [level, fetchLogs]);
+
+  // H3: live clock — update every second
+  useEffect(() => {
+    const id = setInterval(() => setLiveClock(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -129,7 +137,7 @@ export function LogsSection() {
               Refresh
             </Button>
             <Button size="sm" variant="ghost" onClick={handleClearFilter}>
-              <Trash2 className="h-3.5 w-3.5" />
+              <Eraser className="size-3.5" />
               Bersihkan
             </Button>
           </>
@@ -199,9 +207,9 @@ export function LogsSection() {
         description={`${filtered.length} dari ${logs.length} entri`}
         actions={
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <Terminal className="h-3.5 w-3.5" />
+            <Terminal className="size-3.5" />
             <span className="tnum">
-              {new Date().toLocaleTimeString("id-ID", { hour12: false })}
+              {liveClock.toLocaleTimeString("id-ID", { hour12: false })}
             </span>
           </div>
         }

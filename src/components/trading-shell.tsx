@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -24,16 +24,34 @@ import { LiveDot } from "@/components/shared";
 import { activeSessions } from "@/lib/market";
 import { PAIRS } from "@/lib/constants";
 import type { Pair } from "@/lib/types";
-import { OverviewSection } from "@/components/sections/overview-section";
-import { AiSection } from "@/components/sections/ai-section";
-import { TradingSection } from "@/components/sections/trading-section";
-import { IndicatorsSection } from "@/components/sections/indicators-section";
-import { RiskSection } from "@/components/sections/risk-section";
-import { BacktestSection } from "@/components/sections/backtest-section";
-import { AlertsSection } from "@/components/sections/alerts-section";
-import { LogsSection } from "@/components/sections/logs-section";
-import { SettingsSection } from "@/components/sections/settings-section";
+import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// H5: Code-split sections — only the active section's JS loads
+const OverviewSection = dynamic(() => import("@/components/sections/overview-section").then((m) => m.OverviewSection), { loading: () => <SectionSkeleton /> });
+const AiSection = dynamic(() => import("@/components/sections/ai-section").then((m) => m.AiSection), { loading: () => <SectionSkeleton /> });
+const TradingSection = dynamic(() => import("@/components/sections/trading-section").then((m) => m.TradingSection), { loading: () => <SectionSkeleton /> });
+const IndicatorsSection = dynamic(() => import("@/components/sections/indicators-section").then((m) => m.IndicatorsSection), { loading: () => <SectionSkeleton /> });
+const RiskSection = dynamic(() => import("@/components/sections/risk-section").then((m) => m.RiskSection), { loading: () => <SectionSkeleton /> });
+const BacktestSection = dynamic(() => import("@/components/sections/backtest-section").then((m) => m.BacktestSection), { loading: () => <SectionSkeleton /> });
+const AlertsSection = dynamic(() => import("@/components/sections/alerts-section").then((m) => m.AlertsSection), { loading: () => <SectionSkeleton /> });
+const LogsSection = dynamic(() => import("@/components/sections/logs-section").then((m) => m.LogsSection), { loading: () => <SectionSkeleton /> });
+const SettingsSection = dynamic(() => import("@/components/sections/settings-section").then((m) => m.SettingsSection), { loading: () => <SectionSkeleton /> });
+
+function SectionSkeleton() {
+  return (
+    <div className="space-y-4">
+      <Skeleton className="h-10 w-64" />
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-24" />
+        ))}
+      </div>
+      <Skeleton className="h-64" />
+    </div>
+  );
+}
 import { Moon, Sun } from "lucide-react";
 
 const NAV: { key: SectionKey; label: string; icon: typeof Activity }[] = [
@@ -58,15 +76,30 @@ export function TradingShell() {
   const tradingCfg = useStore((s) => s.tradingCfg);
   const setTradingCfg = useStore((s) => s.setTradingCfg);
   const pushToast = useStore((s) => s.pushToast);
+  // C1: reactive trades subscription for accurate Day P&L
+  const trades = useStore((s) => s.trades);
+  // H9: populate trades + riskCfg once in shell (sections read from store)
+  const setTrades = useStore((s) => s.setTrades);
+  const setRiskCfg = useStore((s) => s.setRiskCfg);
+  // C2: visibility ref for pausing polls when tab is hidden
+  const isVisibleRef = useRef(true);
 
   const [clock, setClock] = useState(new Date());
   const [sessions, setSessions] = useState(activeSessions());
   const { theme, setTheme } = useTheme();
 
-  // Live market data polling (simulated ticks)
+  // C2: Track document visibility — pause all polls when tab is hidden
+  useEffect(() => {
+    const onVis = () => { isVisibleRef.current = !document.hidden; };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
+
+  // Live market data polling (simulated ticks) — C2: skip when tab hidden
   useEffect(() => {
     let mounted = true;
     async function tick() {
+      if (!isVisibleRef.current) return; // C2: skip when backgrounded
       try {
         const res = await fetch("/api/market");
         if (!res.ok) return;
@@ -87,7 +120,7 @@ export function TradingShell() {
     };
   }, [setQuote]);
 
-  // Clock + sessions
+  // Clock + sessions — keep running (cheap, no network)
   useEffect(() => {
     const id = setInterval(() => {
       const now = new Date();
@@ -97,23 +130,23 @@ export function TradingShell() {
     return () => clearInterval(id);
   }, []);
 
-  // Initial data load
+  // H9: Initial data load — populate trades + riskCfg into store so
+  // sections don't re-fetch the same endpoints
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
-        const [acc, cfg, risk, keys] = await Promise.all([
+        const [acc, cfg, risk, tradeList] = await Promise.all([
           fetch("/api/config/account").then((r) => r.json()),
           fetch("/api/config/trading").then((r) => r.json()),
           fetch("/api/config/risk").then((r) => r.json()),
-          fetch("/api/config/keys").then((r) => r.json()),
+          fetch("/api/trade/list").then((r) => r.json()),
         ]);
         if (!mounted) return;
         if (acc?.account) setAccount(acc.account);
         if (cfg?.config) setTradingCfg(cfg.config);
-        // risk & keys handled inside their sections
-        void risk;
-        void keys;
+        if (risk?.config) setRiskCfg(risk.config); // H9: populate store
+        if (tradeList?.trades) setTrades(tradeList.trades); // H9: populate store
       } catch {
         /* ignore */
       }
@@ -121,7 +154,7 @@ export function TradingShell() {
     return () => {
       mounted = false;
     };
-  }, [setAccount, setTradingCfg]);
+  }, [setAccount, setTradingCfg, setRiskCfg, setTrades]);
 
   // Persist autoMode to backend whenever it changes (top-bar switch)
   const toggleAutoMode = useCallback(
@@ -147,11 +180,12 @@ export function TradingShell() {
   );
 
   // Auto-trade scheduler: when autoMode is ON, fire /api/auto-trade/tick every 90s
+  // C2: skip ticks when tab is hidden
   useEffect(() => {
     if (!tradingCfg.autoMode) return;
     let cancelled = false;
     const runTick = async () => {
-      if (cancelled) return;
+      if (cancelled || !isVisibleRef.current) return; // C2: skip when backgrounded
       try {
         const res = await fetch("/api/auto-trade/tick", { method: "POST" });
         const data = await res.json();
@@ -165,7 +199,6 @@ export function TradingShell() {
         /* ignore — next tick will retry */
       }
     };
-    // Fire one immediately, then every 90s
     runTick();
     const id = setInterval(runTick, 90_000);
     return () => {
@@ -174,11 +207,13 @@ export function TradingShell() {
     };
   }, [tradingCfg.autoMode, pushToast]);
 
-  // Trailing-stop poller: every 5s, run trailing pass when there are open trades
+  // M14: use a stable selector that returns a number (avoids re-render on
+  // every quote tick — the filter only runs when trades array reference changes)
   const openTradeCount = useStore((s) => s.trades.filter((t) => t.status === "OPEN").length);
   useEffect(() => {
     if (openTradeCount === 0) return;
     const id = setInterval(async () => {
+      if (!isVisibleRef.current) return; // C2: skip when backgrounded
       try {
         await fetch("/api/trade/trail", { method: "POST" });
       } catch {
@@ -188,10 +223,12 @@ export function TradingShell() {
     return () => clearInterval(id);
   }, [openTradeCount]);
 
+  // C1: reactive totalPnl — depends on trades (not just quotes)
   const totalPnl = useMemo(() => {
-    const trades = useStore.getState().trades.filter((t) => t.status === "OPEN");
-    return trades.reduce((s, t) => s + (t.pnl || 0), 0);
-  }, [quotes]);
+    return trades
+      .filter((t) => t.status === "OPEN")
+      .reduce((s, t) => s + (t.pnl || 0), 0);
+  }, [trades, quotes]); // quotes dep keeps live P&L estimate fresh
 
   const connectMt5 = useCallback(async () => {
     // Navigate the user to Settings → Broker/MT5 to enter credentials.
@@ -220,7 +257,7 @@ export function TradingShell() {
             </div>
           </div>
 
-          <nav className="flex-1 space-y-1 overflow-y-auto p-3 scroll-thin">
+          <nav className="flex-1 space-y-1 overflow-y-auto p-3 scroll-thin" aria-label="Section navigation">
             {NAV.map((item) => {
               const Icon = item.icon;
               const active = section === item.key;
@@ -228,6 +265,7 @@ export function TradingShell() {
                 <button
                   key={item.key}
                   onClick={() => setSection(item.key)}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
                     "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                     active
@@ -235,7 +273,7 @@ export function TradingShell() {
                       : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                   )}
                 >
-                  <Icon className="h-4 w-4" />
+                  <Icon className="size-4" />
                   {item.label}
                 </button>
               );
@@ -303,7 +341,7 @@ export function TradingShell() {
               </div>
 
               <div className="text-right">
-                <div className="tnum text-sm font-semibold tabular-nums">
+                <div className="tnum text-sm font-semibold">
                   {clock.toLocaleTimeString("id-ID", { hour12: false })}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
@@ -336,16 +374,16 @@ export function TradingShell() {
                 variant="ghost"
                 size="icon"
                 onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-                aria-label="Toggle theme"
+                aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
               >
-                <Sun className="h-4 w-4 dark:hidden" />
-                <Moon className="hidden h-4 w-4 dark:block" />
+                <Sun className="size-4 dark:hidden" />
+                <Moon className="hidden size-4 dark:block" />
               </Button>
             </div>
           </header>
 
           {/* Mobile nav */}
-          <div className="flex gap-1 overflow-x-auto border-b border-border px-2 py-1.5 md:hidden scroll-thin">
+          <div className="flex gap-1 overflow-x-auto border-b border-border px-2 py-1.5 md:hidden scroll-thin" aria-label="Section navigation">
             {NAV.map((item) => {
               const Icon = item.icon;
               const active = section === item.key;
@@ -353,12 +391,13 @@ export function TradingShell() {
                 <button
                   key={item.key}
                   onClick={() => setSection(item.key)}
+                  aria-current={active ? "page" : undefined}
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium",
                     active ? "bg-primary/15 text-primary" : "text-muted-foreground",
                   )}
                 >
-                  <Icon className="h-3.5 w-3.5" />
+                  <Icon className="size-3.5" />
                   {item.label}
                 </button>
               );
@@ -389,7 +428,7 @@ export function TradingShell() {
                 <span className="hidden sm:inline">FINEX Indonesia · Leverage 1:500</span>
               </div>
               <div className="flex items-center gap-3">
-                <LiveDot active label="Market feed simulated" />
+                <LiveDot label="Market feed simulated" />
                 <span className="hidden sm:inline">Risk warning: trading forex berisiko tinggi</span>
               </div>
             </div>

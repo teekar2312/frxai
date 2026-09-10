@@ -109,6 +109,25 @@ export function TradingSection() {
   const [placing, setPlacing] = useState(false);
   const [closing, setClosing] = useState<string | null>(null);
 
+  // Persist autoMode to backend (same as top-bar switch — starts 90s scheduler)
+  const handleToggleAutoMode = useCallback(async (v: boolean) => {
+    setTradingCfg({ autoMode: v });
+    try {
+      await fetch("/api/config/trading", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoMode: v }),
+      });
+      toast.success(v ? "AI Auto-Trade AKTIF" : "AI Auto-Trade OFF", {
+        description: v
+          ? "Scheduler berjalan tiap 90s: analisa AI + eksekusi sinyal + trailing stop."
+          : "Auto-trade dihentikan. Posisi terbuka tetap dipantau.",
+      });
+    } catch {
+      toast.error("Gagal mengubah auto-trade mode");
+    }
+  }, [setTradingCfg]);
+
   // Fetch risk config on mount (use for SL bounds & rrRatio)
   useEffect(() => {
     let mounted = true;
@@ -295,7 +314,7 @@ export function TradingSection() {
               <span className="text-xs font-medium text-violet-400">AI Auto Trade</span>
               <Switch
                 checked={tradingCfg.autoMode}
-                onCheckedChange={(v) => setTradingCfg({ autoMode: v })}
+                onCheckedChange={handleToggleAutoMode}
               />
             </div>
           </div>

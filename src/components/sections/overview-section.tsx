@@ -97,10 +97,31 @@ export function OverviewSection() {
   const [logs, setLogs] = useState<LogRow[]>([]);
   const [closing, setClosing] = useState<string | null>(null);
 
-  // Generate equity curve once on mount (and when balance materially changes)
+  const openTrades = useMemo(
+    () => trades.filter((t) => t.status === "OPEN"),
+    [trades],
+  );
+
+  const dayPnl = useMemo(
+    () => openTrades.reduce((sum, t) => sum + livePnl(t, quotes).pnl, 0),
+    [openTrades, quotes],
+  );
+
+  // M1: equity curve reflects live P&L from open trades (not just balance)
+  const liveEquity = useMemo(
+    () => account.balance + dayPnl,
+    [account.balance, dayPnl],
+  );
+
+  // Generate equity curve on mount; update last point when live equity changes
   useEffect(() => {
-    setCurve(equityCurve(60, account.balance));
-  }, [account.balance]);
+    setCurve((prev) => {
+      if (prev.length === 0) return equityCurve(60, liveEquity);
+      const next = [...prev];
+      next[next.length - 1] = { t: Date.now(), v: +liveEquity.toFixed(2) };
+      return next;
+    });
+  }, [liveEquity]);
 
   // Tick sessions every second
   useEffect(() => {
@@ -128,16 +149,6 @@ export function OverviewSection() {
       mounted = false;
     };
   }, [setTrades]);
-
-  const openTrades = useMemo(
-    () => trades.filter((t) => t.status === "OPEN"),
-    [trades],
-  );
-
-  const dayPnl = useMemo(
-    () => openTrades.reduce((sum, t) => sum + livePnl(t, quotes).pnl, 0),
-    [openTrades, quotes],
-  );
 
   const handleClose = useCallback(
     async (id: string) => {
@@ -265,17 +276,17 @@ export function OverviewSection() {
               >
                 <defs>
                   <linearGradient id="eqGradient" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#34d399" stopOpacity={0.4} />
-                    <stop offset="100%" stopColor="#34d399" stopOpacity={0} />
+                    <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.4} />
+                    <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid
                   strokeDasharray="3 3"
-                  stroke="rgba(255,255,255,0.06)"
+                  stroke="var(--border)"
                 />
                 <XAxis
                   dataKey="t"
-                  tick={{ fontSize: 10, fill: "oklch(0.7 0.015 155)" }}
+                  tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
                   tickFormatter={(t) =>
                     new Date(t).toLocaleTimeString("id-ID", {
                       hour: "2-digit",
@@ -283,20 +294,21 @@ export function OverviewSection() {
                     })
                   }
                   minTickGap={40}
-                  stroke="rgba(255,255,255,0.1)"
+                  stroke="var(--border)"
                 />
                 <YAxis
-                  tick={{ fontSize: 10, fill: "oklch(0.7 0.015 155)" }}
+                  tick={{ fontSize: 10, fill: "var(--muted-foreground)" }}
                   tickFormatter={(v) => `$${(Number(v) / 1000).toFixed(1)}k`}
                   width={50}
-                  stroke="rgba(255,255,255,0.1)"
+                  stroke="var(--border)"
                 />
                 <Tooltip
                   contentStyle={{
-                    background: "oklch(0.205 0.014 165)",
-                    border: "1px solid rgba(255,255,255,0.1)",
+                    background: "var(--popover)",
+                    border: "1px solid var(--border)",
                     borderRadius: 8,
                     fontSize: 12,
+                    color: "var(--popover-foreground)",
                   }}
                   labelFormatter={(t) =>
                     new Date(Number(t)).toLocaleString("id-ID")
@@ -306,7 +318,7 @@ export function OverviewSection() {
                 <Area
                   type="monotone"
                   dataKey="v"
-                  stroke="#34d399"
+                  stroke="var(--chart-1)"
                   strokeWidth={2}
                   fill="url(#eqGradient)"
                 />

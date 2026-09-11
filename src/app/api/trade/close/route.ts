@@ -11,6 +11,9 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const { id } = (await req.json()) as { id: string };
 
+  // H1 FIX: ensure daily reset before processing close
+  await ensureAccountWithDailyReset();
+
   // P0-H3: Wrap the entire close in a transaction to prevent race conditions
   try {
     const result = await db.$transaction(async (tx) => {
@@ -48,18 +51,30 @@ export async function POST(req: Request) {
       // DailyLoss: atomic increment if loss (as % of balance)
       const dailyLossIncrement = pnl < 0 ? (Math.abs(pnl) / acc.balance) * 100 : 0;
 
-      // P2-M4: compute equity = balance + pnl (other open trades' floating PnL
-      // will be reflected on next quote tick; close-time equity = new balance)
-      await tx.account.update({
+      // P2-M4 + H3: update balance/equity/margin + recompute marginLevel
+      const updatedAcc = await tx.account.update({
         where: { id: acc.id },
         data: {
           balance: { increment: pnl },
-          equity: { increment: pnl }, // equity tracks balance change
+          equity: { increment: pnl },
           margin: { decrement: marginToRelease },
           freeMargin: { increment: marginToRelease },
-          dailyLossUsed: { increment: dailyLossIncrement }, // atomic
+          dailyLossUsed: { increment: dailyLossIncrement },
         },
       });
+      // H3: recompute marginLevel
+      const ml = updatedAcc.margin > 0 ? (updatedAcc.equity / updatedAcc.margin) * 100 : 0;
+      if (updatedAcc.margin > 0) {
+        await tx.account.update({
+          where: { id: acc.id },
+          data: { marginLevel: ml },
+        });
+      } else {
+        await tx.account.update({
+          where: { id: acc.id },
+          data: { marginLevel: 0 },
+        });
+      }
 
       return { trade: updated, pnl, pips, closePrice };
     });

@@ -379,13 +379,99 @@ export async function runTrailingStopPass(): Promise<{ updated: number; details:
       if (candidate < t.stopLoss) newSL = candidate;
     }
     if (newSL !== t.stopLoss) {
-      await db.trade.update({ where: { id: t.id }, data: { stopLoss: newSL } });
+      // M5 FIX: guard against CLOSED trades (re-check status before update)
+      await db.trade.updateMany({
+        where: { id: t.id, status: "OPEN" },
+        data: { stopLoss: newSL },
+      });
       details.push({ ticket: t.ticket, symbol: t.symbol, oldSL: t.stopLoss, newSL });
       updated++;
       await log("TRADE", "TRAILING", `Trailing SL ${t.symbol} ${t.side}: ${t.stopLoss} → ${newSL} (ticket ${t.ticket})`);
     }
   }
   return { updated, details };
+}
+
+/**
+ * M1: SL/TP hit detection — auto-close trades when stop loss or take profit
+ * is breached by current price. Called from /api/trade/trail (5s poller).
+ */
+export async function runStopCheck(): Promise<{ checked: number; closed: number }> {
+  const openTrades = await db.trade.findMany({ where: { status: "OPEN" } });
+  let closed = 0;
+
+  for (const t of openTrades) {
+    if (!t.stopLoss && !t.takeProfit) continue;
+    const meta = PAIRS.find((p) => p.symbol === t.symbol);
+    if (!meta) continue;
+    const quote = getQuote(t.symbol as Pair);
+
+    let shouldClose = false;
+    let closePrice = 0;
+    let reason = "";
+
+    if (t.side === "BUY") {
+      if (t.stopLoss && quote.bid <= t.stopLoss) {
+        shouldClose = true;
+        closePrice = t.stopLoss;
+        reason = "SL hit";
+      } else if (t.takeProfit && quote.bid >= t.takeProfit) {
+        shouldClose = true;
+        closePrice = t.takeProfit;
+        reason = "TP hit";
+      }
+    } else {
+      if (t.stopLoss && quote.ask >= t.stopLoss) {
+        shouldClose = true;
+        closePrice = t.stopLoss;
+        reason = "SL hit";
+      } else if (t.takeProfit && quote.ask <= t.takeProfit) {
+        shouldClose = true;
+        closePrice = t.takeProfit;
+        reason = "TP hit";
+      }
+    }
+
+    if (shouldClose) {
+      // Close the trade
+      const pipsRaw =
+        t.side === "BUY"
+          ? (closePrice - t.openPrice) / meta.pipSize
+          : (t.openPrice - closePrice) / meta.pipSize;
+      const pips = +pipsRaw.toFixed(1);
+      const pv = pipValuePerLot(t.symbol as Pair, t.openPrice);
+      const pnl = +(pips * pv * t.lotSize).toFixed(2);
+
+      await db.trade.update({
+        where: { id: t.id },
+        data: { status: "CLOSED", closePrice, pnl, pips, closedAt: new Date() },
+      });
+
+      // Release margin + update balance
+      const marginToRelease = t.marginUsed || (t.lotSize * 100000 * t.openPrice) / 500;
+      const acc = await db.account.findFirst();
+      if (acc) {
+        const dailyLossInc = pnl < 0 ? (Math.abs(pnl) / acc.balance) * 100 : 0;
+        const updated = await db.account.update({
+          where: { id: acc.id },
+          data: {
+            balance: { increment: pnl },
+            equity: { increment: pnl },
+            margin: { decrement: marginToRelease },
+            freeMargin: { increment: marginToRelease },
+            dailyLossUsed: { increment: dailyLossInc },
+          },
+        });
+        const ml = updated.margin > 0 ? (updated.equity / updated.margin) * 100 : 0;
+        await db.account.update({ where: { id: acc.id }, data: { marginLevel: ml } });
+      }
+
+      closed++;
+      await log("TRADE", "STOP-CHECK", `${reason}: ${t.side} ${t.symbol} @ ${closePrice} | PnL ${pnl >= 0 ? "+" : ""}${pnl} (${pips}p)`, { ticket: t.ticket });
+    }
+  }
+
+  return { checked: openTrades.length, closed };
 }
 
 /**

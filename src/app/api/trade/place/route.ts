@@ -140,13 +140,19 @@ export async function POST(req: Request) {
         },
       });
 
-      // Atomic margin update
-      await tx.account.update({
+      // Atomic margin update + H3: recompute marginLevel
+      const updatedAcc = await tx.account.update({
         where: { id: acc.id },
         data: {
           margin: { increment: marginUsed },
           freeMargin: { decrement: marginUsed },
         },
+      });
+      // H3: recompute marginLevel = equity / margin × 100
+      const ml = updatedAcc.margin > 0 ? (updatedAcc.equity / updatedAcc.margin) * 100 : 0;
+      await tx.account.update({
+        where: { id: acc.id },
+        data: { marginLevel: ml },
       });
 
       return trade;

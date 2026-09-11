@@ -24,6 +24,7 @@ import { LiveDot } from "@/components/shared";
 import { activeSessions } from "@/lib/market";
 import { PAIRS } from "@/lib/constants";
 import type { Pair } from "@/lib/types";
+import { livePnl } from "@/lib/format";
 import dynamic from "next/dynamic";
 import { useTheme } from "next-themes";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -223,12 +224,32 @@ export function TradingShell() {
     return () => clearInterval(id);
   }, [openTradeCount]);
 
-  // C1: reactive totalPnl — depends on trades (not just quotes)
+  // H4: Global alert checker — runs every 10s regardless of which section is active
+  useEffect(() => {
+    const id = setInterval(async () => {
+      if (!isVisibleRef.current) return;
+      try {
+        const res = await fetch("/api/alerts/check", { method: "POST" });
+        const data = await res.json();
+        if (data?.price?.triggered > 0 || data?.news?.matched > 0) {
+          pushToast({
+            title: data.price.triggered > 0 ? "Price Alert Triggered" : "News Alert Matched",
+            description: `${data.price.triggered + data.news.matched} alert(s) fired.`,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 10_000);
+    return () => clearInterval(id);
+  }, [pushToast]);
+
+  // C1 FIX: use livePnl() to compute real floating P&L from current quotes
   const totalPnl = useMemo(() => {
     return trades
       .filter((t) => t.status === "OPEN")
-      .reduce((s, t) => s + (t.pnl || 0), 0);
-  }, [trades, quotes]); // quotes dep keeps live P&L estimate fresh
+      .reduce((s, t) => s + livePnl(t, quotes).pnl, 0);
+  }, [trades, quotes]);
 
   const connectMt5 = useCallback(async () => {
     // Navigate the user to Settings → Broker/MT5 to enter credentials.

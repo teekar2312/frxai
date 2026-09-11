@@ -559,7 +559,19 @@ export function TradingSection() {
             actions={
               <Switch
                 checked={tradingCfg.trailingAuto}
-                onCheckedChange={(v) => setTradingCfg({ trailingAuto: v })}
+                onCheckedChange={async (v) => {
+                  setTradingCfg({ trailingAuto: v });
+                  try {
+                    await fetch("/api/config/trading", {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ trailingAuto: v }),
+                    });
+                    toast.success(v ? "Trailing Stop Otomatis AKTIF" : "Trailing Stop Otomatis OFF");
+                  } catch {
+                    toast.error("Gagal mengubah trailing stop mode");
+                  }
+                }}
               />
             }
           >

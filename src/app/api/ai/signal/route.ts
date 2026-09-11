@@ -1,31 +1,35 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { analyzeMarket } from "@/lib/ai";
-import { log } from "@/lib/server-config";
+import { getConfig, log } from "@/lib/server-config";
 import { executeSignalAsTrade } from "@/lib/auto-trade";
-import type { Pair, Side } from "@/lib/types";
+import type { Pair, RiskConfig, Side } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 interface SignalBody {
   symbol: Pair;
-  /** When true (default), a strong signal auto-executes a Trade. Set false for "preview only". */
   autoExecute?: boolean;
 }
 
-// Generate a concrete trading signal from the AI analysis.
-// When the signal is strong (confidence >= 55%, non-NEUTRAL) AND autoExecute is
-// true, the signal is immediately converted into an OPEN Trade (source="AI")
-// and the Signal row is marked EXECUTED.
 export async function POST(req: Request) {
   const { symbol, autoExecute = true } = (await req.json()) as SignalBody;
   if (!symbol) return NextResponse.json({ error: "symbol required" }, { status: 400 });
 
+  // Read configurable confidence threshold from risk config
+  const risk = await getConfig<RiskConfig>("risk", {
+    riskPerTrade: 1, stopLossPipsMin: 5, stopLossPipsMax: 15,
+    rrRatio: 1.5, maxOpenPositions: 3, dailyLossLimit: 3,
+    avoidHighImpactNews: true, dailyTarget: 2, autoMode: false,
+    aiConfidenceThreshold: 55,
+  });
+  const threshold = risk.aiConfidenceThreshold ?? 55;
+
   const analysis = await analyzeMarket(symbol);
 
   // Weak / neutral signal -> skip
-  if (analysis.signal === "NEUTRAL" || analysis.confidence < 55) {
+  if (analysis.signal === "NEUTRAL" || analysis.confidence < threshold) {
     await db.signal.create({
       data: {
         symbol,
@@ -39,10 +43,10 @@ export async function POST(req: Request) {
         status: "SKIPPED",
       },
     });
-    await log("AI", "SIGNAL", `AI signal ${symbol} skipped: ${analysis.signal} @ ${analysis.confidence}% (below threshold)`);
+    await log("AI", "SIGNAL", `AI signal ${symbol} skipped: ${analysis.signal} @ ${analysis.confidence}% (below threshold ${threshold}%)`);
     return NextResponse.json({
       signal: null,
-      reason: `Confidence ${analysis.confidence}% di bawah threshold 55% atau sinyal NEUTRAL. Tidak ada eksekusi.`,
+      reason: `Confidence ${analysis.confidence}% di bawah threshold ${threshold}% atau sinyal NEUTRAL. Tidak ada eksekusi.`,
       analysis,
     });
   }
@@ -74,7 +78,6 @@ export async function POST(req: Request) {
     reason: analysis.summary,
   };
 
-  // Auto-execute: convert the strong signal into a real Trade
   if (autoExecute) {
     const { trade, reason } = await executeSignalAsTrade(
       symbol,
@@ -94,6 +97,5 @@ export async function POST(req: Request) {
     });
   }
 
-  // autoExecute=false -> signal stays PENDING (preview mode)
   return NextResponse.json({ signal: signalOut, trade: null, analysis });
 }

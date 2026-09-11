@@ -410,6 +410,39 @@ export function RiskSection() {
         </Panel>
       </div>
 
+      {/* AI Confidence Threshold */}
+      <Panel
+        title="AI Confidence Threshold"
+        description="Bat minimum confidence AI untuk eksekusi trade otomatis"
+      >
+        <div className="space-y-3">
+          <div className="flex items-end justify-between">
+            <span className="text-3xl font-semibold tnum text-violet-400">
+              {cfg.aiConfidenceThreshold ?? 55}%
+            </span>
+            <span className="text-xs text-muted-foreground">
+              minimum confidence
+            </span>
+          </div>
+          <Slider
+            value={[cfg.aiConfidenceThreshold ?? 55]}
+            min={0}
+            max={100}
+            step={5}
+            onValueChange={(v) => update({ aiConfidenceThreshold: v[0] })}
+          />
+          <div className="flex justify-between text-[10px] text-muted-foreground tnum">
+            <span>0% (semua sinyal)</span>
+            <span>55% (default)</span>
+            <span>100% (hanya sangat yakin)</span>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Sinyal AI dengan confidence di bawah threshold ini akan di-skip (tidak dieksekusi sebagai trade).
+            Turunkan untuk lebih agresif (lebih banyak trade), naikkan untuk lebih konservatif (hanya sinyal yakin).
+          </p>
+        </div>
+      </Panel>
+
       {/* Avoid High-Impact News */}
       <Panel
         title="Pengaturan Tambahan"

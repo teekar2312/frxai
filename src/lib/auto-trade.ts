@@ -231,8 +231,17 @@ export async function runAutoTradeCycle(): Promise<AutoTradeResult> {
   const analysis = await analyzeMarket(pair);
   await log("AI", "AUTO-TRADE", `Auto-tick analyzed ${pair}: ${analysis.signal} @ ${analysis.confidence}%`);
 
+  // Read configurable confidence threshold
+  const risk = await getConfig<RiskConfig>("risk", {
+    riskPerTrade: 1, stopLossPipsMin: 5, stopLossPipsMax: 15,
+    rrRatio: 1.5, maxOpenPositions: 3, dailyLossLimit: 3,
+    avoidHighImpactNews: true, dailyTarget: 2, autoMode: false,
+    aiConfidenceThreshold: 55,
+  });
+  const threshold = risk.aiConfidenceThreshold ?? 55;
+
   // Weak signal -> skip
-  if (analysis.signal === "NEUTRAL" || analysis.confidence < 55) {
+  if (analysis.signal === "NEUTRAL" || analysis.confidence < threshold) {
     await db.signal.create({
       data: {
         symbol: pair,

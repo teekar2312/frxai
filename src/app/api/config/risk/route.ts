@@ -15,6 +15,7 @@ const DEFAULT: RiskConfig = {
   avoidHighImpactNews: true,
   dailyTarget: 2,
   autoMode: false,
+  aiConfidenceThreshold: 55,
 };
 
 // H2: Server-side validation clamps
@@ -60,6 +61,9 @@ function clampRiskConfig(body: Partial<RiskConfig>, current: RiskConfig): RiskCo
   }
   if (typeof body.autoMode === "boolean") {
     next.autoMode = body.autoMode;
+  }
+  if (typeof body.aiConfidenceThreshold === "number") {
+    next.aiConfidenceThreshold = Math.min(Math.max(body.aiConfidenceThreshold, 0), 100);
   }
   return next;
 }

@@ -113,6 +113,7 @@ const defaultRiskCfg: RiskConfig = {
   avoidHighImpactNews: true,
   dailyTarget: 2,
   autoMode: false,
+  aiConfidenceThreshold: 55,
 };
 
 const defaultApiKeys: ApiKeys = {

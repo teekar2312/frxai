@@ -177,6 +177,7 @@ export interface RiskConfig {
   avoidHighImpactNews: boolean;
   dailyTarget: number; // %
   autoMode: boolean;
+  aiConfidenceThreshold: number; // minimum confidence % for AI signal execution
 }
 
 export interface TradingConfig {

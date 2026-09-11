@@ -163,7 +163,7 @@ export interface IndicatorState {
   enabled: boolean;
   autoMode: boolean;
   params: Record<string, number>;
-  category: string;
+  category: "trend" | "momentum" | "volatility" | "volume" | "channel";
 }
 
 export interface RiskConfig {

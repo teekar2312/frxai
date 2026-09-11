@@ -391,22 +391,31 @@ export async function autoSelectIndicators(): Promise<{ changed: number; enabled
   });
   if (!cfg.indicatorAuto) return { changed: 0, enabled: [] };
 
+  // C2/H1: Only auto-manage indicators where autoMode===true (respect user choice).
+  // Indicators with autoMode===false are left untouched (user manually configured).
   const all = await db.indicatorConfig.findMany();
   let changed = 0;
+  const enabledList: string[] = [];
   for (const ind of all) {
+    if (!ind.autoMode) {
+      // User opted out of auto-management — keep their manual config
+      if (ind.enabled) enabledList.push(ind.name);
+      continue;
+    }
     const shouldBeEnabled = SCALPING_SUBSET.includes(ind.name);
+    if (shouldBeEnabled) enabledList.push(ind.name);
     if (ind.enabled !== shouldBeEnabled) {
       await db.indicatorConfig.update({
         where: { id: ind.id },
-        data: { enabled: shouldBeEnabled, autoMode: true },
+        data: { enabled: shouldBeEnabled },
       });
       changed++;
     }
   }
   if (changed > 0) {
-    await log("AI", "INDICATOR-AUTO", `Auto-selected ${SCALPING_SUBSET.length} scalping indicators (${SCALPING_SUBSET.join(", ")}), ${changed} changed`);
+    await log("AI", "INDICATOR-AUTO", `Auto-selected scalping subset (${SCALPING_SUBSET.join(", ")}), ${changed} changed. Indicators with autoMode=false were skipped.`);
   }
-  return { changed, enabled: SCALPING_SUBSET };
+  return { changed, enabled: enabledList };
 }
 
 /**

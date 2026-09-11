@@ -215,13 +215,16 @@ export function SettingsSection() {
   };
 
   // H1: optimistic rollback + M3: key-presence check
+  // FIX: check apiKeys (stored, has hasPassword-like flag via mask) not keyDraft (masked)
   const handleActiveProvider = async (provider: ApiKeys["activeProvider"]) => {
     if (provider !== "zai") {
-      // M3: check that the selected provider has a key
-      const keyVal = keyDraft[provider as keyof ApiKeys] as string;
-      if (!keyVal || keyVal.includes("•")) {
+      // Check if a key exists for this provider.
+      // apiKeys (from store) has masked values like "gsk_••••2345" — if it's
+      // non-empty (even masked), a key IS stored. Only block if truly empty.
+      const storedVal = apiKeys[provider as keyof ApiKeys] as string;
+      if (!storedVal) {
         toast.error(`API key untuk ${provider} belum diisi`, {
-          description: `Isi key ${provider} di bawah, simpan, lalu aktifkan provider.`,
+          description: `Isi key ${provider} di bawah, klik Simpan Keys, lalu aktifkan provider.`,
         });
         return;
       }

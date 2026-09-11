@@ -9,16 +9,20 @@ const VALID_LEVELS = ["INFO", "WARN", "ERROR", "TRADE", "AI"];
 const MAX_ROWS = 10000;
 const RETENTION_DAYS = 30;
 
-// C1: Auto-cleanup old logs on every GET (lightweight, runs ~once per request)
+// V2-M1: Rate-limit cleanup to once per 10 minutes
+let lastCleanupAt = 0;
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+
 async function cleanupOldLogs() {
+  const now = Date.now();
+  if (now - lastCleanupAt < CLEANUP_INTERVAL_MS) return; // rate-limited
+  lastCleanupAt = now;
   try {
-    const cutoff = new Date(Date.now() - RETENTION_DAYS * 86400000);
+    const cutoff = new Date(now - RETENTION_DAYS * 86400000);
     await db.log.deleteMany({ where: { createdAt: { lt: cutoff } } });
-    // Also cap total rows
     const count = await db.log.count();
     if (count > MAX_ROWS) {
       const excess = count - MAX_ROWS;
-      // Delete oldest excess rows
       const oldest = await db.log.findMany({
         orderBy: { createdAt: "asc" },
         take: excess,
@@ -29,7 +33,7 @@ async function cleanupOldLogs() {
       }
     }
   } catch {
-    // ignore cleanup errors — don't block the GET
+    // ignore cleanup errors
   }
 }
 
@@ -39,13 +43,13 @@ export async function GET(req: Request) {
   const source = url.searchParams.get("source");
   const search = url.searchParams.get("q");
   const limit = Math.min(500, Math.max(1, Number(url.searchParams.get("limit") ?? 200)));
-  const cursor = url.searchParams.get("cursor"); // L7: pagination cursor (createdAt)
-  const format = url.searchParams.get("format"); // H5: export
+  const cursor = url.searchParams.get("cursor"); // pagination: older logs
+  const since = url.searchParams.get("since"); // V2-H4: newer logs only (for polling)
+  const format = url.searchParams.get("format");
 
-  // L7: validate level
   const validLevel = level && level !== "ALL" && VALID_LEVELS.includes(level) ? level : undefined;
 
-  // Run cleanup (C1) — non-blocking
+  // V2-M1: Rate-limited cleanup
   cleanupOldLogs().catch(() => {});
 
   const where: any = {};
@@ -58,7 +62,10 @@ export async function GET(req: Request) {
       { meta: { contains: search, mode: "insensitive" } },
     ];
   }
-  if (cursor) {
+  // V2-H4: `since` for polling (newer than), `cursor` for pagination (older than)
+  if (since) {
+    where.createdAt = { gt: new Date(since) };
+  } else if (cursor) {
     where.createdAt = { lt: new Date(cursor) };
   }
 
@@ -101,7 +108,6 @@ export async function GET(req: Request) {
     });
   }
 
-  // L2: include true DB total
   const total = await db.log.count();
 
   return NextResponse.json({
@@ -120,7 +126,11 @@ export async function DELETE(req: Request) {
 
   const where: any = {};
   if (level && VALID_LEVELS.includes(level)) where.level = level;
-  if (before) where.createdAt = { lt: new Date(before) };
+  // V2-L8: validate `before` is a valid date
+  if (before) {
+    const parsed = new Date(before);
+    if (!isNaN(parsed.getTime())) where.createdAt = { lt: parsed };
+  }
 
   const result = await db.log.deleteMany({ where });
   await log("INFO", "SYSTEM", `Logs cleared: ${result.count} entries deleted${level ? ` (level=${level})` : ""}`);

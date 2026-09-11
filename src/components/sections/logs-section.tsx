@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   Select,
@@ -69,7 +68,6 @@ const LEVEL_TONE: Record<LogRow["level"], "default" | "warn" | "down" | "up" | "
   AI: "accent",
 };
 
-// M2: timestamp shows date + time
 function timeFmt(iso: string): string {
   try {
     const d = new Date(iso);
@@ -93,18 +91,21 @@ export function LogsSection() {
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const lastFetchRef = useRef<string | null>(null);
+  const [pollFailures, setPollFailures] = useState(0); // V2-M8: track consecutive failures
+  const latestLogTsRef = useRef<string | null>(null); // V2-H4: track newest log for `since` param
 
-  // C3: merge new logs (dedupe by id) instead of replacing
+  // V2-C1 FIX: mergeLogs uses useStore.getState() — no `logs` in deps
   const mergeLogs = useCallback((newLogs: LogRow[]) => {
     const existing = useStore.getState().logs;
     const existingIds = new Set(existing.map((l) => l.id));
     const fresh = newLogs.filter((l) => !existingIds.has(l.id));
     if (fresh.length > 0) {
       setLogs([...fresh, ...existing].slice(0, 500));
+      latestLogTsRef.current = fresh[0].createdAt; // newest log
     }
   }, [setLogs]);
 
+  // V2-C1 FIX: fetchLogs does NOT depend on `logs` — uses useStore.getState() for append
   const fetchLogs = useCallback(
     async (lvl: Level, src: string, append = false) => {
       if (!append) setLoading(true);
@@ -119,18 +120,20 @@ export function LogsSection() {
         const data = await res.json();
 
         if (append) {
-          // H1: append older logs
-          setLogs([...logs, ...data.logs].slice(0, 500));
+          // V2-H5 FIX: use useStore.getState() instead of stale closure `logs`
+          const current = useStore.getState().logs;
+          const currentIds = new Set(current.map((l) => l.id));
+          const newOnes = (data.logs as LogRow[]).filter((l) => !currentIds.has(l.id));
+          setLogs([...current, ...newOnes].slice(0, 500));
         } else {
-          // C3: merge (dedupe by id)
+          setLogs(data.logs);
           if (data.logs.length > 0) {
-            setLogs(data.logs);
+            latestLogTsRef.current = data.logs[0].createdAt;
           }
         }
         setDbTotal(data.total ?? 0);
         setHasMore(data.hasMore ?? false);
         setNextCursor(data.nextCursor ?? null);
-        lastFetchRef.current = data.logs[0]?.createdAt ?? null;
       } catch {
         toast.error("Gagal memuat log");
       } finally {
@@ -138,47 +141,56 @@ export function LogsSection() {
         setLoadingMore(false);
       }
     },
-    [setLogs, nextCursor, logs],
+    [setLogs, nextCursor], // V2-C1 FIX: removed `logs` from deps
   );
 
-  // Initial fetch — always fetch ALL (M4: client-side filter, no re-fetch on level toggle)
+  // Initial fetch — V2-C1 FIX: stable deps, no re-fetch loop
   useEffect(() => {
     fetchLogs("ALL", "ALL");
   }, [fetchLogs]);
 
-  // C2: real-time polling — prepend new logs every 5s when autoRefresh is ON
+  // V2-H4 FIX: real-time polling uses `since` param to fetch ONLY new logs
   useEffect(() => {
     if (!autoRefresh) return;
     const id = setInterval(async () => {
       if (document.hidden) return;
       try {
-        // Fetch only logs newer than the latest we have
-        const latest = useStore.getState().logs[0];
-        const params = new URLSearchParams({ limit: "50" });
-        if (latest) params.set("cursor", latest.createdAt);
-        // Actually we need NEWER logs, not older. The API returns descending
-        // so we fetch without cursor and merge new ones.
-        const res = await fetch(`/api/logs?limit=50`);
-        if (!res.ok) return;
+        const since = latestLogTsRef.current;
+        const params = new URLSearchParams({ limit: "100" });
+        if (since) params.set("since", since);
+        const res = await fetch(`/api/logs?${params}`);
+        if (!res.ok) throw new Error("poll failed");
         const data = await res.json();
+        // V2-M2 FIX: always update dbTotal
+        setDbTotal(data.total ?? 0);
         if (data.logs && data.logs.length > 0) {
           mergeLogs(data.logs);
-          setDbTotal(data.total ?? dbTotal);
         }
+        setPollFailures(0); // reset on success
       } catch {
-        /* ignore — next poll will retry */
+        setPollFailures((n) => n + 1); // V2-M8: track failures
       }
     }, 5000);
     return () => clearInterval(id);
-  }, [autoRefresh, mergeLogs, dbTotal]);
+  }, [autoRefresh, mergeLogs]);
 
-  // Live clock
+  // Live clock (runs regardless of autoRefresh)
   useEffect(() => {
     const id = setInterval(() => setLiveClock(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  // M4: client-side filtering (no re-fetch on level/source/search change)
+  // V2-M7: immediate fetch on resume
+  const handleToggleAutoRefresh = () => {
+    const newVal = !autoRefresh;
+    setAutoRefresh(newVal);
+    if (newVal) {
+      // Immediate fetch on resume
+      fetchLogs("ALL", "ALL");
+    }
+  };
+
+  // Client-side filtering
   const filtered = useMemo(() => {
     return logs.filter((l) => {
       if (level !== "ALL" && l.level !== level) return false;
@@ -205,7 +217,6 @@ export function LogsSection() {
     return c;
   }, [logs, dbTotal]);
 
-  // Get unique sources from fetched logs for the source filter
   const sources = useMemo(() => {
     const set = new Set(logs.map((l) => l.source));
     return Array.from(set).sort();
@@ -218,7 +229,7 @@ export function LogsSection() {
     toast.success("Filter dibersihkan");
   };
 
-  // H4: Clear all logs
+  // V2-H6 FIX: reset hasMore/nextCursor on clear
   const handleClearLogs = async () => {
     try {
       const res = await fetch("/api/logs", { method: "DELETE" });
@@ -227,29 +238,36 @@ export function LogsSection() {
       toast.success("Log dibersihkan", { description: `${data.deleted} entri dihapus.` });
       setLogs([]);
       setDbTotal(0);
+      setHasMore(false);
+      setNextCursor(null);
+      latestLogTsRef.current = null;
     } catch {
       toast.error("Gagal menghapus log");
     }
   };
 
-  // H5: Export
   const handleExport = (format: "csv" | "json") => {
     const params = new URLSearchParams({ format, limit: "500" });
     if (level !== "ALL") params.set("level", level);
     if (source !== "ALL") params.set("source", source);
+    if (search) params.set("q", search); // V2-L2: include search in export
     window.open(`/api/logs?${params}`, "_blank");
   };
 
-  // L6: copy to clipboard
-  const handleCopy = (l: LogRow) => {
+  const handleCopy = async (l: LogRow) => {
     const text = `[${l.createdAt}] ${l.level} ${l.source}: ${l.message}${l.meta ? ` | ${l.meta}` : ""}`;
-    navigator.clipboard.writeText(text);
-    toast.success("Log disalin");
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Log disalin");
+    } catch {
+      toast.error("Gagal menyalin");
+    }
   };
 
+  // V2-H1 FIX: pass current filter to Load More
   const handleLoadMore = () => {
     setLoadingMore(true);
-    fetchLogs("ALL", "ALL", true);
+    fetchLogs(level, source, true);
   };
 
   return (
@@ -263,11 +281,17 @@ export function LogsSection() {
             <Button
               size="sm"
               variant={autoRefresh ? "outline" : "ghost"}
-              onClick={() => setAutoRefresh(!autoRefresh)}
+              onClick={handleToggleAutoRefresh}
             >
               {autoRefresh ? <span className="size-2 rounded-full bg-emerald-500 live-dot" /> : <span className="size-2 rounded-full bg-muted-foreground/40" />}
               {autoRefresh ? "Live" : "Paused"}
             </Button>
+            {/* V2-M8: show disconnected indicator after 3+ consecutive failures */}
+            {pollFailures >= 3 && autoRefresh && (
+              <span className="flex items-center gap-1 text-xs text-rose-400">
+                <AlertTriangle className="size-3" /> Koneksi terputus
+              </span>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -281,7 +305,6 @@ export function LogsSection() {
               <Eraser className="size-3.5" />
               Reset Filter
             </Button>
-            {/* H5: Export */}
             <div className="flex items-center gap-1">
               <Button size="sm" variant="ghost" onClick={() => handleExport("csv")}>
                 <Download className="size-3.5" /> CSV
@@ -290,7 +313,6 @@ export function LogsSection() {
                 <Download className="size-3.5" /> JSON
               </Button>
             </div>
-            {/* H4: Clear logs with confirm */}
             <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button size="sm" variant="ghost" className="text-rose-400 hover:text-rose-300">
@@ -316,7 +338,6 @@ export function LogsSection() {
         }
       />
 
-      {/* Stats — L2: show true DB total */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <StatCard label="Total Log (DB)" value={dbTotal} icon={<Info className="size-4" />} />
         <StatCard label="Errors" value={counts.error} tone="down" icon={<AlertTriangle className="size-4" />} />
@@ -324,7 +345,6 @@ export function LogsSection() {
         <StatCard label="AI Events" value={counts.ai} tone="accent" icon={<Bot className="size-4" />} />
       </div>
 
-      {/* Filter bar */}
       <Panel title="Filter">
         <div className="flex flex-wrap items-center gap-3">
           <ToggleGroup
@@ -341,7 +361,6 @@ export function LogsSection() {
               </ToggleGroupItem>
             ))}
           </ToggleGroup>
-          {/* H3: Source filter */}
           <Select value={source} onValueChange={setSource}>
             <SelectTrigger size="sm" className="w-[150px]">
               <SelectValue placeholder="Source" />
@@ -366,7 +385,6 @@ export function LogsSection() {
         </div>
       </Panel>
 
-      {/* Log entries */}
       <Panel
         title="Log Entries"
         description={`${filtered.length} dari ${logs.length} fetched (DB: ${dbTotal})`}
@@ -378,7 +396,8 @@ export function LogsSection() {
         }
         bodyClassName="p-0"
       >
-        <div className="max-h-[32rem] overflow-y-auto scroll-thin bg-background/40 font-mono" role="log" aria-live="polite">
+        {/* V2-M4 FIX: removed aria-live to prevent screen-reader spam */}
+        <div className="max-h-[32rem] overflow-y-auto scroll-thin bg-background/40 font-mono" role="log">
           {loading ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="size-5 animate-spin text-muted-foreground" />
@@ -396,7 +415,6 @@ export function LogsSection() {
                   <LogRowItem key={l.id} log={l} onCopy={() => handleCopy(l)} />
                 ))}
               </ul>
-              {/* H1: Load more */}
               {hasMore && (
                 <div className="border-t border-border p-3 text-center">
                   <Button size="sm" variant="ghost" onClick={handleLoadMore} disabled={loadingMore}>
@@ -413,9 +431,18 @@ export function LogsSection() {
   );
 }
 
-// M5: expandable meta + M6: truncated message + L6: copy button
+// V2-H3 FIX: try/catch on JSON.parse for meta
 function LogRowItem({ log, onCopy }: { log: LogRow; onCopy: () => void }) {
   const [expanded, setExpanded] = useState(false);
+
+  const formatMeta = (meta: string): string => {
+    if (!expanded) return meta;
+    try {
+      return JSON.stringify(JSON.parse(meta), null, 2);
+    } catch {
+      return meta; // V2-H3: fallback to raw if not valid JSON
+    }
+  };
 
   return (
     <li className="group flex items-start gap-3 px-4 py-2 text-xs transition-colors hover:bg-card/40">
@@ -435,11 +462,13 @@ function LogRowItem({ log, onCopy }: { log: LogRow; onCopy: () => void }) {
         {log.meta && (
           <button
             onClick={() => setExpanded(!expanded)}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Sembunyikan detail" : "Tampilkan detail"}
             className="ml-2 inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground"
           >
             {expanded ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
             <span className={expanded ? "block whitespace-pre-wrap" : "truncate"}>
-              {expanded ? JSON.stringify(JSON.parse(log.meta), null, 2) : log.meta}
+              {formatMeta(log.meta)}
             </span>
           </button>
         )}

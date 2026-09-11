@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
-import { ensureAccount, getConfig, log } from "@/lib/server-config";
+import { ensureAccountWithDailyReset, getConfig, log } from "@/lib/server-config";
 import { PAIRS } from "@/lib/constants";
 import { getQuote } from "@/lib/market";
+import { marginRequired } from "@/lib/trade-math";
 import type { Pair, RiskConfig, Side, TradingConfig, TradeRow } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,8 @@ export async function POST(req: Request) {
   const meta = PAIRS.find((p) => p.symbol === body.symbol);
   if (!meta) return NextResponse.json({ error: "Invalid symbol" }, { status: 400 });
 
-  const acc = await ensureAccount();
+  // P0-C2: ensure daily reset before checking limits
+  const acc = await ensureAccountWithDailyReset();
   const risk = await getConfig<RiskConfig>("risk", {
     riskPerTrade: 1,
     stopLossPipsMin: 5,
@@ -47,7 +49,7 @@ export async function POST(req: Request) {
     riskAuto: false,
   });
 
-  // Weekend gate (applies to manual trades too)
+  // Weekend gate
   const now = new Date();
   if (trading.avoidWeekends && (now.getUTCDay() === 0 || now.getUTCDay() === 6)) {
     await log("WARN", "RISK", `Trade rejected: weekend (avoidWeekends active)`);
@@ -57,7 +59,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // Session gate (applies to manual trades too)
+  // Session gate
   if (trading.sessions.length > 0) {
     const h = now.getUTCHours();
     const inRange = (a: number, b: number) => (a < b ? h >= a && h < b : h >= a || h < b);
@@ -78,15 +80,15 @@ export async function POST(req: Request) {
     }
   }
 
-  // Enforce max open positions
-  const openCount = await db.trade.count({ where: { status: "OPEN" } });
-  if (openCount >= risk.maxOpenPositions) {
-    await log("WARN", "RISK", `Trade rejected: max open positions (${risk.maxOpenPositions}) reached`);
-    return NextResponse.json(
-      { error: `Maksimal ${risk.maxOpenPositions} posisi terbuka tercapai` },
-      { status: 400 },
-    );
-  }
+  // P1-M1: Server-side validation — clamp lot & SL to safe bounds
+  const lotSize = Math.min(Math.max(body.lotSize ?? 0.01, 0.01), 50); // broker min 0.01, max 50
+  const slPips = Math.min(
+    Math.max(body.stopLossPips ?? risk.stopLossPipsMin, risk.stopLossPipsMin),
+    risk.stopLossPipsMax,
+  );
+  const tpPips = body.takeProfitPips
+    ? Math.min(Math.max(body.takeProfitPips ?? slPips * risk.rrRatio, slPips), slPips * 5)
+    : +(slPips * risk.rrRatio).toFixed(1);
 
   // Daily loss limit (anti-MC)
   if (acc.dailyLossUsed >= risk.dailyLossLimit) {
@@ -99,63 +101,91 @@ export async function POST(req: Request) {
 
   const quote = getQuote(body.symbol);
   const openPrice = body.side === "BUY" ? quote.ask : quote.bid;
-  const slPips = body.stopLossPips ?? Math.min(Math.max(risk.stopLossPipsMin, 8), risk.stopLossPipsMax);
-  const tpPips = body.takeProfitPips ?? +(slPips * risk.rrRatio).toFixed(1);
 
   const slAbs = body.side === "BUY" ? openPrice - slPips * meta.pipSize : openPrice + slPips * meta.pipSize;
   const tpAbs = body.side === "BUY" ? openPrice + tpPips * meta.pipSize : openPrice - tpPips * meta.pipSize;
 
-  const ticket = `${Date.now().toString().slice(-9)}`;
-  const trade = await db.trade.create({
-    data: {
-      ticket,
-      symbol: body.symbol,
-      side: body.side,
-      lotSize: body.lotSize,
-      openPrice,
-      stopLoss: slAbs,
-      takeProfit: tpAbs,
-      trailingStop: !!body.trailingStop,
-      trailingPips: body.trailingPips ?? null,
-      slPips,
-      tpPips,
-      status: "OPEN",
-      source: body.source ?? "MANUAL",
-      strategy: body.strategy ?? null,
-    },
-  });
+  // P0-C1: correct margin using contractSize per pair
+  const marginUsed = marginRequired(body.symbol, lotSize, openPrice, 500);
 
-  // Update margin (rough estimate: notional / leverage)
-  const notional = body.lotSize * 100000 * openPrice; // for XXXUSD-style
-  const marginUsed = notional / 500; // 1:500
-  await db.account.update({
-    where: { id: acc.id },
-    data: { margin: { increment: marginUsed }, freeMargin: { decrement: marginUsed } },
-  });
+  const ticket = `${Date.now().toString().slice(-9)}${Math.floor(Math.random() * 9)}`;
 
-  await log("TRADE", "MT5", `OPEN ${body.side} ${body.symbol} ${body.lotSize} lot @ ${openPrice} | SL ${slPips}p TP ${tpPips}p`, { ticket });
+  // P0-H3: Wrap count-check + create + margin-update in a transaction
+  // to prevent race conditions (double-click, auto-tick + manual)
+  try {
+    const result = await db.$transaction(async (tx) => {
+      // Re-check open positions INSIDE the transaction (serializable)
+      const openCount = await tx.trade.count({ where: { status: "OPEN" } });
+      if (openCount >= risk.maxOpenPositions) {
+        throw new Error("MAX_POSITIONS");
+      }
 
-  const row: TradeRow = {
-    id: trade.id,
-    ticket: trade.ticket,
-    symbol: trade.symbol as Pair,
-    side: trade.side as Side,
-    lotSize: trade.lotSize,
-    openPrice: trade.openPrice,
-    closePrice: trade.closePrice,
-    stopLoss: trade.stopLoss,
-    takeProfit: trade.takeProfit,
-    trailingStop: trade.trailingStop,
-    trailingPips: trade.trailingPips,
-    slPips: trade.slPips,
-    tpPips: trade.tpPips,
-    pnl: trade.pnl,
-    pips: trade.pips,
-    status: trade.status as "OPEN" | "CLOSED",
-    source: trade.source as "MANUAL" | "AI",
-    strategy: trade.strategy,
-    openedAt: trade.openedAt.toISOString(),
-    closedAt: trade.closedAt?.toISOString() ?? null,
-  };
-  return NextResponse.json({ trade: row, ok: true });
+      const trade = await tx.trade.create({
+        data: {
+          ticket,
+          symbol: body.symbol,
+          side: body.side,
+          lotSize,
+          openPrice,
+          stopLoss: slAbs,
+          takeProfit: tpAbs,
+          trailingStop: !!body.trailingStop,
+          trailingPips: body.trailingPips ?? null,
+          slPips,
+          tpPips,
+          marginUsed, // P0-C1: store margin at open
+          status: "OPEN",
+          source: body.source ?? "MANUAL",
+          strategy: body.strategy ?? null,
+        },
+      });
+
+      // Atomic margin update
+      await tx.account.update({
+        where: { id: acc.id },
+        data: {
+          margin: { increment: marginUsed },
+          freeMargin: { decrement: marginUsed },
+        },
+      });
+
+      return trade;
+    });
+
+    await log("TRADE", "MT5", `OPEN ${body.side} ${body.symbol} ${lotSize} lot @ ${openPrice} | SL ${slPips}p TP ${tpPips}p | margin $${marginUsed.toFixed(2)}`, { ticket });
+
+    const row: TradeRow = {
+      id: result.id,
+      ticket: result.ticket,
+      symbol: result.symbol as Pair,
+      side: result.side as Side,
+      lotSize: result.lotSize,
+      openPrice: result.openPrice,
+      closePrice: result.closePrice,
+      stopLoss: result.stopLoss,
+      takeProfit: result.takeProfit,
+      trailingStop: result.trailingStop,
+      trailingPips: result.trailingPips,
+      slPips: result.slPips,
+      tpPips: result.tpPips,
+      pnl: result.pnl,
+      pips: result.pips,
+      status: result.status as "OPEN" | "CLOSED",
+      source: result.source as "MANUAL" | "AI",
+      strategy: result.strategy,
+      openedAt: result.openedAt.toISOString(),
+      closedAt: result.closedAt?.toISOString() ?? null,
+    };
+    return NextResponse.json({ trade: row, ok: true });
+  } catch (e: any) {
+    if (e?.message === "MAX_POSITIONS") {
+      await log("WARN", "RISK", `Trade rejected: max open positions (${risk.maxOpenPositions}) reached`);
+      return NextResponse.json(
+        { error: `Maksimal ${risk.maxOpenPositions} posisi terbuka tercapai` },
+        { status: 400 },
+      );
+    }
+    await log("ERROR", "TRADE", `Place order failed: ${e?.message ?? e}`);
+    return NextResponse.json({ error: "Gagal menempatkan order" }, { status: 500 });
+  }
 }

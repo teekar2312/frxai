@@ -1,5 +1,6 @@
 import "server-only";
 import { db } from "./db";
+import { shouldResetDaily } from "./trade-math";
 
 // Generic JSON config store backed by the Configuration table.
 export async function getConfig<T>(key: string, fallback: T): Promise<T> {
@@ -34,6 +35,23 @@ export async function ensureAccount() {
         dailyLossLimit: 3,
       },
     });
+  }
+  return acc;
+}
+
+/**
+ * P0-C2: Reset dailyLossUsed to 0 if the UTC day has changed since last reset.
+ * Called before every place/close/tick. Returns the (possibly reset) account.
+ */
+export async function ensureAccountWithDailyReset() {
+  const acc = await ensureAccount();
+  if (shouldResetDaily(acc.lastDailyResetAt)) {
+    const updated = await db.account.update({
+      where: { id: acc.id },
+      data: { dailyLossUsed: 0, lastDailyResetAt: new Date() },
+    });
+    await log("INFO", "RISK", `Daily loss counter reset (was ${acc.dailyLossUsed.toFixed(2)}%)`);
+    return updated;
   }
   return acc;
 }

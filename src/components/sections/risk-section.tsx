@@ -45,7 +45,11 @@ import { cn } from "@/lib/utils";
 const fmtUsd = (v: number) =>
   `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const pipValuePerLot = (_s: Pair) => 10; // $10/pip/lot for all pairs (FX & XAUUSD)
+const pipValuePerLot = (s: Pair, price?: number) => {
+  const m = PAIRS.find((p) => p.symbol === s)!;
+  if (s === "USDJPY" && price) return (m.pipSize * m.contractSize) / price;
+  return m.pipSize * m.contractSize;
+};
 
 interface LotCalc {
   balance: number;
@@ -135,7 +139,7 @@ export function RiskSection() {
   // Lot calculator results
   const calcResults = useMemo(() => {
     const riskUsd = calc.balance * (calc.riskPct / 100);
-    const pv = pipValuePerLot(calc.symbol);
+    const pv = pipValuePerLot(calc.symbol, PAIRS.find((p) => p.symbol === calc.symbol)?.basePrice);
     const lot = calc.slPips > 0 ? riskUsd / (calc.slPips * pv) : 0;
     const rewardUsd = riskUsd * cfg.rrRatio;
     return {

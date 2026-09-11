@@ -23,9 +23,19 @@ export function fmtPrice(s: Pair, v: number | null | undefined): string {
   return v.toFixed(pairMeta(s).digits);
 }
 
-/** Pip value per 1.0 lot in USD = $10 for all pairs (FX & XAUUSD) */
-export function pipValuePerLot(_s: Pair): number {
-  return 10;
+/**
+ * P2-M3: Per-pair pip value in USD per 1.0 lot.
+ * - EURUSD/GBPUSD: 0.0001 × 100000 = $10/pip/lot
+ * - XAUUSD: 0.1 × 100 = $10/pip/lot
+ * - USDJPY: 0.01 × 100000 / price ≈ $6.37/pip/lot at 157
+ *   (1 pip = 0.01 JPY; 100000 × 0.01 = 1000 JPY; ÷ price = USD)
+ */
+export function pipValuePerLot(s: Pair, price?: number): number {
+  const meta = pairMeta(s);
+  if (s === "USDJPY" && price) {
+    return (meta.pipSize * meta.contractSize) / price;
+  }
+  return meta.pipSize * meta.contractSize;
 }
 
 /** Compute live P&L for an open trade given current quotes */
@@ -45,6 +55,8 @@ export function livePnl(
       ? (currentPrice - trade.openPrice) / meta.pipSize
       : (trade.openPrice - currentPrice) / meta.pipSize;
   const pips = +pipsRaw.toFixed(1);
-  const pnl = +(pips * pipValuePerLot(trade.symbol) * trade.lotSize).toFixed(2);
+  // P2-M3: use per-pair pip value (USDJPY computed from openPrice)
+  const pv = pipValuePerLot(trade.symbol, trade.openPrice);
+  const pnl = +(pips * pv * trade.lotSize).toFixed(2);
   return { pips, pnl };
 }

@@ -58,7 +58,11 @@ const fmtUsd = (v: number) =>
 const meta = (s: Pair) => PAIRS.find((p) => p.symbol === s)!;
 const fmtPrice = (s: Pair, v: number | null | undefined) =>
   v == null ? "—" : v.toFixed(meta(s).digits);
-const pipValue = (_s: Pair) => 10; // $10/pip/lot for all pairs (FX & XAUUSD)
+const pipValue = (s: Pair, price?: number) => {
+  const meta = PAIRS.find((p) => p.symbol === s)!;
+  if (s === "USDJPY" && price) return (meta.pipSize * meta.contractSize) / price;
+  return meta.pipSize * meta.contractSize;
+};
 
 function livePnl(trade: TradeRow, quotes: Record<Pair, Quote>) {
   const q = quotes[trade.symbol];
@@ -69,7 +73,7 @@ function livePnl(trade: TradeRow, quotes: Record<Pair, Quote>) {
       ? (q.bid - trade.openPrice) / m.pipSize
       : (trade.openPrice - q.ask) / m.pipSize;
   const pips = +pipsRaw.toFixed(1);
-  const pnl = +(pips * pipValue(trade.symbol) * trade.lotSize).toFixed(2);
+  const pnl = +(pips * pipValue(trade.symbol, trade.openPrice) * trade.lotSize).toFixed(2);
   return { pips, pnl };
 }
 

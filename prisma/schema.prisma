@@ -38,6 +38,7 @@ model Account {
   mt5Connected  Boolean  @default(false)
   dailyLossUsed Float    @default(0)
   dailyLossLimit Float   @default(3) // % of balance
+  lastDailyResetAt DateTime? // P0-C2: track when dailyLossUsed was last reset
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -59,6 +60,7 @@ model Trade {
   tpPips       Float?
   pnl          Float    @default(0)
   pips         Float    @default(0)
+  marginUsed   Float    @default(0) // P0-C1: store margin at open, release exactly at close
   status       String   @default("OPEN") // OPEN | CLOSED
   source       String   @default("MANUAL") // MANUAL | AI
   strategy     String?

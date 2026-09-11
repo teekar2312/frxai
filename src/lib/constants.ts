@@ -1,10 +1,10 @@
 import type { IndicatorDef, Pair, Session, Timeframe } from "./types";
 
-export const PAIRS: { symbol: Pair; label: string; pipSize: number; digits: number; basePrice: number }[] = [
-  { symbol: "EURUSD", label: "Euro / US Dollar", pipSize: 0.0001, digits: 5, basePrice: 1.0855 },
-  { symbol: "USDJPY", label: "US Dollar / Japanese Yen", pipSize: 0.01, digits: 3, basePrice: 157.42 },
-  { symbol: "GBPUSD", label: "Pound / US Dollar", pipSize: 0.0001, digits: 5, basePrice: 1.2715 },
-  { symbol: "XAUUSD", label: "Gold / US Dollar", pipSize: 0.1, digits: 2, basePrice: 2338.5 },
+export const PAIRS: { symbol: Pair; label: string; pipSize: number; digits: number; basePrice: number; contractSize: number }[] = [
+  { symbol: "EURUSD", label: "Euro / US Dollar", pipSize: 0.0001, digits: 5, basePrice: 1.0855, contractSize: 100000 },
+  { symbol: "USDJPY", label: "US Dollar / Japanese Yen", pipSize: 0.01, digits: 3, basePrice: 157.42, contractSize: 100000 },
+  { symbol: "GBPUSD", label: "Pound / US Dollar", pipSize: 0.0001, digits: 5, basePrice: 1.2715, contractSize: 100000 },
+  { symbol: "XAUUSD", label: "Gold / US Dollar", pipSize: 0.1, digits: 2, basePrice: 2338.5, contractSize: 100 },
 ];
 
 export const TIMEFRAMES: { value: Timeframe; label: string; minutes: number }[] = [

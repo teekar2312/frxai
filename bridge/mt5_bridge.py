@@ -114,14 +114,41 @@ def update_trade_ticket(dashboard_ticket: str, mt5_ticket: int, open_price: floa
 
 
 def mark_trade_closed(mt5_ticket: int, close_price: float, pnl: float) -> None:
-    """Tandai Trade sebagai CLOSED ketika posisi hilang dari MT5."""
+    """Tandai Trade sebagai CLOSED ketika posisi hilang dari MT5.
+    P0-H2: Also update Account.balance + dailyLossUsed so broker-side closes
+    (SL/TP hit) are reflected in the Anti-MC tracking."""
     with db() as c:
+        # Get the trade's reserved margin to release
+        row = c.execute(
+            "SELECT lotSize, openPrice, symbol, marginUsed FROM Trade "
+            "WHERE ticket=? AND status='OPEN'",
+            (str(mt5_ticket),),
+        ).fetchone()
+        if row is None:
+            return  # already closed or not found
+
         c.execute(
             "UPDATE Trade SET status='CLOSED', closePrice=?, pnl=?, closedAt=? "
             "WHERE ticket=? AND status='OPEN'",
             (close_price, pnl, datetime.now(timezone.utc).isoformat(), str(mt5_ticket)),
         )
+
+        # Release margin + update balance + dailyLossUsed
+        acc = c.execute("SELECT balance, margin, freeMargin, dailyLossUsed FROM Account LIMIT 1").fetchone()
+        if acc:
+            margin_to_release = row["marginUsed"] if row["marginUsed"] else (row["lotSize"] * 100000 * row["openPrice"]) / 500
+            new_balance = acc["balance"] + pnl
+            new_margin = max(0, acc["margin"] - margin_to_release)
+            new_free_margin = acc["freeMargin"] + margin_to_release
+            # Increment dailyLossUsed if this was a losing trade
+            daily_loss_inc = (abs(pnl) / acc["balance"] * 100) if pnl < 0 and acc["balance"] > 0 else 0
+            new_daily_loss = acc["dailyLossUsed"] + daily_loss_inc
+            c.execute(
+                "UPDATE Account SET balance=?, equity=?, margin=?, freeMargin=?, dailyLossUsed=? WHERE id=1",
+                (new_balance, new_balance, new_margin, new_free_margin, new_daily_loss),
+            )
         c.commit()
+        log.info(f"Broker-side close: ticket={mt5_ticket} PnL={pnl} dailyLossUsed now {new_daily_loss:.2f}%")
 
 
 # -------------------------- Helper: dashboard API --------------------------

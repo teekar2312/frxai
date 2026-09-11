@@ -1,9 +1,10 @@
 import "server-only";
 import { db } from "./db";
-import { ensureAccount, getConfig, log, setConfig } from "./server-config";
+import { ensureAccountWithDailyReset, getConfig, log, setConfig } from "./server-config";
 import { analyzeMarket } from "./ai";
 import { PAIRS } from "./constants";
 import { getQuote } from "./market";
+import { marginRequired, pipValuePerLot } from "./trade-math";
 import type { Pair, RiskConfig, Side, TradingConfig, TradeRow } from "./types";
 
 // Default scalping indicator subset used when indicatorAuto is ON.
@@ -35,7 +36,7 @@ export async function executeSignalAsTrade(
   signalId?: string,
 ): Promise<{ trade: TradeRow | null; reason: string }> {
   const meta = PAIRS.find((p) => p.symbol === symbol)!;
-  const acc = await ensureAccount();
+  const acc = await ensureAccountWithDailyReset();
   const risk = await getConfig<RiskConfig>("risk", {
     riskPerTrade: 1,
     stopLossPipsMin: 5,
@@ -48,12 +49,7 @@ export async function executeSignalAsTrade(
     autoMode: false,
   });
 
-  // Pre-trade guards
-  const openCount = await db.trade.count({ where: { status: "OPEN" } });
-  if (openCount >= risk.maxOpenPositions) {
-    if (signalId) await db.signal.update({ where: { id: signalId }, data: { status: "SKIPPED" } });
-    return { trade: null, reason: `Maksimal ${risk.maxOpenPositions} posisi terbuka tercapai.` };
-  }
+  // Pre-trade guard: daily loss (checked early, outside tx)
   if (acc.dailyLossUsed >= risk.dailyLossLimit) {
     if (signalId) await db.signal.update({ where: { id: signalId }, data: { status: "SKIPPED" } });
     return { trade: null, reason: `Daily risk limit ${risk.dailyLossLimit}% tercapai (Anti-MC).` };
@@ -74,14 +70,10 @@ export async function executeSignalAsTrade(
   const slAbs = side === "BUY" ? openPrice - slPips * meta.pipSize : openPrice + slPips * meta.pipSize;
   const tpAbs = side === "BUY" ? openPrice + tpPips * meta.pipSize : openPrice - tpPips * meta.pipSize;
 
-  // Lot size from risk.
-  // pipValuePerLot = $ per pip per 1.0 standard lot:
-  //   - FX pairs (EURUSD/GBPUSD/USDJPY): 1 lot = 100,000 units, pipSize × 100,000 ≈ $10/pip
-  //   - XAUUSD: 1 lot = 100 oz, pipSize = 0.1, so 1 pip = $0.1 × 100 oz = $10/pip
-  // All pairs → $10/pip/lot. (Previous code had XAUUSD=1 which was 10x too small.)
-  const pipValuePerLot = 10;
+  // P2-M3: per-pair pip value (USDJPY computed correctly from price)
+  const pvPerLot = pipValuePerLot(symbol, openPrice);
   const riskAmount = (acc.balance * risk.riskPerTrade) / 100;
-  const lotSize = Math.max(0.01, +(riskAmount / (slPips * pipValuePerLot)).toFixed(2));
+  const lotSize = Math.max(0.01, Math.min(+(riskAmount / (slPips * pvPerLot)).toFixed(2), 50));
 
   // Enable trailing stop on AI trades when trailingAuto is ON
   const cfg = await getConfig<TradingConfig>("trading", {
@@ -92,47 +84,65 @@ export async function executeSignalAsTrade(
   const useTrailing = cfg.trailingAuto;
   const trailingPipsVal = useTrailing ? slPips : null;
 
+  // P0-C1: correct margin using contractSize per pair
+  const marginUsed = marginRequired(symbol, lotSize, openPrice, 500);
   const ticket = `${Date.now().toString().slice(-9)}${Math.floor(Math.random() * 9)}`;
-  const trade = await db.trade.create({
-    data: {
-      ticket,
-      symbol,
-      side,
-      lotSize,
-      openPrice,
-      stopLoss: slAbs,
-      takeProfit: tpAbs,
-      trailingStop: useTrailing,
-      trailingPips: trailingPipsVal,
-      slPips,
-      tpPips,
-      status: "OPEN",
-      source: "AI",
-      strategy: `AI Auto Signal (${confidence}%)`,
-    },
-  });
 
-  // P3-12: reconcile Signal row with ACTUAL executed values (not LLM's raw suggestions)
+  // P0-H3: Wrap count-check + create + margin-update in a transaction
+  let trade;
+  try {
+    trade = await db.$transaction(async (tx) => {
+      const openCount = await tx.trade.count({ where: { status: "OPEN" } });
+      if (openCount >= risk.maxOpenPositions) {
+        throw new Error("MAX_POSITIONS");
+      }
+      const t = await tx.trade.create({
+        data: {
+          ticket,
+          symbol,
+          side,
+          lotSize,
+          openPrice,
+          stopLoss: slAbs,
+          takeProfit: tpAbs,
+          trailingStop: useTrailing,
+          trailingPips: trailingPipsVal,
+          slPips,
+          tpPips,
+          marginUsed,
+          status: "OPEN",
+          source: "AI",
+          strategy: `AI Auto Signal (${confidence}%)`,
+        },
+      });
+      await tx.account.update({
+        where: { id: acc.id },
+        data: { margin: { increment: marginUsed }, freeMargin: { decrement: marginUsed } },
+      });
+      return t;
+    });
+  } catch (e: any) {
+    if (e?.message === "MAX_POSITIONS") {
+      if (signalId) await db.signal.update({ where: { id: signalId }, data: { status: "SKIPPED" } });
+      return { trade: null, reason: `Maksimal ${risk.maxOpenPositions} posisi terbuka tercapai.` };
+    }
+    throw e;
+  }
+
+  // P3-12: reconcile Signal row with ACTUAL executed values
   if (signalId) {
     await db.signal.update({
       where: { id: signalId },
       data: {
         status: "EXECUTED",
-        entry: openPrice,        // actual fill price
-        stopLoss: slAbs,         // actual SL
-        takeProfit: tpAbs,       // actual TP
+        entry: openPrice,
+        stopLoss: slAbs,
+        takeProfit: tpAbs,
       },
     });
   }
 
-  const notional = lotSize * 100000 * openPrice;
-  const marginUsed = notional / 500;
-  await db.account.update({
-    where: { id: acc.id },
-    data: { margin: { increment: marginUsed }, freeMargin: { decrement: marginUsed } },
-  });
-
-  await log("TRADE", "AUTO-TRADE", `AI AUTO-EXECUTE ${side} ${symbol} ${lotSize} lot @ ${openPrice} | SL ${slPips}p TP ${tpPips}p | conf ${confidence}%`, { ticket });
+  await log("TRADE", "AUTO-TRADE", `AI AUTO-EXECUTE ${side} ${symbol} ${lotSize} lot @ ${openPrice} | SL ${slPips}p TP ${tpPips}p | conf ${confidence}% | margin $${marginUsed.toFixed(2)}`, { ticket });
 
   const tradeRow: TradeRow = {
     id: trade.id,
@@ -333,13 +343,12 @@ export async function runTrailingStopPass(): Promise<{ updated: number; details:
     riskAuto: false,
   });
 
-  // If trailingAuto is off, only trail trades that have per-trade trailingStop=true
+  // H1: Fix dead trailingAuto branch.
+  // When trailingAuto is ON → trail ALL open trades (regardless of per-trade flag).
+  // When trailingAuto is OFF → only trail trades with per-trade trailingStop=true.
   const where = cfg.trailingAuto
-    ? { status: "OPEN" as const, trailingStop: true }
+    ? { status: "OPEN" as const }
     : { status: "OPEN" as const, trailingStop: true };
-  // (both branches filter trailingStop=true; trailingAuto gates whether the feature is available at all,
-  //  but per-trade trailingStop must always be true to trail. If trailingAuto is on, the UI auto-enables
-  //  trailingStop on new AI trades — see executeSignalAsTrade. For now both require trailingStop=true.)
 
   const trades = await db.trade.findMany({ where });
   const details: { ticket: string; symbol: string; oldSL: number; newSL: number }[] = [];

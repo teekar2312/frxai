@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -58,7 +58,11 @@ const fmtUsd = (v: number) =>
 const meta = (s: Pair) => PAIRS.find((p) => p.symbol === s)!;
 const fmtPrice = (s: Pair, v: number | null | undefined) =>
   v == null ? "—" : v.toFixed(meta(s).digits);
-const pipValue = (_s: Pair) => 10; // $10/pip/lot for all pairs (FX & XAUUSD)
+const pipValue = (s: Pair, price?: number) => {
+  const m = meta(s);
+  if (s === "USDJPY" && price) return (m.pipSize * m.contractSize) / price;
+  return m.pipSize * m.contractSize;
+};
 
 function livePnl(trade: TradeRow, quotes: Record<Pair, Quote>) {
   if (trade.status === "CLOSED")
@@ -71,7 +75,7 @@ function livePnl(trade: TradeRow, quotes: Record<Pair, Quote>) {
       ? (q.bid - trade.openPrice) / m.pipSize
       : (trade.openPrice - q.ask) / m.pipSize;
   const pips = +pipsRaw.toFixed(1);
-  const pnl = +(pips * pipValue(trade.symbol) * trade.lotSize).toFixed(2);
+  const pnl = +(pips * pipValue(trade.symbol, trade.openPrice) * trade.lotSize).toFixed(2);
   return { pips, pnl };
 }
 
@@ -107,6 +111,7 @@ export function TradingSection() {
     trailingPips: 10,
   });
   const [placing, setPlacing] = useState(false);
+  const placingRef = useRef(false); // P1-M2: synchronous guard against double-click
   const [closing, setClosing] = useState<string | null>(null);
 
   // Persist autoMode to backend (same as top-bar switch — starts 90s scheduler)
@@ -211,12 +216,15 @@ export function TradingSection() {
   );
 
   const handlePlace = useCallback(async () => {
+    // P1-M2: synchronous ref guard prevents double-click within same tick
+    if (placingRef.current) return;
     if (!account.mt5Connected) {
       toast.error("MT5 belum terhubung", {
         description: "Sambungkan bridge MT5 sebelum menempatkan order.",
       });
       return;
     }
+    placingRef.current = true;
     setPlacing(true);
     try {
       const res = await fetch("/api/trade/place", {
@@ -253,6 +261,7 @@ export function TradingSection() {
         description: e instanceof Error ? e.message : undefined,
       });
     } finally {
+      placingRef.current = false;
       setPlacing(false);
     }
   }, [account.mt5Connected, form, upsertTrade, addLog]);

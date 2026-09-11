@@ -91,17 +91,19 @@ model IndicatorConfig {
 
 // Price + email alerts
 model Alert {
-  id        String   @id @default(cuid())
-  type      String   // PRICE | EMAIL | NEWS
-  symbol    String?
-  condition String?  // ABOVE | BELOW
-  price     Float?
-  message   String?
-  email     String?
-  active    Boolean  @default(true)
-  triggered Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id @default(cuid())
+  type            String   // PRICE | EMAIL | NEWS
+  symbol          String?
+  condition       String?  // ABOVE | BELOW
+  price           Float?
+  message         String?
+  email           String?
+  active          Boolean  @default(true)
+  triggered       Boolean  @default(false)
+  lastTriggeredAt DateTime? // H4: cooldown tracking
+  triggerCount    Int      @default(0) // L8: audit trail
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 // System / error / trade logs

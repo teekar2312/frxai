@@ -64,10 +64,12 @@ async function chatViaZai(messages: ChatMessage[], opts: { thinking?: boolean })
 }
 
 // Provider configurations: endpoint, model, and which ApiKeys field holds the key
+// Model names verified as of 2025-09. If a model is deprecated, the fallback
+// to Z.ai ensures the system still works.
 const PROVIDER_CONFIG: Record<string, { url: string; model: string; keyField: keyof ApiKeys; label: string }> = {
   groq: {
     url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "llama-3.3-70b-versatile",
+    model: "llama-3.1-8b-instant", // fast, always-available model
     keyField: "groq",
     label: "Groq",
   },

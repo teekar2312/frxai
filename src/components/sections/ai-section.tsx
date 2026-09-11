@@ -136,7 +136,7 @@ export function AiSection() {
   const [chatSending, setChatSending] = useState(false);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // fetch active provider on mount
+  // fetch active provider on mount + load saved analyses from DB
   useEffect(() => {
     fetch("/api/config/keys")
       .then((r) => r.json())
@@ -146,6 +146,20 @@ export function AiSection() {
         setProviderLabel(found ? found.label.split(" (")[0] : "Z.ai");
       })
       .catch(() => setProviderLabel("Z.ai"));
+
+    // Load latest analysis per pair from DB (survives refresh)
+    fetch("/api/ai/analyze")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.latestByPair) {
+          const loaded = d.latestByPair as Record<string, AiAnalysisResult>;
+          if (Object.keys(loaded).length > 0) {
+            setResults(loaded);
+            setLastTime(new Date());
+          }
+        }
+      })
+      .catch(() => { /* ignore — no saved analyses yet */ });
   }, []);
 
   useEffect(() => {

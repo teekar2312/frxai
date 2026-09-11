@@ -12,6 +12,7 @@ const DEFAULT: ApiKeys = {
   finnhub: "",
   marketaux: "",
   activeProvider: "zai",
+  customModel: "",
 };
 
 export async function GET() {

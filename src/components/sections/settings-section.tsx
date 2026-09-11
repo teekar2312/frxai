@@ -61,6 +61,24 @@ const PROVIDER_KEYS: { key: ProviderKey; label: string; hint: string }[] = [
   { key: "tinyfish", label: "Tinyfish.ai", hint: "Edge AI" },
 ];
 
+// Model lists for quick-select buttons (mirrors ai-providers.ts PROVIDER_CONFIG)
+const PROVIDER_MODEL_LIST: Record<string, string[]> = {
+  groq: [
+    "llama-3.1-8b-instant",
+    "llama3-8b-8192",
+    "llama3-70b-8192",
+    "gemma2-9b-it",
+    "deepseek-r1-distill-llama-70b",
+  ],
+  openai: ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
+  together: [
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+    "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
+  ],
+  tinyfish: ["llama-3.3-70b", "llama-3.1-70b"],
+};
+
 function toggleInArray<T>(arr: T[], item: T): T[] {
   return arr.includes(item) ? arr.filter((x) => x !== item) : [...arr, item];
 }
@@ -261,8 +279,14 @@ export function SettingsSection() {
       for (const k of Object.keys(keyDraft) as (keyof ApiKeys)[]) {
         const v = keyDraft[k];
         if (typeof v === "string") {
-          // Only send if it's a real new value (not masked, not empty)
-          if (v && !v.includes("•")) {
+          // customModel: always send (even empty, to clear it)
+          if (k === "customModel") {
+            if (!v.includes("•")) {
+              (payload as any)[k] = v;
+              changedCount++;
+            }
+          } else if (v && !v.includes("•")) {
+            // Other keys: only send if non-empty and not masked
             (payload as any)[k] = v;
             changedCount++;
           }
@@ -739,6 +763,65 @@ export function SettingsSection() {
                 );
               })}
             </RadioGroup>
+          </Panel>
+
+          {/* Custom Model Selection */}
+          <Panel
+            title="Model AI"
+            description="Pilih model manual atau biarkan kosong untuk auto-fallback"
+          >
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="custom-model" className="text-xs">
+                  Custom Model Name (opsional)
+                </Label>
+                <Input
+                  id="custom-model"
+                  type="text"
+                  value={keyDraft.customModel ?? ""}
+                  onChange={(e) => handleKeyChange("customModel" as keyof ApiKeys, e.target.value)}
+                  placeholder="cth: llama-3.1-8b-instant, gpt-4o, deepseek-r1-distill-llama-70b"
+                  className="font-mono text-xs"
+                  autoComplete="off"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Isi nama model spesifik untuk provider aktif. Jika kosong, sistem mencoba daftar model fallback otomatis.
+                  Cek model yang tersedia di dokumentasi provider (Groq: console.groq.com/docs/models).
+                </p>
+              </div>
+
+              {/* Show available models for the active provider */}
+              {apiKeys.activeProvider !== "zai" && (
+                <div className="rounded-lg border border-border bg-muted/20 p-3">
+                  <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Model fallback untuk {AI_PROVIDERS.find((p) => p.key === apiKeys.activeProvider)?.label ?? apiKeys.activeProvider}:
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {PROVIDER_MODEL_LIST[apiKeys.activeProvider]?.map((m: string) => (
+                      <button
+                        key={m}
+                        onClick={() => handleKeyChange("customModel" as keyof ApiKeys, m)}
+                        className="rounded-md border border-border bg-card px-2 py-1 text-[10px] font-mono hover:bg-accent hover:text-accent-foreground"
+                      >
+                        {m}
+                      </button>
+                    )) ?? []}
+                  </div>
+                </div>
+              )}
+
+              {/* Quick-set buttons for common models */}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs"
+                  onClick={() => handleKeyChange("customModel" as keyof ApiKeys, "")}
+                >
+                  Auto (fallback list)
+                </Button>
+              </div>
+            </div>
           </Panel>
 
           <Panel

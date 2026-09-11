@@ -113,9 +113,14 @@ async function chatViaOpenAICompatible(
   const apiKey = keys[cfg.keyField] as string;
   if (!apiKey) throw new Error(`No API key for ${cfg.label}`);
 
-  // Try each model in order — if one returns 404 model_not_found, try the next
+  // Build model list: user's custom model FIRST, then fallback list
+  const modelsToTry = [
+    ...(keys.customModel ? [keys.customModel] : []), // user-specified model first
+    ...cfg.models, // fallback list
+  ];
+
   let lastError: any = null;
-  for (const model of cfg.models) {
+  for (const model of modelsToTry) {
     try {
       const res = await fetch(cfg.url, {
         method: "POST",

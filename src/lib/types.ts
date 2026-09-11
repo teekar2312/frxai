@@ -198,4 +198,5 @@ export interface ApiKeys {
   finnhub: string;
   marketaux: string;
   activeProvider: "groq" | "openai" | "together" | "tinyfish" | "zai";
+  customModel: string; // user-specified model name (overrides fallback list)
 }

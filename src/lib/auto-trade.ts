@@ -436,6 +436,9 @@ export async function autoAdjustRisk(): Promise<{ adjusted: boolean; newRisk: nu
     avoidHighImpactNews: true, dailyTarget: 2, autoMode: false,
   });
 
+  // H3: Use baseline (user's original setting) as the restore cap, not hardcoded 1%
+  const baseline = risk.riskPerTradeBaseline ?? risk.riskPerTrade;
+
   // Look at last 5 closed trades
   const recent = await db.trade.findMany({
     where: { status: "CLOSED" },
@@ -446,8 +449,10 @@ export async function autoAdjustRisk(): Promise<{ adjusted: boolean; newRisk: nu
 
   // Count consecutive losses from most recent
   let consecLosses = 0;
+  let consecWins = 0;
   for (const t of recent) {
-    if (t.pnl < 0) consecLosses++;
+    if (t.pnl < 0) { consecLosses++; consecWins = 0; }
+    else if (t.pnl > 0) { consecWins++; consecLosses = 0; }
     else break;
   }
 
@@ -457,10 +462,11 @@ export async function autoAdjustRisk(): Promise<{ adjusted: boolean; newRisk: nu
     // 3+ consecutive losses → halve risk (min 0.5%)
     newRisk = Math.max(0.5, +(risk.riskPerTrade / 2).toFixed(2));
     reason = `${consecLosses} loss beruntun → turunkan risk ke ${newRisk}%`;
-  } else if (consecLosses === 0 && recent[0].pnl > 0) {
-    // Winning → restore toward 1% (max)
-    newRisk = Math.min(1, +(risk.riskPerTrade + 0.1).toFixed(2));
-    reason = `Win streak → naikkan risk ke ${newRisk}%`;
+  } else if (consecWins >= 2) {
+    // L3: require 2+ consecutive wins (was 1) to restore
+    // H3: cap at baseline (user's original setting), not hardcoded 1%
+    newRisk = Math.min(baseline, +(risk.riskPerTrade + 0.1).toFixed(2));
+    reason = `${consecWins} win beruntun → naikkan risk ke ${newRisk}% (baseline ${baseline}%)`;
   }
 
   if (newRisk !== risk.riskPerTrade) {

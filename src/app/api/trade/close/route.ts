@@ -66,6 +66,26 @@ export async function POST(req: Request) {
 
     await log("TRADE", "MT5", `CLOSE ${result.trade.side} ${result.trade.symbol} ${result.trade.lotSize} lot @ ${result.closePrice} | PnL ${result.pnl >= 0 ? "+" : ""}${result.pnl} (${result.pips}p)`, { ticket: result.trade.ticket });
 
+    // C1: Return updated account so UI can refresh Anti-MC bar immediately
+    const updatedAcc = await db.account.findFirst();
+    const accountState = updatedAcc
+      ? {
+          broker: updatedAcc.broker,
+          login: updatedAcc.login,
+          server: updatedAcc.server,
+          leverage: updatedAcc.leverage,
+          currency: updatedAcc.currency,
+          balance: updatedAcc.balance,
+          equity: updatedAcc.equity,
+          margin: updatedAcc.margin,
+          freeMargin: updatedAcc.freeMargin,
+          marginLevel: updatedAcc.marginLevel,
+          mt5Connected: updatedAcc.mt5Connected,
+          dailyLossUsed: updatedAcc.dailyLossUsed,
+          dailyLossLimit: updatedAcc.dailyLossLimit,
+        }
+      : undefined;
+
     const row: TradeRow = {
       id: result.trade.id,
       ticket: result.trade.ticket,
@@ -88,7 +108,7 @@ export async function POST(req: Request) {
       openedAt: result.trade.openedAt.toISOString(),
       closedAt: result.trade.closedAt!.toISOString(),
     };
-    return NextResponse.json({ trade: row, ok: true });
+    return NextResponse.json({ trade: row, account: accountState, ok: true });
   } catch (e: any) {
     if (e?.message === "NOT_FOUND") {
       return NextResponse.json({ error: "Trade not found / not open" }, { status: 404 });

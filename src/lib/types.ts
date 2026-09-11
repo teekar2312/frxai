@@ -168,6 +168,7 @@ export interface IndicatorState {
 
 export interface RiskConfig {
   riskPerTrade: number; // %
+  riskPerTradeBaseline?: number; // H3: user's original setting, auto-adjust never exceeds this
   stopLossPipsMin: number;
   stopLossPipsMax: number;
   rrRatio: number;

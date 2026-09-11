@@ -7,6 +7,7 @@ import {
   Info,
   Layers,
   Percent,
+  RotateCcw,
   Shield,
   ShieldAlert,
   ShieldCheck,
@@ -28,6 +29,7 @@ import {
   SectionHeader,
 } from "@/components/shared";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
@@ -61,6 +63,13 @@ interface LotCalc {
 export function RiskSection() {
   const account = useStore((s) => s.account);
   const setRiskCfg = useStore((s) => s.setRiskCfg);
+  // C2: use tradingCfg.riskAuto (not cfg.autoMode which is dead)
+  const riskAuto = useStore((s) => s.tradingCfg.riskAuto);
+  const setTradingCfg = useStore((s) => s.setTradingCfg);
+  // H4: current open positions count
+  const openTradeCount = useStore((s) => s.trades.filter((t) => t.status === "OPEN").length);
+  // M1: live quotes for accurate USDJPY pip value
+  const quotes = useStore((s) => s.quotes);
 
   const [cfg, setCfg] = useState<RiskConfig>({
     riskPerTrade: 1,
@@ -136,10 +145,31 @@ export function RiskSection() {
     [setRiskCfg],
   );
 
+  // C2: Wire AI Auto Risk to TradingConfig.riskAuto (was dead cfg.autoMode)
+  const handleRiskAutoToggle = useCallback(async (v: boolean) => {
+    setTradingCfg({ riskAuto: v });
+    try {
+      await fetch("/api/config/trading", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ riskAuto: v }),
+      });
+      toast.success(v ? "AI Auto-Risk AKTIF" : "AI Auto-Risk OFF", {
+        description: v
+          ? "Risk per trade akan disesuaikan otomatis berdasarkan performa (turun setelah 3 loss, naik saat win)."
+          : "Risk per trade dikonfigurasi manual.",
+      });
+    } catch {
+      toast.error("Gagal mengubah auto-risk mode");
+    }
+  }, [setTradingCfg]);
+
   // Lot calculator results
   const calcResults = useMemo(() => {
     const riskUsd = calc.balance * (calc.riskPct / 100);
-    const pv = pipValuePerLot(calc.symbol, PAIRS.find((p) => p.symbol === calc.symbol)?.basePrice);
+    // M1: use live quote for USDJPY pip value (was static basePrice)
+    const livePrice = quotes[calc.symbol]?.last ?? PAIRS.find((p) => p.symbol === calc.symbol)?.basePrice;
+    const pv = pipValuePerLot(calc.symbol, livePrice);
     const lot = calc.slPips > 0 ? riskUsd / (calc.slPips * pv) : 0;
     const rewardUsd = riskUsd * cfg.rrRatio;
     return {
@@ -149,13 +179,12 @@ export function RiskSection() {
       potentialLoss: riskUsd,
       potentialProfit: rewardUsd,
     };
-  }, [calc, cfg.rrRatio]);
+  }, [calc, cfg.rrRatio, quotes]);
 
-  // Anti-MC progress
-  const dailyLossPct = Math.min(
-    100,
-    (account.dailyLossUsed / cfg.dailyLossLimit) * 100,
-  );
+  // Anti-MC progress — L1: handle overflow gracefully
+  const dailyLossRatio = cfg.dailyLossLimit > 0 ? account.dailyLossUsed / cfg.dailyLossLimit : 0;
+  const dailyLossPct = Math.min(100, dailyLossRatio * 100);
+  const dailyLossOverLimit = account.dailyLossUsed > cfg.dailyLossLimit;
   const dailyLossDanger = dailyLossPct > 80;
 
   return (
@@ -175,8 +204,8 @@ export function RiskSection() {
               AI Auto Risk
             </span>
             <Switch
-              checked={cfg.autoMode}
-              onCheckedChange={(v) => update({ autoMode: v })}
+              checked={riskAuto}
+              onCheckedChange={handleRiskAutoToggle}
             />
           </div>
         }
@@ -298,6 +327,21 @@ export function RiskSection() {
                 posisi simultan
               </span>
             </div>
+            {/* H4: show current open positions */}
+            <div className={cn(
+              "flex items-center justify-between rounded-lg border px-3 py-2 text-xs",
+              openTradeCount >= cfg.maxOpenPositions
+                ? "border-rose-500/40 bg-rose-500/10 text-rose-400"
+                : openTradeCount >= cfg.maxOpenPositions - 1
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                  : "border-border bg-muted/20 text-muted-foreground",
+            )}>
+              <span>Posisi terbuka saat ini</span>
+              <span className="tnum font-semibold">
+                {openTradeCount} / {cfg.maxOpenPositions}
+                {openTradeCount >= cfg.maxOpenPositions && " (penuh)"}
+              </span>
+            </div>
             <Slider
               value={[cfg.maxOpenPositions]}
               min={1}
@@ -381,12 +425,22 @@ export function RiskSection() {
           <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400">
             <AlertTriangle className="h-4 w-4" />
           </div>
-          <div>
+          <div className="space-y-2">
             <p className="text-sm font-medium">Avoid High-Impact News</p>
             <p className="text-xs text-muted-foreground">
-              Saat aktif, sistem menolak pembukaan posisi baru selama 15 menit
-              sebelum & sesudah rilis berita high-impact (NFP, CPI, FOMC, dll).
+              Saat aktif, AI Analysis akan mempertimbangkan kalender ekonomi
+              dalam analisa multi-faktor. Untuk gating otomatis (menolak order
+              ±15 menit sebelum/sesudah berita high-impact), diperlukan integrasi
+              kalender ekonomi Finnhub/Marketaux — isi API key di Settings.
             </p>
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-2 text-[11px] text-amber-300/90">
+              <Info className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                <span className="font-medium">Status:</span> Saat ini, flag ini
+                berfungsi sebagai panduan untuk AI Analysis. Gating otomatis
+                akan aktif setelah Finnhub/Marketaux key dikonfigurasi.
+              </span>
+            </div>
           </div>
         </div>
       </Panel>
@@ -481,7 +535,7 @@ export function RiskSection() {
                 <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-400" />
                 <span>
                   Rumus: <span className="tnum text-foreground">Lot = Risk$ / (SL pips × pip value)</span>.
-                  Pip value: $10/pip/lot (all pairs).
+                  Pip value: EURUSD/GBPUSD/XAUUSD = $10/pip/lot; USDJPY ≈ $6.35/pip/lot (price-dependent).
                 </span>
               </div>
             </div>
@@ -597,8 +651,47 @@ export function RiskSection() {
                 </Pill>
               )}
               <span className="text-muted-foreground">
-                Sistem akan menolak order baru saat limit harian tercapai.
+                {dailyLossOverLimit
+                  ? "Limit harian tercapai. Trading diblokir sampai reset UTC midnight."
+                  : "Sistem akan menolak order baru saat limit harian tercapai."}
               </span>
+            </div>
+
+            {/* M5: Document gross-loss model */}
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/20 p-2.5 text-[11px] text-muted-foreground">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-400" />
+              <span>
+                <span className="font-medium">Model gross-loss:</span> Counter hanya
+                bertambah saat loss, tidak berkurang saat win. Reset otomatis setiap
+                UTC midnight. Win tidak mengurangi counter — ini standar anti-MC untuk
+                mencegah over-trading setelah loss.
+              </span>
+            </div>
+
+            {/* L6: Reset Anti-MC button */}
+            <div className="flex items-center justify-end">
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-xs text-muted-foreground"
+                onClick={async () => {
+                  try {
+                    const res = await fetch("/api/account/reset-daily-loss", { method: "POST" });
+                    if (!res.ok) throw new Error("Reset failed");
+                    const data = await res.json();
+                    if (data?.account) {
+                      useStore.getState().setAccount(data.account);
+                      toast.success("Anti-MC counter direset", {
+                        description: "dailyLossUsed kembali ke 0%.",
+                      });
+                    }
+                  } catch {
+                    toast.error("Gagal reset counter");
+                  }
+                }}
+              >
+                <RotateCcw className="h-3 w-3" /> Reset Anti-MC
+              </Button>
             </div>
 
             <div className="grid grid-cols-2 gap-3 border-t border-border pt-3 sm:grid-cols-4">
@@ -620,10 +713,10 @@ export function RiskSection() {
               </div>
               <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  Equity Stop
+                  Equity
                 </div>
                 <div className="tnum text-lg font-semibold">
-                  {cfg.dailyLossLimit}%
+                  {fmtUsd(account.equity)}
                 </div>
               </div>
               <div className="rounded-lg border border-border bg-secondary/30 p-3 text-center">

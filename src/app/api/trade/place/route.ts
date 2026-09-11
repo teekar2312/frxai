@@ -154,6 +154,26 @@ export async function POST(req: Request) {
 
     await log("TRADE", "MT5", `OPEN ${body.side} ${body.symbol} ${lotSize} lot @ ${openPrice} | SL ${slPips}p TP ${tpPips}p | margin $${marginUsed.toFixed(2)}`, { ticket });
 
+    // C1: Return updated account so UI can refresh margin/freeMargin display
+    const updatedAcc = await db.account.findFirst();
+    const accountState = updatedAcc
+      ? {
+          broker: updatedAcc.broker,
+          login: updatedAcc.login,
+          server: updatedAcc.server,
+          leverage: updatedAcc.leverage,
+          currency: updatedAcc.currency,
+          balance: updatedAcc.balance,
+          equity: updatedAcc.equity,
+          margin: updatedAcc.margin,
+          freeMargin: updatedAcc.freeMargin,
+          marginLevel: updatedAcc.marginLevel,
+          mt5Connected: updatedAcc.mt5Connected,
+          dailyLossUsed: updatedAcc.dailyLossUsed,
+          dailyLossLimit: updatedAcc.dailyLossLimit,
+        }
+      : undefined;
+
     const row: TradeRow = {
       id: result.id,
       ticket: result.ticket,
@@ -176,7 +196,7 @@ export async function POST(req: Request) {
       openedAt: result.openedAt.toISOString(),
       closedAt: result.closedAt?.toISOString() ?? null,
     };
-    return NextResponse.json({ trade: row, ok: true });
+    return NextResponse.json({ trade: row, account: accountState, ok: true });
   } catch (e: any) {
     if (e?.message === "MAX_POSITIONS") {
       await log("WARN", "RISK", `Trade rejected: max open positions (${risk.maxOpenPositions}) reached`);

@@ -91,6 +91,7 @@ interface OrderForm {
 
 export function TradingSection() {
   const account = useStore((s) => s.account);
+  const setAccount = useStore((s) => s.setAccount);
   const quotes = useStore((s) => s.quotes);
   const trades = useStore((s) => s.trades);
   const setTrades = useStore((s) => s.setTrades);
@@ -246,6 +247,8 @@ export function TradingSection() {
       if (!res.ok) throw new Error(data?.error || "Gagal menempatkan order");
       const t = data.trade as TradeRow;
       upsertTrade(t);
+      // C1: refresh account state (margin, freeMargin, dailyLossUsed)
+      if (data.account) setAccount(data.account);
       addLog({
         id: Math.random().toString(36).slice(2),
         level: "TRADE",
@@ -264,7 +267,7 @@ export function TradingSection() {
       placingRef.current = false;
       setPlacing(false);
     }
-  }, [account.mt5Connected, form, upsertTrade, addLog]);
+  }, [account.mt5Connected, form, upsertTrade, addLog, setAccount]);
 
   const handleClose = useCallback(
     async (id: string) => {
@@ -279,6 +282,8 @@ export function TradingSection() {
         if (!res.ok) throw new Error(data?.error || "Gagal menutup posisi");
         const closed = data.trade as TradeRow;
         upsertTrade(closed);
+        // C1: refresh account state (balance, equity, dailyLossUsed)
+        if (data.account) setAccount(data.account);
         addLog({
           id: Math.random().toString(36).slice(2),
           level: "TRADE",
@@ -297,7 +302,7 @@ export function TradingSection() {
         setClosing(null);
       }
     },
-    [upsertTrade, addLog],
+    [upsertTrade, addLog, setAccount],
   );
 
   const mt5Disabled = !account.mt5Connected;

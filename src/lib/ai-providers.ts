@@ -70,10 +70,10 @@ const PROVIDER_CONFIG: Record<string, { url: string; models: string[]; keyField:
     url: "https://api.groq.com/openai/v1/chat/completions",
     models: [
       "llama-3.1-8b-instant",
-      "llama-3.1-70b-versatile",
       "llama3-8b-8192",
       "llama3-70b-8192",
       "gemma2-9b-it",
+      "deepseek-r1-distill-llama-70b",
     ],
     keyField: "groq",
     label: "Groq",
@@ -134,9 +134,17 @@ async function chatViaOpenAICompatible(
 
       if (!res.ok) {
         const errText = await res.text().catch(() => res.statusText);
-        // If model not found, try next model in the list
-        if (res.status === 404 || errText.includes("model_not_found") || errText.includes("does not exist")) {
-          lastError = new Error(`${cfg.label} model '${model}' not found, trying next...`);
+        // If model is not found / decommissioned / deprecated, try next model
+        const modelUnavailable =
+          res.status === 404 ||
+          res.status === 400 ||
+          errText.includes("model_not_found") ||
+          errText.includes("does not exist") ||
+          errText.includes("decommissioned") ||
+          errText.includes("deprecated") ||
+          errText.includes("no longer supported");
+        if (modelUnavailable) {
+          lastError = new Error(`${cfg.label} model '${model}' unavailable (${res.status}), trying next...`);
           continue; // try next model
         }
         // For other errors (401, 429, 500), throw immediately
@@ -149,8 +157,8 @@ async function chatViaOpenAICompatible(
 
       return { content, provider };
     } catch (e: any) {
-      // If it's a model_not_found that we already handled (continue), skip
-      if (e?.message?.includes("not found")) {
+      // If it's a model unavailable that we already handled (continue), skip
+      if (e?.message?.includes("unavailable") || e?.message?.includes("not found")) {
         lastError = e;
         continue;
       }

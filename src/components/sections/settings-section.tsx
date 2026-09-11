@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Activity,
+  AlertTriangle,
   Bot,
   Calendar,
   CheckCircle2,
@@ -14,6 +15,7 @@ import {
   Link2,
   LogOut,
   PlugZap,
+  RefreshCw,
   Save,
   Server,
   Settings as SettingsIcon,
@@ -29,6 +31,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -82,6 +85,11 @@ export function SettingsSection() {
 
   const [keyDraft, setKeyDraft] = useState<ApiKeys>(apiKeys);
   const [savingKeys, setSavingKeys] = useState(false);
+  // H3: load error state + retry
+  const [loadError, setLoadError] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  // H2: debounce timer ref for updateTrading
+  const tradingDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // MT5 credentials state
   interface Mt5Creds {
@@ -118,65 +126,78 @@ export function SettingsSection() {
   });
   const [terminalBusy, setTerminalBusy] = useState(false);
 
-  // Fetch all configs on mount
-  useEffect(() => {
-    let mounted = true;
-    (async () => {
-      try {
-        const [tr, rk, ks, mt5] = await Promise.all([
-          fetch("/api/config/trading").then((r) => r.json()),
-          fetch("/api/config/risk").then((r) => r.json()),
-          fetch("/api/config/keys").then((r) => r.json()),
-          fetch("/api/mt5/credentials").then((r) => r.json()),
-        ]);
-        if (!mounted) return;
-        if (tr?.config) setTradingCfg(tr.config);
-        if (rk?.config) setRiskCfg(rk.config);
-        if (ks?.keys) {
-          setApiKeys(ks.keys);
-          setKeyDraft(ks.keys);
-        }
-        if (mt5?.credentials) {
-          setMt5Creds({
-            mt5Account: mt5.credentials.mt5Account ?? "",
-            mt5Password: mt5.credentials.mt5Password ?? "",
-            mt5Server: mt5.credentials.mt5Server ?? "FINEX-Live01",
-            mt5AccountType: mt5.credentials.mt5AccountType ?? "demo",
-            mt5Terminal: mt5.credentials.mt5Terminal ?? "MetaTrader5",
-            hasPassword: mt5.credentials.hasPassword ?? false,
-          });
-        }
-        if (mt5?.terminal) {
-          setMt5Terminal({
-            path: mt5.terminal.path ?? "",
-            running: mt5.terminal.running ?? false,
-            pid: mt5.terminal.pid ?? null,
-            autoStart: mt5.terminal.autoStart ?? true,
-          });
-        }
-      } catch {
-        /* ignore */
+  // Fetch all configs on mount — H3: show error + retry on failure
+  const loadConfigs = useCallback(async () => {
+    setLoadError(false);
+    try {
+      const [tr, rk, ks, mt5] = await Promise.all([
+        fetch("/api/config/trading").then((r) => r.json()),
+        fetch("/api/config/risk").then((r) => r.json()),
+        fetch("/api/config/keys").then((r) => r.json()),
+        fetch("/api/mt5/credentials").then((r) => r.json()),
+      ]);
+      if (tr?.config) setTradingCfg(tr.config);
+      if (rk?.config) setRiskCfg(rk.config);
+      if (ks?.keys) {
+        setApiKeys(ks.keys);
+        setKeyDraft(ks.keys);
       }
-    })();
-    return () => {
-      mounted = false;
-    };
+      if (mt5?.credentials) {
+        setMt5Creds({
+          mt5Account: mt5.credentials.mt5Account ?? "",
+          mt5Password: mt5.credentials.mt5Password ?? "",
+          mt5Server: mt5.credentials.mt5Server ?? "FINEX-Live01",
+          mt5AccountType: mt5.credentials.mt5AccountType ?? "demo",
+          mt5Terminal: mt5.credentials.mt5Terminal ?? "MetaTrader5",
+          hasPassword: mt5.credentials.hasPassword ?? false,
+        });
+      }
+      if (mt5?.terminal) {
+        setMt5Terminal({
+          path: mt5.terminal.path ?? "",
+          running: mt5.terminal.running ?? false,
+          pid: mt5.terminal.pid ?? null,
+          autoStart: mt5.terminal.autoStart ?? true,
+        });
+      }
+      setLoaded(true);
+    } catch {
+      setLoadError(true);
+      toast.error("Gagal memuat konfigurasi", {
+        description: "Periksa koneksi server lalu coba lagi.",
+      });
+    }
   }, [setTradingCfg, setRiskCfg, setApiKeys]);
 
+  useEffect(() => {
+    loadConfigs();
+  }, [loadConfigs]);
+
   // --- Trading config helpers ---
-  const updateTrading = async (patch: Partial<TradingConfig>) => {
-    setTradingCfg(patch);
-    try {
-      await fetch("/api/config/trading", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      toast.success("Konfigurasi trading disimpan");
-    } catch {
-      toast.error("Gagal menyimpan konfigurasi");
-    }
-  };
+  // H1: optimistic update with rollback + H2: debounce 300ms
+  const updateTrading = useCallback(async (patch: Partial<TradingConfig>) => {
+    const prev = useStore.getState().tradingCfg;
+    setTradingCfg(patch); // optimistic
+    // H2: debounce the PUT to prevent race on rapid toggles
+    if (tradingDebounceRef.current) clearTimeout(tradingDebounceRef.current);
+    tradingDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/config/trading", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        });
+        if (!res.ok) throw new Error("PUT failed");
+        toast.success("Konfigurasi trading disimpan");
+      } catch {
+        // H1: rollback to previous state
+        setTradingCfg(prev);
+        toast.error("Gagal menyimpan konfigurasi", {
+          description: "Perubahan dikembalikan ke nilai sebelumnya.",
+        });
+      }
+    }, 300);
+  }, [setTradingCfg]);
 
   const handlePairsChange = (vals: string[]) => {
     updateTrading({ pairs: vals as Pair[] });
@@ -193,46 +214,103 @@ export function SettingsSection() {
     setKeyDraft((d) => ({ ...d, [key]: value }));
   };
 
+  // H1: optimistic rollback + M3: key-presence check
   const handleActiveProvider = async (provider: ApiKeys["activeProvider"]) => {
+    if (provider !== "zai") {
+      // M3: check that the selected provider has a key
+      const keyVal = keyDraft[provider as keyof ApiKeys] as string;
+      if (!keyVal || keyVal.includes("•")) {
+        toast.error(`API key untuk ${provider} belum diisi`, {
+          description: `Isi key ${provider} di bawah, simpan, lalu aktifkan provider.`,
+        });
+        return;
+      }
+    }
+    const prev = useStore.getState().apiKeys;
     setApiKeys({ activeProvider: provider });
     setKeyDraft((d) => ({ ...d, activeProvider: provider }));
     try {
-      await fetch("/api/config/keys", {
+      const res = await fetch("/api/config/keys", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ activeProvider: provider }),
       });
+      if (!res.ok) throw new Error("PUT failed");
       toast.success(`Provider aktif: ${provider}`, {
         description: "Perubahan diterapkan pada MT5 bridge.",
       });
     } catch {
+      setApiKeys(prev); // H1: rollback
+      setKeyDraft((d) => ({ ...d, activeProvider: prev.activeProvider }));
       toast.error("Gagal mengubah provider");
     }
   };
 
   const handleSaveKeys = async () => {
     setSavingKeys(true);
+    const prev = useStore.getState().apiKeys;
     try {
-      // Send all keyDraft values — backend ignores masked (•) values
-      await fetch("/api/config/keys", {
+      const res = await fetch("/api/config/keys", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(keyDraft),
       });
+      if (!res.ok) throw new Error("PUT failed");
       toast.success("API keys disimpan", {
         description: "Perubahan diterapkan pada MT5 bridge.",
       });
       // Re-fetch to re-mask
-      const res = await fetch("/api/config/keys");
-      const data = await res.json();
-      if (data?.keys) {
-        setApiKeys(data.keys);
-        setKeyDraft(data.keys);
+      const refetchRes = await fetch("/api/config/keys");
+      const refetchData = await refetchRes.json();
+      if (refetchData?.keys) {
+        setApiKeys(refetchData.keys);
+        setKeyDraft(refetchData.keys);
       }
     } catch {
+      setApiKeys(prev); // H1: rollback
+      setKeyDraft(prev);
       toast.error("Gagal menyimpan keys");
     } finally {
       setSavingKeys(false);
+    }
+  };
+
+  // M2: Standalone save (without connecting) — so user can save creds for later
+  const handleSaveMt5Creds = async () => {
+    if (!/^\d{4,12}$/.test(mt5Creds.mt5Account)) {
+      toast.error("Nomor akun MT5 tidak valid", { description: "Harus 4-12 digit angka." });
+      return;
+    }
+    const pwd = mt5Creds.mt5Password.includes("•") ? "" : mt5Creds.mt5Password;
+    // M4: match server validation (min 4 chars) — only if new password entered
+    if (pwd && pwd.length < 4) {
+      toast.error("Password MT5 minimal 4 karakter");
+      return;
+    }
+    if (!mt5Creds.mt5Server.trim()) {
+      toast.error("Server MT5 wajib diisi");
+      return;
+    }
+    try {
+      const res = await fetch("/api/mt5/credentials", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mt5Account: mt5Creds.mt5Account,
+          mt5Password: pwd || undefined,
+          mt5Server: mt5Creds.mt5Server,
+          mt5AccountType: mt5Creds.mt5AccountType,
+          mt5Terminal: mt5Creds.mt5Terminal,
+          mt5TerminalPath: mt5Terminal.path,
+          mt5AutoStartTerminal: mt5Terminal.autoStart,
+        }),
+      });
+      if (!res.ok) throw new Error("save failed");
+      toast.success("Kredensial MT5 disimpan", {
+        description: "Klik 'Sambungkan MT5' untuk mulai trading.",
+      });
+    } catch {
+      toast.error("Gagal menyimpan kredensial MT5");
     }
   };
 
@@ -246,6 +324,11 @@ export function SettingsSection() {
       return;
     }
     const pwd = mt5Creds.mt5Password.includes("•") ? "" : mt5Creds.mt5Password;
+    // M4: match server validation (min 4 chars)
+    if (pwd && pwd.length < 4) {
+      toast.error("Password MT5 minimal 4 karakter");
+      return;
+    }
     if (!pwd && !mt5Creds.hasPassword) {
       toast.error("Password MT5 wajib diisi");
       return;
@@ -419,6 +502,28 @@ export function SettingsSection() {
         icon={<SettingsIcon className="h-4 w-4" />}
       />
 
+      {/* H3: Load error with retry */}
+      {loadError && (
+        <div className="flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/5 p-4">
+          <div className="flex items-center gap-2 text-sm text-rose-400">
+            <AlertTriangle className="h-4 w-4" />
+            <span>Gagal memuat konfigurasi. Periksa koneksi server.</span>
+          </div>
+          <Button size="sm" variant="outline" onClick={loadConfigs}>
+            <RefreshCw className="h-3.5 w-3.5" /> Coba Lagi
+          </Button>
+        </div>
+      )}
+
+      {/* L4: Loading skeleton */}
+      {!loaded && !loadError && (
+        <div className="space-y-4">
+          <Skeleton className="h-10 w-full" />
+          <Skeleton className="h-64 w-full" />
+        </div>
+      )}
+
+      {(loaded || loadError) && (
       <Tabs defaultValue="trading" className="w-full">
         <TabsList className="h-auto w-full justify-start overflow-x-auto p-1">
           <TabsTrigger value="trading">Trading</TabsTrigger>
@@ -869,19 +974,26 @@ export function SettingsSection() {
                       Putuskan MT5
                     </Button>
                   ) : (
-                    <Button size="sm" onClick={handleMt5Connect} disabled={mt5Connecting}>
-                      {mt5Connecting ? (
-                        <>
-                          <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                          Menghubungkan...
-                        </>
-                      ) : (
-                        <>
-                          <PlugZap className="h-3.5 w-3.5" />
-                          Sambungkan MT5
-                        </>
-                      )}
-                    </Button>
+                    <>
+                      <Button size="sm" onClick={handleMt5Connect} disabled={mt5Connecting}>
+                        {mt5Connecting ? (
+                          <>
+                            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                            Menghubungkan...
+                          </>
+                        ) : (
+                          <>
+                            <PlugZap className="h-3.5 w-3.5" />
+                            Sambungkan MT5
+                          </>
+                        )}
+                      </Button>
+                      {/* M2: Standalone save without connecting */}
+                      <Button size="sm" variant="outline" onClick={handleSaveMt5Creds}>
+                        <Save className="h-3.5 w-3.5" />
+                        Simpan Kredensial
+                      </Button>
+                    </>
                   )}
                   <span className="text-[10px] text-muted-foreground">
                     Kredensial disimpan lokal & dipakai oleh MT5 bridge di mesin Windows Anda.
@@ -1194,8 +1306,8 @@ export function SettingsSection() {
               />
               <StatCard
                 label="Risk Auto"
-                value={riskCfg.autoMode ? "On" : "Off"}
-                tone={riskCfg.autoMode ? "accent" : "default"}
+                value={tradingCfg.riskAuto ? "On" : "Off"}
+                tone={tradingCfg.riskAuto ? "accent" : "default"}
               />
             </div>
             <div className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-card/40 p-3 text-xs text-muted-foreground">
@@ -1208,6 +1320,7 @@ export function SettingsSection() {
           </Panel>
         </TabsContent>
       </Tabs>
+      )}
     </div>
   );
 }

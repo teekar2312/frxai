@@ -250,14 +250,40 @@ export function SettingsSection() {
     setSavingKeys(true);
     const prev = useStore.getState().apiKeys;
     try {
+      // Only send fields that have been changed (non-masked, non-empty)
+      // This prevents sending masked values that the backend would skip anyway,
+      // and makes it clear which keys are actually being updated.
+      const payload: Partial<ApiKeys> = {};
+      let changedCount = 0;
+      for (const k of Object.keys(keyDraft) as (keyof ApiKeys)[]) {
+        const v = keyDraft[k];
+        if (typeof v === "string") {
+          // Only send if it's a real new value (not masked, not empty)
+          if (v && !v.includes("•")) {
+            (payload as any)[k] = v;
+            changedCount++;
+          }
+        } else {
+          (payload as any)[k] = v; // activeProvider
+        }
+      }
+
+      if (changedCount === 0 && !payload.activeProvider) {
+        toast.info("Tidak ada perubahan", {
+          description: "Isi field API key dengan nilai baru untuk menyimpan.",
+        });
+        setSavingKeys(false);
+        return;
+      }
+
       const res = await fetch("/api/config/keys", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(keyDraft),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error("PUT failed");
       toast.success("API keys disimpan", {
-        description: "Perubahan diterapkan pada MT5 bridge.",
+        description: `${changedCount} key diperbarui permanen di database.`,
       });
       // Re-fetch to re-mask
       const refetchRes = await fetch("/api/config/keys");
@@ -1369,20 +1395,37 @@ function KeyInput({
   stored: string;
   onChange: (v: string) => void;
 }) {
+  const hasStored = stored && stored.length > 0;
+  const isMasked = value.includes("•");
+  const isChanged = value && !isMasked;
+
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={id} className="text-xs">
-        {label}
-      </Label>
+      <div className="flex items-center justify-between">
+        <Label htmlFor={id} className="text-xs">
+          {label}
+        </Label>
+        {/* Show saved status */}
+        {hasStored && !isChanged && (
+          <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+            <CheckCircle2 className="size-2.5" />
+            Tersimpan
+          </span>
+        )}
+        {isChanged && (
+          <span className="text-[10px] text-amber-400">Belum disimpan</span>
+        )}
+      </div>
       <Input
         id={id}
         type="password"
         value={value}
         onFocus={(e) => {
+          // Clear masked value on focus so user can type new key
           if (e.target.value.includes("•")) onChange("");
         }}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={stored ? "••••••••" : "Masukkan API key..."}
+        placeholder={hasStored ? "•••••••• (tersimpan, klik untuk ganti)" : "Masukkan API key..."}
         autoComplete="off"
       />
       <p className="text-[10px] text-muted-foreground">{hint}</p>

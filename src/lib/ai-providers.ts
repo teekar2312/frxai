@@ -63,31 +63,40 @@ async function chatViaZai(messages: ChatMessage[], opts: { thinking?: boolean })
   };
 }
 
-// Provider configurations: endpoint, model, and which ApiKeys field holds the key
-// Model names verified as of 2025-09. If a model is deprecated, the fallback
-// to Z.ai ensures the system still works.
-const PROVIDER_CONFIG: Record<string, { url: string; model: string; keyField: keyof ApiKeys; label: string }> = {
+// Provider configurations: endpoint, models (fallback list), and which ApiKeys field holds the key
+// Multiple models per provider — if one is deprecated/404, the next is tried automatically.
+const PROVIDER_CONFIG: Record<string, { url: string; models: string[]; keyField: keyof ApiKeys; label: string }> = {
   groq: {
     url: "https://api.groq.com/openai/v1/chat/completions",
-    model: "llama-3.1-8b-instant", // fast, always-available model
+    models: [
+      "llama-3.1-8b-instant",
+      "llama-3.1-70b-versatile",
+      "llama3-8b-8192",
+      "llama3-70b-8192",
+      "gemma2-9b-it",
+    ],
     keyField: "groq",
     label: "Groq",
   },
   openai: {
     url: "https://api.openai.com/v1/chat/completions",
-    model: "gpt-4o-mini",
+    models: ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
     keyField: "openai",
     label: "OpenAI",
   },
   together: {
     url: "https://api.together.xyz/v1/chat/completions",
-    model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    models: [
+      "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
+      "meta-llama/Meta-Llama-3-70B-Instruct-Turbo",
+    ],
     keyField: "together",
     label: "Together.ai",
   },
   tinyfish: {
     url: "https://sdk.tinyfish.ai/v1/chat/completions",
-    model: "llama-3.3-70b",
+    models: ["llama-3.3-70b", "llama-3.1-70b"],
     keyField: "tinyfish",
     label: "Tinyfish",
   },
@@ -104,29 +113,52 @@ async function chatViaOpenAICompatible(
   const apiKey = keys[cfg.keyField] as string;
   if (!apiKey) throw new Error(`No API key for ${cfg.label}`);
 
-  const res = await fetch(cfg.url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-      temperature: 0.7,
-      max_tokens: 2000,
-    }),
-    signal: AbortSignal.timeout(55_000),
-  });
+  // Try each model in order — if one returns 404 model_not_found, try the next
+  let lastError: any = null;
+  for (const model of cfg.models) {
+    try {
+      const res = await fetch(cfg.url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          temperature: 0.7,
+          max_tokens: 2000,
+        }),
+        signal: AbortSignal.timeout(55_000),
+      });
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => res.statusText);
-    throw new Error(`${cfg.label} API ${res.status}: ${errText.slice(0, 200)}`);
+      if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        // If model not found, try next model in the list
+        if (res.status === 404 || errText.includes("model_not_found") || errText.includes("does not exist")) {
+          lastError = new Error(`${cfg.label} model '${model}' not found, trying next...`);
+          continue; // try next model
+        }
+        // For other errors (401, 429, 500), throw immediately
+        throw new Error(`${cfg.label} API ${res.status}: ${errText.slice(0, 200)}`);
+      }
+
+      const data = await res.json();
+      const content = data?.choices?.[0]?.message?.content ?? "";
+      if (!content) throw new Error(`${cfg.label} returned empty response`);
+
+      return { content, provider };
+    } catch (e: any) {
+      // If it's a model_not_found that we already handled (continue), skip
+      if (e?.message?.includes("not found")) {
+        lastError = e;
+        continue;
+      }
+      // For other errors, throw immediately
+      throw e;
+    }
   }
 
-  const data = await res.json();
-  const content = data?.choices?.[0]?.message?.content ?? "";
-  if (!content) throw new Error(`${cfg.label} returned empty response`);
-
-  return { content, provider };
+  // All models failed
+  throw lastError ?? new Error(`${cfg.label}: all models failed`);
 }

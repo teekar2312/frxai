@@ -32,7 +32,7 @@ export async function chatComplete(
 ): Promise<ChatResult> {
   const keys = await getConfig<ApiKeys>("apiKeys", {
     groq: "", openai: "", together: "", tinyfish: "",
-    finnhub: "", marketaux: "", activeProvider: "zai",
+    finnhub: "", marketaux: "", activeProvider: "zai", customModel: "",
   });
 
   const provider = keys.activeProvider ?? "zai";

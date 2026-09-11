@@ -123,6 +123,7 @@ const defaultApiKeys: ApiKeys = {
   finnhub: "",
   marketaux: "",
   activeProvider: "zai",
+  customModel: "",
 };
 
 export const useStore = create<AppState>((set) => ({

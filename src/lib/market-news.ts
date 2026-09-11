@@ -19,7 +19,7 @@ export interface NewsItem {
 export async function fetchMarketNews(pair: Pair): Promise<NewsItem[]> {
   const keys = await getConfig<ApiKeys>("apiKeys", {
     groq: "", openai: "", together: "", tinyfish: "",
-    finnhub: "", marketaux: "", activeProvider: "zai",
+    finnhub: "", marketaux: "", activeProvider: "zai", customModel: "",
   });
 
   const [finnhubNews, marketauxNews] = await Promise.allSettled([
@@ -32,7 +32,8 @@ export async function fetchMarketNews(pair: Pair): Promise<NewsItem[]> {
   if (marketauxNews.status === "fulfilled") items.push(...marketauxNews.value);
 
   if (items.length === 0 && (keys.finnhub || keys.marketaux)) {
-    await log("WARN", "NEWS", `No news fetched for ${pair} (APIs configured but returned empty/error)`);
+    // Not an error — free tier may have rate limits, or no forex news for this pair
+    await log("INFO", "NEWS", `No news fetched for ${pair} (API keys configured but returned empty — check key validity or rate limits)`);
   }
 
   // Deduplicate by headline, take top 5

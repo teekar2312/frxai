@@ -47,7 +47,8 @@ export function pipValuePerLot(symbol: Pair, price: number): number {
  */
 export function shouldResetDaily(lastResetAt: Date | null, now = new Date()): boolean {
   if (!lastResetAt) return true;
-  return lastResetAt.getUTCDateString() !== now.getUTCDateString()
-    || lastResetAt.getUTCFullYear() !== now.getUTCFullYear()
-    || lastResetAt.getUTCMonth() !== now.getUTCMonth();
+  // Compare UTC date as YYYY-MM-DD string — handles day/month/year boundary
+  const lastDay = `${lastResetAt.getUTCFullYear()}-${lastResetAt.getUTCMonth() + 1}-${lastResetAt.getUTCDate()}`;
+  const todayDay = `${now.getUTCFullYear()}-${now.getUTCMonth() + 1}-${now.getUTCDate()}`;
+  return lastDay !== todayDay;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   History,
   Play,
@@ -47,11 +47,12 @@ import {
 } from "recharts";
 import { cn } from "@/lib/utils";
 
+// H1: renamed "AI Hybrid" to "EMA + RSI Filter" (actually different now)
 const STRATEGIES = [
   "EMA Crossover",
   "Momentum Breakout",
   "Mean Reversion",
-  "AI Hybrid",
+  "EMA + RSI Filter",
 ];
 
 function fmtDate(d: Date) {
@@ -82,6 +83,7 @@ export function BacktestSection() {
 
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   useEffect(() => {
     fetch("/api/backtest/list")
@@ -96,6 +98,11 @@ export function BacktestSection() {
       toast.error("Rentang tanggal tidak valid", {
         description: "Tanggal mulai harus sebelum tanggal akhir.",
       });
+      return;
+    }
+    // M6: validate capital
+    if (initialCapital <= 0) {
+      toast.error("Modal awal harus > 0");
       return;
     }
     setRunning(true);
@@ -114,7 +121,10 @@ export function BacktestSection() {
           rrRatio,
         }),
       });
-      if (!res.ok) throw new Error("Backtest gagal");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || "Backtest gagal");
+      }
       const data = (await res.json()) as RunResult;
       setResult(data);
       // refresh history list
@@ -133,15 +143,36 @@ export function BacktestSection() {
     }
   }
 
-  const chartData =
-    result?.equityCurve.map((p) => ({ x: p.i, y: p.v })) ?? [];
+  // C1+H3: load backtest from history (fetch equity curve via /api/backtest/[id])
+  async function loadFromHistory(b: BacktestRow) {
+    setLoadingHistory(true);
+    try {
+      const res = await fetch(`/api/backtest/${b.id}`);
+      if (!res.ok) throw new Error("Gagal memuat backtest");
+      const data = (await res.json()) as RunResult;
+      setResult(data);
+      toast.info(`Backtest dimuat: ${b.symbol} • ${b.strategy}`, {
+        description: `${b.totalTrades} trades • ${b.winRate.toFixed(1)}% win • PF ${b.profitFactor.toFixed(2)}`,
+      });
+    } catch {
+      toast.error("Gagal memuat equity curve dari riwayat");
+    } finally {
+      setLoadingHistory(false);
+    }
+  }
+
+  // M5: memoize chart data
+  const chartData = useMemo(
+    () => result?.equityCurve.map((p) => ({ x: p.i, y: p.v })) ?? [],
+    [result],
+  );
   const net = result?.backtest.netProfit ?? 0;
 
   return (
     <div className="space-y-5">
       <SectionHeader
         title="Backtesting Strategi"
-        description="Uji strategi pada data historis dengan simulasi tick-by-tick. Hasil tersimpan untuk evaluasi."
+        description="Uji strategi pada data simulasi (600 candle sintetis). Hasil tersimpan untuk evaluasi."
         icon={<History className="size-5" />}
       />
 
@@ -217,24 +248,18 @@ export function BacktestSection() {
               </Field>
             </div>
 
-            <Field label="Modal Awal ($)">
+            <Field label={`Modal Awal: $${initialCapital.toLocaleString("en-US")}`}>
               <Input
                 type="number"
+                min={1}
+                step={100}
                 value={initialCapital}
-                onChange={(e) => setInitialCapital(Number(e.target.value))}
+                onChange={(e) => setInitialCapital(Math.max(1, Number(e.target.value) || 0))}
                 className="tnum"
               />
             </Field>
 
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <Label className="text-xs text-muted-foreground">
-                  Risk per Trade
-                </Label>
-                <span className="text-xs tnum text-foreground">
-                  {riskPerTrade.toFixed(2)}%
-                </span>
-              </div>
+            <Field label={`Risk per Trade: ${riskPerTrade.toFixed(1)}%`}>
               <Slider
                 value={[riskPerTrade]}
                 min={0.5}
@@ -242,17 +267,9 @@ export function BacktestSection() {
                 step={0.1}
                 onValueChange={(v) => setRiskPerTrade(v[0])}
               />
-            </div>
+            </Field>
 
-            <div>
-              <div className="mb-2 flex items-center justify-between">
-                <Label className="text-xs text-muted-foreground">
-                  Risk : Reward Ratio
-                </Label>
-                <span className="text-xs tnum text-foreground">
-                  1 : {rrRatio.toFixed(1)}
-                </span>
-              </div>
+            <Field label={`Risk:Reward Ratio: 1:${rrRatio.toFixed(1)}`}>
               <Slider
                 value={[rrRatio]}
                 min={1}
@@ -260,42 +277,38 @@ export function BacktestSection() {
                 step={0.1}
                 onValueChange={(v) => setRrRatio(v[0])}
               />
-            </div>
+            </Field>
 
             <Button onClick={run} disabled={running} className="w-full">
               {running ? (
-                <Loader2 className="size-4 animate-spin" />
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Menjalankan Backtest...
+                </>
               ) : (
-                <Play className="size-4" />
+                <>
+                  <Play className="size-4" />
+                  Jalankan Backtest
+                </>
               )}
-              {running ? "Menjalankan..." : "Jalankan Backtest"}
             </Button>
           </div>
         </Panel>
 
-        {/* Result */}
-        <Panel
-          title="Hasil Backtest"
-          description={
-            result
-              ? `${result.backtest.symbol} ${result.backtest.timeframe} — ${result.backtest.strategy}`
-              : "Belum ada hasil"
-          }
-        >
-          {!result ? (
-            <EmptyState
-              icon={<History className="size-10" />}
-              title="Belum ada hasil backtest"
-              description="Konfigurasikan parameter lalu jalankan simulasi."
-            />
-          ) : (
+        {/* Results */}
+        <Panel title="Hasil Backtest" description="Statistik & equity curve">
+          {result ? (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <StatCard
                   label="Net Profit"
-                  value={`$${net.toFixed(2)}`}
-                  tone={net >= 0 ? "up" : "down"}
+                  value={
+                    <span className={net >= 0 ? "text-emerald-400" : "text-rose-400"}>
+                      {net >= 0 ? "+" : ""}${net.toFixed(2)}
+                    </span>
+                  }
                   icon={<TrendingUp className="size-4" />}
+                  tone={net >= 0 ? "up" : "down"}
                 />
                 <StatCard
                   label="Win Rate"
@@ -315,53 +328,27 @@ export function BacktestSection() {
                 <StatCard
                   label="Max Drawdown"
                   value={`${result.backtest.maxDrawdown.toFixed(1)}%`}
-                  tone="down"
                   icon={<TrendingDown className="size-4" />}
+                  tone="down"
                 />
                 <StatCard
                   label="Final Capital"
                   value={`$${result.backtest.finalCapital.toFixed(2)}`}
-                  tone="accent"
                   icon={<Wallet className="size-4" />}
                 />
               </div>
 
-              <div>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Equity Curve
-                  </span>
-                  <span
-                    className={cn(
-                      "text-xs tnum",
-                      net >= 0 ? "text-emerald-400" : "text-rose-400",
-                    )}
-                  >
-                    {net >= 0 ? "+" : ""}
-                    {(
-                      (net / result.backtest.initialCapital) *
-                      100
-                    ).toFixed(2)}
-                    %
-                  </span>
-                </div>
-                <ResponsiveContainer width="100%" height={240}>
+              {/* Equity curve */}
+              <div className="h-[240px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
                   <AreaChart
                     data={chartData}
                     margin={{ top: 5, right: 5, bottom: 0, left: 0 }}
                   >
                     <defs>
                       <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop
-                          offset="0%"
-                          stopColor="var(--chart-1)"
-                          stopOpacity={0.4}
-                        />
-                        <stop
-                          offset="100%"
-                          stopColor="var(--chart-1)"
-                          stopOpacity={0}
-                        />
+                        <stop offset="0%" stopColor="var(--chart-1)" stopOpacity={0.4} />
+                        <stop offset="100%" stopColor="var(--chart-1)" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid
@@ -390,10 +377,7 @@ export function BacktestSection() {
                         color: "var(--popover-foreground)",
                       }}
                       labelStyle={{ color: "var(--muted-foreground)" }}
-                      formatter={(v: number) => [
-                        `$${v.toFixed(2)}`,
-                        "Equity",
-                      ]}
+                      formatter={(v: number) => [`$${v.toFixed(2)}`, "Equity"]}
                       labelFormatter={(l) => `Bar #${l}`}
                     />
                     <Area
@@ -407,6 +391,12 @@ export function BacktestSection() {
                 </ResponsiveContainer>
               </div>
             </div>
+          ) : (
+            <EmptyState
+              icon={<History className="size-10" />}
+              title="Belum ada hasil backtest"
+              description="Konfigurasi parameter di kiri, lalu klik 'Jalankan Backtest' untuk melihat hasil."
+            />
           )}
         </Panel>
       </div>
@@ -420,7 +410,7 @@ export function BacktestSection() {
           <EmptyState
             icon={<History className="size-8" />}
             title="Belum ada riwayat"
-            description="Backtest yang dijalankan akan muncul di sini."
+            description="Jalankan backtest pertama Anda."
           />
         ) : (
           <div className="max-h-96 overflow-y-auto scroll-thin">
@@ -442,14 +432,7 @@ export function BacktestSection() {
                   <TableRow
                     key={b.id}
                     className="cursor-pointer hover:bg-muted/30"
-                    onClick={() => {
-                      // H11: load backtest stats into result panel (was toast-only)
-                      setResult(b);
-                      setChartData([]);
-                      toast.info(`Backtest dimuat: ${b.symbol} • ${b.strategy}`, {
-                        description: `${b.totalTrades} trades • ${b.winRate.toFixed(1)}% win • PF ${b.profitFactor.toFixed(2)}`,
-                      });
-                    }}
+                    onClick={() => loadFromHistory(b)}
                   >
                     <TableCell className="font-medium">{b.symbol}</TableCell>
                     <TableCell>{b.timeframe}</TableCell>

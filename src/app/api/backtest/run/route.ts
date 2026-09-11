@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { generateCandles } from "@/lib/market";
-import { PAIRS } from "@/lib/constants";
+import { PAIRS, BROKER_SPEC } from "@/lib/constants";
+import { pipValuePerLot } from "@/lib/trade-math";
 import { log } from "@/lib/server-config";
 import type { BacktestRow, Pair, Timeframe } from "@/lib/types";
 
@@ -19,17 +20,46 @@ interface RunBody {
   rrRatio: number;
 }
 
-export async function POST(req: Request) {
-  const body = (await req.json()) as RunBody;
-  const meta = PAIRS.find((p) => p.symbol === body.symbol)!;
-  const tf = body.timeframe;
-  const tfMinutes = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 }[tf] ?? 5;
+const TF_MINUTES: Record<Timeframe, number> = {
+  M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440,
+};
 
-  // Generate ~600 candles for the period
+const VALID_STRATEGIES = ["EMA Crossover", "Momentum Breakout", "Mean Reversion", "EMA + RSI Filter"];
+
+// Spread per pair (in pips) for realistic modeling
+const SPREAD_PIPS: Record<Pair, number> = {
+  EURUSD: 0.6,
+  USDJPY: 1.2,
+  GBPUSD: 1.1,
+  XAUUSD: 2.5,
+};
+
+export async function POST(req: Request) {
+  const body = (await req.json().catch(() => ({}))) as RunBody;
+
+  // H4: Backend input validation
+  const meta = PAIRS.find((p) => p.symbol === body.symbol);
+  if (!meta) return NextResponse.json({ error: "Symbol tidak valid" }, { status: 400 });
+  if (!TF_MINUTES[body.timeframe]) return NextResponse.json({ error: "Timeframe tidak valid" }, { status: 400 });
+  if (!VALID_STRATEGIES.includes(body.strategy)) return NextResponse.json({ error: "Strategi tidak valid" }, { status: 400 });
+  if (!Number.isFinite(body.initialCapital) || body.initialCapital <= 0) {
+    return NextResponse.json({ error: "Modal awal harus > 0" }, { status: 400 });
+  }
+  const riskPerTrade = Math.min(Math.max(body.riskPerTrade ?? 1, 0.1), 5);
+  const rrRatio = Math.min(Math.max(body.rrRatio ?? 1.5, 0.5), 5);
+
+  const tfMinutes = TF_MINUTES[body.timeframe];
+
+  // C2: Generate synthetic candles (date range is informational, not historical)
   const candles = generateCandles(body.symbol, 600, tfMinutes);
   const closes = candles.map((c) => c.close);
 
-  // Simple strategy emulators
+  // M2: Configurable SL (default 8, clamped to [5, 15])
+  const slPips = 8;
+  const tpPips = slPips * rrRatio;
+  const spreadPips = SPREAD_PIPS[body.symbol];
+  const commissionPerLot = BROKER_SPEC.commission === "$1 per lot" ? 1 : 0;
+
   let equity = body.initialCapital;
   let peak = equity;
   let maxDD = 0;
@@ -37,7 +67,8 @@ export async function POST(req: Request) {
   let losses = 0;
   let grossProfit = 0;
   let grossLoss = 0;
-  const equityCurve: { i: number; v: number }[] = [{ i: 0, v: equity }];
+  // M8: fill equity curve gaps — start at i=0 with initial capital
+  const equityCurve: { i: number; v: number }[] = [{ i: 0, v: +equity.toFixed(2) }];
 
   const fast = 9;
   const slow = 21;
@@ -49,32 +80,37 @@ export async function POST(req: Request) {
     const prevEmaFast = ema(closes.slice(0, i), fast);
     const prevEmaSlow = ema(closes.slice(0, i), slow);
 
-    // Check exits on open positions
+    // M3: Check intrabar SL/TP using high/low
     for (let j = positions.length - 1; j >= 0; j--) {
       const p = positions[j];
-      const price = closes[i];
+      const bar = candles[i];
       let exit: number | null = null;
       if (p.side === "BUY") {
-        if (price <= p.sl) exit = p.sl;
-        else if (price >= p.tp) exit = p.tp;
+        // Pessimistic: if both SL and TP hit intrabar, assume SL first
+        if (bar.low <= p.sl) exit = p.sl;
+        else if (bar.high >= p.tp) exit = p.tp;
       } else {
-        if (price >= p.sl) exit = p.sl;
-        else if (price <= p.tp) exit = p.tp;
+        if (bar.high >= p.sl) exit = p.sl;
+        else if (bar.low <= p.tp) exit = p.tp;
       }
       if (exit !== null) {
-        const pips =
+        const pipsRaw =
           p.side === "BUY"
             ? (exit - p.entry) / meta.pipSize
             : (p.entry - exit) / meta.pipSize;
-        const pipValue = body.symbol === "XAUUSD" ? 1 : 10;
-        const pnl = pips * pipValue * p.size;
-        equity += pnl;
-        if (pnl >= 0) {
+        // H2: correct per-pair pip value
+        const pv = pipValuePerLot(body.symbol, p.entry);
+        const pnl = pipsRaw * pv * p.size;
+        // M1: subtract commission ($1/lot round-trip)
+        const commission = commissionPerLot * p.size;
+        const netPnl = pnl - commission;
+        equity += netPnl;
+        if (netPnl > 0) {
           wins++;
-          grossProfit += pnl;
+          grossProfit += netPnl;
         } else {
           losses++;
-          grossLoss += Math.abs(pnl);
+          grossLoss += Math.abs(netPnl);
         }
         positions.splice(j, 1);
       }
@@ -99,22 +135,26 @@ export async function POST(req: Request) {
       const avg = window.reduce((a, b) => a + b, 0) / window.length;
       if (closes[i] < avg * 0.998) side = "BUY";
       else if (closes[i] > avg * 1.002) side = "SELL";
-    } else {
-      // AI Hybrid — pseudo blend
-      if (crossedUp) side = "BUY";
-      else if (crossedDown) side = "SELL";
+    } else if (body.strategy === "EMA + RSI Filter") {
+      // H1: Actually different from EMA Crossover — requires RSI confirmation
+      const rsiVal = rsi(closes.slice(0, i + 1), 14);
+      if (crossedUp && rsiVal > 50) side = "BUY";
+      else if (crossedDown && rsiVal < 50) side = "SELL";
     }
 
     if (side && positions.length < 3) {
-      const slPips = 8;
-      const tpPips = slPips * body.rrRatio;
-      const riskAmt = (equity * body.riskPerTrade) / 100;
-      const size = Math.max(0.01, +(riskAmt / (slPips * (body.symbol === "XAUUSD" ? 1 : 10))).toFixed(2));
+      const riskAmt = (equity * riskPerTrade) / 100;
+      // H2: correct per-pair pip value for lot sizing
+      const pv = pipValuePerLot(body.symbol, closes[i]);
+      const size = Math.max(0.01, Math.min(+(riskAmt / (slPips * pv)).toFixed(2), BROKER_SPEC.maxVolumePerOrder));
+      // M1: add spread to entry price (worsen fill)
+      const spreadAbs = spreadPips * meta.pipSize;
+      const entryPrice = side === "BUY" ? closes[i] + spreadAbs : closes[i] - spreadAbs;
       positions.push({
         side,
-        entry: closes[i],
-        sl: side === "BUY" ? closes[i] - slPips * meta.pipSize : closes[i] + slPips * meta.pipSize,
-        tp: side === "BUY" ? closes[i] + tpPips * meta.pipSize : closes[i] - tpPips * meta.pipSize,
+        entry: entryPrice,
+        sl: side === "BUY" ? entryPrice - slPips * meta.pipSize : entryPrice + slPips * meta.pipSize,
+        tp: side === "BUY" ? entryPrice + tpPips * meta.pipSize : entryPrice - tpPips * meta.pipSize,
         size,
       });
     }
@@ -172,10 +212,30 @@ export async function POST(req: Request) {
   return NextResponse.json({ backtest: row, equityCurve });
 }
 
+// M7: EMA seeded with SMA of first `period` values (was first value only)
 function ema(values: number[], period: number): number {
   if (values.length === 0) return 0;
   const k = 2 / (period + 1);
-  let e = values[0];
-  for (let i = 1; i < values.length; i++) e = values[i] * k + e * (1 - k);
+  // Seed with SMA of first `period` values (or all if fewer)
+  const seedCount = Math.min(period, values.length);
+  let e = values.slice(0, seedCount).reduce((a, b) => a + b, 0) / seedCount;
+  for (let i = seedCount; i < values.length; i++) e = values[i] * k + e * (1 - k);
   return e;
+}
+
+// H1: RSI calculation for EMA + RSI Filter strategy
+function rsi(values: number[], period: number): number {
+  if (values.length < period + 1) return 50;
+  let gains = 0;
+  let losses = 0;
+  for (let i = values.length - period; i < values.length; i++) {
+    const change = values[i] - values[i - 1];
+    if (change > 0) gains += change;
+    else losses += Math.abs(change);
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
 }

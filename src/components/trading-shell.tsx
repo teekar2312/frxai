@@ -123,17 +123,14 @@ export function TradingShell() {
   }, [setQuote]);
 
   // Clock + sessions — initialize on mount, then update every second
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => {
-    // Set immediately on mount (avoids null render flash)
-    const now = new Date();
-    setClock(now);
-    setSessions(activeSessions(now));
-    const id = setInterval(() => {
-      const n = new Date();
-      setClock(n);
-      setSessions(activeSessions(n));
-    }, 1000);
+    const updateClock = () => {
+      const now = new Date();
+      setClock(now);
+      setSessions(activeSessions(now));
+    };
+    updateClock(); // set immediately on mount
+    const id = setInterval(updateClock, 1000);
     return () => clearInterval(id);
   }, []);
 

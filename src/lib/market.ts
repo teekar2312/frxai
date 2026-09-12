@@ -17,14 +17,14 @@ for (const p of PAIRS) {
 }
 
 function vol(symbol: Pair): number {
-  // volatility per tick relative to price
+  // volatility per tick relative to price — reduced for more realistic movement
   switch (symbol) {
     case "XAUUSD":
-      return 0.0008;
+      return 0.0003; // was 0.0008 — too volatile, caused immediate SL hits
     case "USDJPY":
-      return 0.00025;
+      return 0.0001;
     default:
-      return 0.00018;
+      return 0.00008;
   }
 }
 
@@ -60,6 +60,30 @@ export function getQuote(symbol: Pair): Quote {
     spreadPips: sp,
     changePct,
     last: next,
+    high: s.high,
+    low: s.low,
+    ts: Date.now(),
+  };
+}
+
+/**
+ * Read current quote WITHOUT advancing the random walk.
+ * Use this for SL/TP checks, trailing stop, and P&L calculations
+ * so they see the SAME price the UI shows (from the last market poll).
+ */
+export function peekQuote(symbol: Pair): Quote {
+  const meta = PAIRS.find((p) => p.symbol === symbol)!;
+  const s = state[symbol];
+  const sp = spreadPips(symbol);
+  const spreadAbs = sp * meta.pipSize;
+  const changePct = ((s.price - s.prevClose) / s.prevClose) * 100;
+  return {
+    symbol,
+    bid: s.price - spreadAbs / 2,
+    ask: s.price + spreadAbs / 2,
+    spreadPips: sp,
+    changePct,
+    last: s.price,
     high: s.high,
     low: s.low,
     ts: Date.now(),

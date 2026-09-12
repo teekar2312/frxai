@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { ensureAccountWithDailyReset, log } from "@/lib/server-config";
 import { PAIRS } from "@/lib/constants";
-import { getQuote } from "@/lib/market";
+import { peekQuote } from "@/lib/market";
 import { pipValuePerLot } from "@/lib/trade-math";
 import type { Pair, TradeRow } from "@/lib/types";
 
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
         throw new Error("NOT_FOUND");
       }
       const meta = PAIRS.find((p) => p.symbol === trade.symbol)!;
-      const quote = getQuote(trade.symbol as Pair);
+      const quote = peekQuote(trade.symbol as Pair); // don't advance price on close
       const closePrice = trade.side === "BUY" ? quote.bid : quote.ask;
       const pipsRaw =
         trade.side === "BUY"

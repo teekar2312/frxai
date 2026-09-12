@@ -3,7 +3,7 @@ import { db } from "./db";
 import { ensureAccountWithDailyReset, getConfig, log, setConfig } from "./server-config";
 import { analyzeMarket } from "./ai";
 import { PAIRS } from "./constants";
-import { getQuote } from "./market";
+import { getQuote, peekQuote } from "./market";
 import { marginRequired, pipValuePerLot } from "./trade-math";
 import type { Pair, RiskConfig, Side, TradingConfig, TradeRow } from "./types";
 
@@ -366,7 +366,8 @@ export async function runTrailingStopPass(): Promise<{ updated: number; details:
   for (const t of trades) {
     const meta = PAIRS.find((p) => p.symbol === t.symbol);
     if (!meta || !t.trailingPips || !t.stopLoss) continue;
-    const quote = getQuote(t.symbol as Pair);
+    // FIX: use peekQuote (read without advancing random walk)
+    const quote = peekQuote(t.symbol as Pair);
     const trailDist = t.trailingPips * meta.pipSize;
     let newSL = t.stopLoss;
     if (t.side === "BUY") {
@@ -399,12 +400,21 @@ export async function runTrailingStopPass(): Promise<{ updated: number; details:
 export async function runStopCheck(): Promise<{ checked: number; closed: number }> {
   const openTrades = await db.trade.findMany({ where: { status: "OPEN" } });
   let closed = 0;
+  const now = Date.now();
+  const GRACE_PERIOD_MS = 15_000; // 15s grace period after trade open
 
   for (const t of openTrades) {
+    // Grace period: don't check SL/TP for first 15 seconds after opening
+    // (prevents immediate close due to spread or price simulation noise)
+    const openedAtMs = t.openedAt.getTime();
+    if (now - openedAtMs < GRACE_PERIOD_MS) continue;
+
     if (!t.stopLoss && !t.takeProfit) continue;
     const meta = PAIRS.find((p) => p.symbol === t.symbol);
     if (!meta) continue;
-    const quote = getQuote(t.symbol as Pair);
+    // FIX: use peekQuote (read without advancing) so SL/TP check sees the
+    // SAME price the UI shows (from last market poll)
+    const quote = peekQuote(t.symbol as Pair);
 
     let shouldClose = false;
     let closePrice = 0;

@@ -85,8 +85,9 @@ export function TradingShell() {
   // C2: visibility ref for pausing polls when tab is hidden
   const isVisibleRef = useRef(true);
 
-  const [clock, setClock] = useState(new Date());
-  const [sessions, setSessions] = useState(activeSessions());
+  // Hydration fix: initialize as null, set after mount to avoid SSR/CSR mismatch
+  const [clock, setClock] = useState<Date | null>(null);
+  const [sessions, setSessions] = useState<{ label: string; active: boolean }[]>([]);
   const { theme, setTheme } = useTheme();
 
   // C2: Track document visibility — pause all polls when tab is hidden
@@ -121,12 +122,16 @@ export function TradingShell() {
     };
   }, [setQuote]);
 
-  // Clock + sessions — keep running (cheap, no network)
+  // Clock + sessions — initialize on mount, then update every second
   useEffect(() => {
+    // Set immediately on mount (avoids null render flash)
+    const now = new Date();
+    setClock(now);
+    setSessions(activeSessions(now));
     const id = setInterval(() => {
-      const now = new Date();
-      setClock(now);
-      setSessions(activeSessions(now));
+      const n = new Date();
+      setClock(n);
+      setSessions(activeSessions(n));
     }, 1000);
     return () => clearInterval(id);
   }, []);
@@ -363,10 +368,10 @@ export function TradingShell() {
 
               <div className="text-right">
                 <div className="tnum text-sm font-semibold">
-                  {clock.toLocaleTimeString("id-ID", { hour12: false })}
+                  {clock ? clock.toLocaleTimeString("id-ID", { hour12: false }) : "--:--:--"}
                 </div>
                 <div className="text-[10px] text-muted-foreground">
-                  {clock.toLocaleDateString("id-ID", { weekday: "short", day: "2-digit", month: "short" })}
+                  {clock ? clock.toLocaleDateString("id-ID", { weekday: "short", day: "2-digit", month: "short" }) : ""}
                 </div>
               </div>
 

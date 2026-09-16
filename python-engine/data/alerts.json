@@ -1,0 +1,15 @@
+{
+  "alerts": [
+    {
+      "id": "386fccee5545486dbf790d132c0df640",
+      "pair": "EURUSD",
+      "condition": "ABOVE",
+      "price": 1.1,
+      "status": "ACTIVE",
+      "note": "",
+      "createdAt": "2026-09-15T10:15:11.202737+00:00",
+      "triggeredAt": null
+    }
+  ],
+  "updatedAt": "2026-09-15T10:15:11.202876+00:00"
+}

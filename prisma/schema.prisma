@@ -1,0 +1,209 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// FINEX AI TRADING SYSTEM - DATABASE SCHEMA
+// ============================================================
+
+model Settings {
+  id                String   @id @default("main")
+
+  // Trading mode: manual | ai
+  tradingMode       String   @default("manual")
+
+  // Pair selection (manual | ai) + selected pairs (csv)
+  pairMode          String   @default("manual")
+  pairs             String   @default("EURUSD,USDJPY,GBPUSD,XAUUSD")
+
+  // Session selection (manual | ai) + selected sessions (csv)
+  sessionMode       String   @default("manual")
+  sessions          String   @default("sydney,tokyo,london,newyork")
+
+  // Timeframe selection (manual | ai) + selected timeframes (csv)
+  timeframeMode     String   @default("manual")
+  timeframes        String   @default("M15,M30,H1")
+
+  // AI provider (manual selection): zai|groq|tinyfish|openai|google|openrouter|tokenplus|local
+  aiProvider        String   @default("zai")
+
+  // Indicator selection (manual | ai) + selected indicators (csv of ids)
+  indicatorMode     String   @default("manual")
+  indicators        String   @default("ema,rsi,macd,atr,bollinger,supertrend,stoch,vwap,obv,cci,williamsr,momentum,psar,sma,donchian,mfi,roc,stddev,ad,tickvol")
+
+  // Risk management (manual | ai)
+  riskMode          String   @default("manual")
+  riskPerTrade      Float    @default(0.75) // 0.5 - 1.0 %
+  stopLossPips      Int      @default(10) // 5 - 15
+  takeProfitRatio   Float    @default(1.5) // R:R = 1 : 1.5
+  maxPositions      Int      @default(2) // 1 - 3
+  dailyRiskLimit    Float    @default(2.5) // 2 - 3 % (anti-MC rule)
+  dailyTarget       Float    @default(2.0) // 1 - 3 %
+  avoidNews         Boolean  @default(true)
+
+  // Trailing stop (manual | ai)
+  trailingMode      String   @default("manual")
+  trailingStopPips  Int      @default(6)
+
+  // Engine connection
+  engineMode        String   @default("demo") // demo | live
+  engineUrl         String   @default("http://localhost:8000")
+
+  // Email notifications
+  emailEnabled      Boolean  @default(false)
+  emailTo           String   @default("")
+  emailEvents       String   @default("trade_open,trade_close,alert,error,daily_report")
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Account {
+  id                String   @id @default("main")
+  mode              String   @default("DEMO") // DEMO | LIVE
+  login             String   @default("FINEX-DEMO-10001")
+  server            String   @default("FINEX Indonesia")
+  currency          String   @default("USD")
+  leverage          Int      @default(500)
+  balance           Float    @default(10000)
+  equity            Float    @default(10000)
+  margin            Float    @default(0)
+  freeMargin        Float    @default(10000)
+  marginLevel       Float    @default(0)
+  dailyStartBalance Float    @default(10000)
+  dailyPnl          Float    @default(0)
+  dailyStart        DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model Position {
+  id          String    @id @default(cuid())
+  ticket      String
+  pair        String
+  side        String // BUY | SELL
+  volume      Float
+  openPrice   Float
+  closePrice  Float?
+  stopLoss    Float?
+  takeProfit  Float?
+  trailing    Boolean   @default(false)
+  trailingPips Int      @default(0)
+  commission  Float     @default(0)
+  profit      Float     @default(0)
+  pips        Float     @default(0)
+  status      String    @default("OPEN") // OPEN | CLOSED
+  reason      String? // TP | SL | MANUAL | AI | STOP_OUT
+  source      String    @default("MANUAL") // MANUAL | AI
+  mode        String    @default("DEMO")
+  comment     String?
+  signalScore Float     @default(0)
+  signalIndicators String? // csv of indicator ids that agreed at open (for self-learning)
+  signalTf    String?   // timeframe used at open
+  openedAt    DateTime  @default(now())
+  closedAt    DateTime?
+}
+
+model LogEntry {
+  id         String   @id @default(cuid())
+  level      String // INFO | WARN | ERROR | DEBUG
+  category   String // TRADING | ENGINE | AI | RISK | NEWS | ALERT | SYSTEM | EMAIL
+  message    String
+  details    String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([level, category])
+}
+
+model PriceAlert {
+  id          String    @id @default(cuid())
+  pair        String
+  condition   String // ABOVE | BELOW
+  price       Float
+  status      String    @default("ACTIVE") // ACTIVE | TRIGGERED | CANCELLED
+  note        String?
+  mode        String    @default("DEMO")
+  createdAt   DateTime  @default(now())
+  triggeredAt DateTime?
+}
+
+model Backtest {
+  id              String   @id @default(cuid())
+  pair            String
+  timeframe       String
+  indicators      String
+  bars            Int
+  initialBalance  Float
+  finalBalance    Float
+  netProfit       Float
+  netProfitPct    Float
+  totalTrades     Int
+  wins            Int
+  losses          Int
+  winRate         Float
+  profitFactor    Float
+  maxDrawdown     Float
+  maxDrawdownPct  Float
+  avgTrade        Float
+  bestTrade       Float
+  worstTrade      Float
+  expectancy      Float
+  sharpe          Float
+  riskPerTrade    Float
+  stopLossPips    Int
+  takeProfitRatio Float
+  equityCurveJson String
+  tradesJson      String
+  createdAt       DateTime @default(now())
+}
+
+model NewsItem {
+  id          String   @id @default(cuid())
+  source      String // FINNHUB | MARKETAUX | WEB | SIM
+  headline    String
+  summary     String?
+  url         String?
+  sentiment   Float    @default(0) // -1 .. 1
+  impact      String   @default("MEDIUM") // HIGH | MEDIUM | LOW
+  category    String? // CENTRAL_BANK | ECONOMIC | GEOPOLITICS | FISCAL | COMMODITY | SENTIMENT | BREAKING
+  pairs       String?
+  publishedAt DateTime @default(now())
+
+  @@index([publishedAt])
+}
+
+model AnalysisRecord {
+  id             String   @id @default(cuid())
+  pair           String
+  timeframe      String
+  provider       String
+  signal         String // STRONG_BUY | BUY | NEUTRAL | SELL | STRONG_SELL
+  confidence     Float
+  entry          Float?
+  stopLoss       Float?
+  takeProfit     Float?
+  score          Float    @default(0)
+  reasoning      String
+  fundamentalsJson String?
+  indicatorsJson String?
+  newsSentiment  Float    @default(0)
+  source         String   @default("DEMO")
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model ModelStat {
+  id        String   @id @default(cuid())
+  indicator String   @unique
+  weight    Float    @default(1.0)
+  wins      Int      @default(0)
+  losses    Int      @default(0)
+  samples   Int      @default(0)
+  updatedAt DateTime @updatedAt
+}

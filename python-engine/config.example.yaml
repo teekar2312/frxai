@@ -1,0 +1,64 @@
+# ============================================================
+# FINEX AI TRADING ENGINE — Contoh Konfigurasi
+# Salin file ini menjadi: config.yaml  lalu sesuaikan.
+# Kredensial (login/password MT5, API key) LEBIH AMAN diisi
+# lewat file .env — jangan ditulis di sini.
+# ============================================================
+
+mt5:
+  login: 0            # diisi via .env lebih aman
+  password: ""        # diisi via .env lebih aman
+  server: "FINEX-Live"
+  path: "C:\\Program Files\\MetaTrader 5\\terminal64.exe"
+  portable: false
+  timeout_seconds: 60
+
+trading:
+  mode: manual            # manual | ai
+  # 18 pair tersedia — aktifkan sesuai kebutuhan (semua dapat dipilih
+  # juga dari tab Settings dashboard). Kurangi daftar untuk fokus.
+  pairs: [EURUSD, USDJPY, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD,
+          EURJPY, EURGBP, EURCHF, EURAUD, GBPJPY, GBPCHF, AUDJPY,
+          CADJPY, CHFJPY, XAUUSD, XAGUSD]
+  pair_mode: manual       # manual | ai
+  sessions: [sydney, tokyo, london, newyork]
+  session_mode: manual
+  timeframes: [M15, M30, H1]
+  timeframe_mode: manual
+  magic: 880042           # magic number penanda order engine di MT5
+
+risk:
+  mode: manual            # manual | ai
+  risk_per_trade: 0.75    # 0.5 - 1.0 %
+  stop_loss_pips: 10      # 5 - 15
+  take_profit_ratio: 1.5  # R:R 1:1.5
+  max_positions: 2        # 1 - 3
+  daily_risk_limit: 2.5   # 2 - 3 % (anti-MC)
+  daily_target: 2.0       # 1 - 3 %
+  avoid_news: true        # hindari trading saat news HIGH impact
+  trailing_mode: manual   # manual | ai
+  trailing_stop_pips: 6
+
+ai:
+  provider: zai           # zai|groq|tinyfish|openai|google|openrouter|tokenplus|local
+  model: ""               # kosong = default provider
+
+indicators:
+  mode: manual
+  list: [ema, rsi, macd, atr, bollinger, supertrend, stoch, vwap, obv, cci, williamsr, momentum, psar, sma, donchian, mfi, roc, stddev, ad, tickvol]
+
+news:
+  finnhub_enabled: true
+  marketaux_enabled: true
+  avoid_minutes: 15       # jeda trading ± menit sekitar news HIGH impact
+
+email:
+  enabled: false
+  events: [trade_open, trade_close, alert, error, daily_report, daily_limit]
+
+api:
+  host: 127.0.0.1
+  port: 8000
+
+backtest:
+  initial_balance: 10000

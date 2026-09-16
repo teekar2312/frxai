@@ -1,0 +1,55 @@
+# ============================================================
+# FINEX AI — .gitattributes
+# Normalisasi line-ending lintas platform (dev Linux/macOS ↔
+# Windows). Mencegah "phantom changes" akibat npm/tools menulis
+# ulang file dengan CRLF (mis. package.json setelah npm install
+# di Windows ditolak oleh git pull).
+#
+# `* text=auto`: file teks disimpan LF di repo; checkout
+# menyesuaikan pengaturan autocrlf masing-masing mesin.
+# ============================================================
+* text=auto
+
+# --- Teks eksplisit ---
+*.ts    text
+*.tsx   text
+*.js    text
+*.mjs   text
+*.cjs   text
+*.json  text
+*.md    text
+*.css   text
+*.scss  text
+*.html  text
+*.yaml  text
+*.yml   text
+*.toml  text
+*.py    text
+*.prisma text
+*.sql   text
+*.svg   text
+*.txt   text
+*.env.example text
+
+# Script shell WAJIB LF agar tetap dieksekusi di Linux/Docker
+*.sh    text eol=lf
+
+# --- Binary — JANGAN pernah dinormalisasi ---
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.db    binary
+*.sqlite binary
+*.pdf   binary
+*.webm  binary
+*.mp4   binary

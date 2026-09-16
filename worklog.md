@@ -597,3 +597,20 @@ Stage Summary:
 - Version 0.3.2 konsisten: package.json + /api/health + CHANGELOG.
 - File baru: scripts/{dev,build,start}.mjs, db/.gitkeep; diubah: package.json, Dockerfile, .env.example, DEPLOYMENT.md, PRODUCTION.md, CHANGELOG.md, worklog.md.
 - Untuk user Windows: git pull → copy .env.example .env → isi SESSION_SECRET (PowerShell: -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 48 | % {[char]$_}) → npm run db:push → npm run dev.
+
+---
+Task ID: 21
+Agent: main (Z.ai Code)
+Task: Resolve "git pull ditolak — local changes package.json would be overwritten" di Windows user
+
+Work Log:
+- Diagnosis: user Windows menjalankan git pull setelah npm install/run dev → npm menulis-ulang package.json (normalisasi/CRLF) sehingga working tree ≠ HEAD → git menolak merge. Versi repo (0.3.2) lebih baru → perubahan lokal = noise npm, aman dibuang.
+- Root-fix ke repo: tambah .gitattributes (`* text=auto` + ekstensi teks eksplisit + `*.sh text eol=lf` wajib LF untuk Docker/Linux + daftar binary lengkap) → ke depan git menormalkan saat add, sehingga file yang ditulis-ulang tool (CRLF) tidak lagi terdeteksi sebagai modifikasi.
+- Verifikasi tanpa renormalization storm: git status hanya 3 file yang diharapkan (.gitattributes baru, package.json bump, CHANGELOG) — file repo memang sudah LF semua.
+- Bump v0.3.2 → 0.3.3 + CHANGELOG [0.3.3] Added.
+- Instruksi user: git diff package.json (cek) → git checkout -- package.json → git pull origin main → git status bersih; setelah itu npm install tidak akan membuat kotor lagi.
+
+Stage Summary:
+- Pencegahan permanen phantom-changes lintas platform; tidak ada perubahan kode aplikasi.
+- Version 0.3.3 konsisten (package.json + CHANGELOG; /api/health ikut via import).
+- File baru: .gitattributes; diubah: package.json, CHANGELOG.md, worklog.md.

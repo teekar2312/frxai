@@ -4,6 +4,11 @@ Semua perubahan signifikan didokumentasikan di sini. Format mengikuti [Keep a Ch
 
 ---
 
+## [0.3.3] — 2026-09-16
+
+### Added
+- **`.gitattributes`** — normalisasi line-ending lintas platform (`* text=auto`, script `.sh` dipaksa LF, binary ditandai). Mencegah `git pull` ditolak di Windows karena npm menulis-ulang `package.json` dengan CRLF ("Your local changes would be overwritten by merge").
+
 ## [0.3.2] — 2026-09-16
 
 ### Fixed

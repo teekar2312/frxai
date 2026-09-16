@@ -323,13 +323,23 @@ async function runAnalysis(pair: Pair, timeframe: Timeframe): Promise<AnalysisRe
   const bid = tick?.bid ?? cfg.basePrice
   const ask = tick?.ask ?? cfg.basePrice
 
-  // --- News (last 24h, newest first)
+  // --- News (last 24h, newest first) — pair-tagged first, market-wide fallback
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
-  const news = await db.newsItem.findMany({
-    where: { publishedAt: { gte: since } },
+  let news = await db.newsItem.findMany({
+    where: { publishedAt: { gte: since }, pairs: { contains: pair } },
     orderBy: { publishedAt: 'desc' },
     take: 15,
   })
+  if (news.length < 3) {
+    // Not enough pair-specific news → blend in the latest market-wide items
+    const general = await db.newsItem.findMany({
+      where: { publishedAt: { gte: since } },
+      orderBy: { publishedAt: 'desc' },
+      take: 15,
+    })
+    const seen = new Set(news.map((n) => n.id))
+    news = [...news, ...general.filter((n) => !seen.has(n.id))].slice(0, 15)
+  }
   let wSum = 0
   let sSum = 0
   for (const n of news) {

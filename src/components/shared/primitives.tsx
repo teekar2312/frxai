@@ -135,6 +135,7 @@ export function SourceBadge({ source }: { source: string }) {
   const map: Record<string, string> = {
     AI: 'bg-violet-500/15 text-violet-400',
     MANUAL: 'bg-zinc-500/10 text-zinc-400',
+    ANALYSIS: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
     FINNHUB: 'bg-emerald-500/10 text-emerald-500',
     MARKETAUX: 'bg-amber-500/10 text-amber-500',
     WEB: 'bg-teal-500/10 text-teal-500',

@@ -201,11 +201,24 @@ def _state_calendar(state: Any) -> list[dict]:
     return []
 
 
-def _news_sentiment(state: Any) -> float:
-    """Rata-rata sentimen berita terkini (−1..1, defensif)."""
+def _news_sentiment(state: Any, pair: str | None = None) -> float:
+    """Rata-rata sentimen berita terkini (−1..1, defensif).
+
+    Bila ``pair`` diisi, berita yang ditandai pair tersebut diprioritaskan;
+    fallback ke seluruh berita bila tag spesifik kurang dari 3 item.
+    """
     news = _state_news(state)
     if not news:
         return 0.0
+    if pair:
+        p = str(pair).upper()
+        tagged = [
+            n
+            for n in news[:40]
+            if any(str(s).upper() == p for s in (n.get("pairs") or []) if isinstance(s, str))
+        ]
+        if len(tagged) >= 3:
+            news = tagged
     vals: list[float] = []
     for n in news[:20]:
         try:
@@ -407,7 +420,7 @@ def quick_analysis(
     entry_r = round(entry, digits)
     sl_price, tp_price = _levels(sym, entry_r, side, sl_pips, tp_pips)
 
-    news_sent = _news_sentiment(state)
+    news_sent = _news_sentiment(state, sym)
     fundamentals = _heuristic_fundamentals(state, sym)
 
     # ---- Reasoning (Bahasa Indonesia) ------------------------------------

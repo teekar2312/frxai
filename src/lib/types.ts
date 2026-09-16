@@ -88,7 +88,7 @@ export interface PositionView {
   profit: number
   pips: number
   commission: number
-  source: 'MANUAL' | 'AI'
+  source: 'MANUAL' | 'AI' | 'ANALYSIS'
   openedAt: string
   comment: string | null
   magic?: string
@@ -323,6 +323,8 @@ export interface OrderRequest {
   stopLoss?: number | null
   takeProfit?: number | null
   trailing?: boolean
-  source?: 'MANUAL' | 'AI'
+  source?: 'MANUAL' | 'AI' | 'ANALYSIS'
+  /** Indicator ids that agreed with the signal at open (feeds the self-learning loop). */
+  signalIndicators?: string[]
   comment?: string
 }

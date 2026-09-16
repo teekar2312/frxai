@@ -47,6 +47,20 @@ def _pair_context(pair: str) -> str:
         "USDCAD": "Perhatikan khusus harga minyak mentah WTI dan kebijakan BoC.",
         "EURJPY": "Cross EUR/JPY — pantau kebijakan ECB vs BoJ dan sentimen risk-on/off.",
         "GBPJPY": "Cross GBP/JPY — volatilitas tinggi; pantau BoE vs BoJ dan risk sentiment.",
+        "EURGBP": "Cross EUR/GBP — relatif tenang; pantau divergence kebijakan ECB vs BoE "
+        "dan data ekonomi Eurozone vs Inggris.",
+        "EURCHF": "Cross EUR/CHF — sangat dipengaruhi SNB (riwayat intervensi); pantau "
+        "komentar SNB dan flows safe-haven Eropa.",
+        "EURAUD": "Cross EUR/AUD — pantau divergence ECB vs RBA serta harga komoditas "
+        "Australia (bijih besi, batu bara).",
+        "GBPCHF": "Cross GBP/CHF — kombinasi volatilitas GBP dan safe-haven CHF; pantau "
+        "data Inggris dan sentimen risk global.",
+        "AUDJPY": "Cross AUD/JPY — proksi risk appetite klasik; pantau kebijakan RBA vs BoJ "
+        "dan sentimen risk-on/off.",
+        "CADJPY": "Cross CAD/JPY — dipengaruhi harga minyak WTI (CAD) dan perbedaan suku "
+        "bunga BoC vs BoJ; volatil saat risk shift.",
+        "CHFJPY": "Cross CHF/JPY — dua safe-haven saling berhadapan; pantau kebijakan SNB vs "
+        "BoJ dan flows safe-haven global.",
     }
     return notes.get(p, "")
 

@@ -51,6 +51,8 @@ news:
   finnhub_enabled: true
   marketaux_enabled: true
   avoid_minutes: 15       # jeda trading ± menit sekitar news HIGH impact
+  # Simbol pair untuk query MarketAux (kosong → semua 18 pair KNOWN_PAIRS)
+  # symbols: [EURUSD, USDJPY, GBPUSD, XAUUSD]
 
 email:
   enabled: false

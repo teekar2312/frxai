@@ -460,8 +460,8 @@ export default function SetupPanel() {
           <p className="mb-2 text-[10px] leading-tight text-muted-foreground">
             Engine berjalan di <span className="num font-mono text-foreground">engineUrl</span> (default{' '}
             <span className="num font-mono">http://localhost:8000</span>). Dashboard mengonsumsi endpoint{' '}
-            <span className="font-mono text-emerald-600 dark:text-emerald-400">/api/v1/poll</span> — semua fitur lain
-            di-proxy melalui dashboard.
+            <span className="font-mono text-emerald-600 dark:text-emerald-400">/api/v1/poll</span> untuk harga,
+            akun, dan status engine secara real-time; analisa, backtest, dan berita tetap dihitung dashboard.
           </p>
           <div className="max-h-72 overflow-y-auto scrollbar-thin">
             <Table>

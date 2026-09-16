@@ -29,6 +29,7 @@ export async function POST(req: NextRequest) {
           stopLossPips: body.stopLossPips,
           takeProfitPips: body.takeProfitPips,
           source: body.source ?? 'MANUAL',
+          signalIndicators: body.signalIndicators,
           comment: body.comment,
         })
         const view = (await sim.getPositions()).find((p) => p.id === row.id)

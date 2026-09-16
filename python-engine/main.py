@@ -188,6 +188,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="mode simulasi: order TIDAK dikirim ke broker (hanya dicatat)",
     )
+    parser.add_argument(
+        "--backtest",
+        nargs=2,
+        metavar=("PAIR", "TIMEFRAME"),
+        help=(
+            "jalankan backtest lalu keluar, tanpa start server "
+            "(contoh: python main.py --backtest EURUSD H1) — butuh terminal MT5 "
+            "untuk data candle"
+        ),
+    )
+    parser.add_argument(
+        "--bars",
+        type=int,
+        default=1000,
+        help="jumlah candle untuk --backtest (default 1000, clamp 300..5000)",
+    )
     parser.add_argument("--version", action="version", version=f"FINEX engine {ENGINE_VERSION}")
     return parser.parse_args(argv)
 
@@ -1933,12 +1949,73 @@ def _print_banner(config: Config) -> None:
     )
 
 
+def _run_cli_backtest(config: Config, pair: str, timeframe: str, bars: int) -> None:
+    """Backtest offline via CLI: fetch candle MT5 → run_backtest → print ringkasan.
+
+    Dipakai oleh ``python main.py --backtest PAIR TIMEFRAME [--bars N]``.
+    """
+    from app.backtest import run_backtest
+    from app.config import KNOWN_PAIRS
+
+    sym = str(pair).upper()
+    if sym not in KNOWN_PAIRS:
+        valid = ", ".join(KNOWN_PAIRS)
+        print(f"ERROR: pair '{sym}' tidak dikenal. Valid: {valid}")
+        return
+    tf = str(timeframe).upper()
+    n_bars = max(300, min(5000, int(bars)))
+
+    client = MT5Client(config)
+    if not client.connect():
+        print("ERROR: tidak dapat terhubung ke MetaTrader 5 — pastikan terminal berjalan.")
+        return
+    try:
+        df = client.get_candles(sym, tf, n_bars)
+        if df is None or len(df) < 300:
+            print(f"ERROR: data candle tidak cukup ({0 if df is None else len(df)} bar, min 300).")
+            return
+        indicators = list(config.indicators.list) or [
+            "ema", "rsi", "macd", "atr", "bollinger", "supertrend", "stoch",
+        ]
+        result = run_backtest(
+            df,
+            indicators,
+            risk_per_trade=float(config.risk.risk_per_trade),
+            stop_loss_pips=int(config.risk.stop_loss_pips),
+            take_profit_ratio=float(config.risk.take_profit_ratio),
+            initial_balance=10000.0,
+            pip_size=client.pip_size(sym),
+            pip_value=client.pip_value(sym),
+        )
+        print(
+            f"\n===== BACKTEST {sym} {tf} ({len(df)} bar, {len(indicators)} indikator) ====="
+        )
+        for key in (
+            "totalTrades", "wins", "losses", "winRate", "netProfit",
+            "netProfitPct", "profitFactor", "maxDrawdownPct",
+            "avgTrade", "expectancy", "sharpe",
+        ):
+            val = result.get(key)
+            if val is not None:
+                print(f"  {key:<18}: {val}")
+        print("=====================================================\n")
+    finally:
+        try:
+            client.shutdown()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entrypoint engine: konfigurasi → thread loop → server FastAPI."""
     args = _parse_args(argv)
     config = load_config(args.config)
     if args.dry_run:
         config.dry_run = True
+
+    if args.backtest:
+        _run_cli_backtest(config, args.backtest[0], args.backtest[1], args.bars)
+        return
 
     _print_banner(config)
 

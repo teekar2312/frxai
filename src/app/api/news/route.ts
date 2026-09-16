@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { NewsItem } from '@prisma/client'
 import { db } from '@/lib/db'
 import { getSimulator } from '@/lib/engine/simulator'
-import { getPairConfig } from '@/lib/constants'
+import { getPairConfig, PAIRS } from '@/lib/constants'
 import type { NewsImpact, NewsItemView, Pair } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -220,6 +220,96 @@ const GEN_TEMPLATES: GenTemplate[] = [
 ]
 
 // ------------------------------------------------------------
+// Real news enrichment: pair tagging + keyword sentiment heuristic
+// (mirrors python-engine/app/news.py so demo & live behave alike)
+// ------------------------------------------------------------
+const CURRENCY_WORDS: Record<string, string> = {
+  dollar: 'USD', greenback: 'USD', fed: 'USD', fomc: 'USD', 'u.s': 'USD', us: 'USD',
+  euro: 'EUR', ecb: 'EUR', eurozone: 'EUR', 'euro zone': 'EUR',
+  yen: 'JPY', boj: 'JPY', 'bank of japan': 'JPY',
+  pound: 'GBP', sterling: 'GBP', boe: 'GBP', 'bank of england': 'GBP', britain: 'GBP', uk: 'GBP',
+  franc: 'CHF', snb: 'CHF', swiss: 'CHF',
+  'loonie': 'CAD', boc: 'CAD', canada: 'CAD', canadian: 'CAD',
+  'aussie': 'AUD', rba: 'AUD', australia: 'AUD', australian: 'AUD',
+  'kiwi': 'NZD', rbnz: 'NZD', 'new zealand': 'NZD',
+  gold: 'XAU', bullion: 'XAU',
+  silver: 'XAG',
+}
+
+const POSITIVE_WORDS = new Set([
+  'hawkish', 'strong', 'stronger', 'beat', 'beats', 'rises', 'rise', 'rally', 'rallies',
+  'surge', 'surges', 'growth', 'bullish', 'upgrade', 'upgrades', 'record', 'robust',
+  'expand', 'expands', 'gain', 'gains', 'boost', 'boosts', 'optimism', 'recovery',
+  'jump', 'jumps', 'soar', 'soars',
+])
+const NEGATIVE_WORDS = new Set([
+  'dovish', 'weak', 'weaker', 'miss', 'misses', 'falls', 'fall', 'decline', 'declines',
+  'slump', 'slumps', 'recession', 'bearish', 'downgrade', 'downgrades', 'crisis',
+  'plunge', 'plunges', 'fear', 'fears', 'war', 'tariff', 'tariffs', 'slowdown',
+  'contraction', 'loss', 'losses', 'selloff', 'risk-off',
+])
+const HIGH_IMPACT_WORDS = new Set([
+  'breaks', 'breaking', 'crash', 'crashes', 'intervention', 'rate decision', 'nonfarm',
+  'non-farm', 'nfp', 'cpi', 'inflation surprise', 'emergency', 'escalation', 'record',
+])
+
+/** Detect which of the 18 traded pairs a headline/summary refers to. */
+function detectPairs(text: string): Pair[] {
+  const t = ` ${text.toLowerCase()} `
+  const ccys = new Set<string>()
+  for (const [word, ccy] of Object.entries(CURRENCY_WORDS)) {
+    // Word-boundary regex — avoids substring false positives ("focus" ≠ "us")
+    const re = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`)
+    if (re.test(t)) ccys.add(ccy)
+  }
+  // Bare symbols like "EURUSD" / "EUR/USD"
+  for (const p of PAIRS) {
+    const sym = p.id.toLowerCase()
+    const slash = `${p.id.slice(0, 3).toLowerCase()}/${p.id.slice(3).toLowerCase()}`
+    if (t.includes(sym) || t.includes(slash)) return [p.id]
+  }
+  // Metals map directly
+  if (ccys.has('XAU')) return ['XAUUSD']
+  if (ccys.has('XAG')) return ['XAGUSD']
+  const out: Pair[] = []
+  for (const p of PAIRS) {
+    if (p.commodity) continue
+    const base = p.id.slice(0, 3)
+    const quote = p.id.slice(3)
+    if (ccys.has(base) && ccys.has(quote)) out.push(p.id)
+  }
+  // General single-currency news (e.g. only "dollar") tags the most liquid USD pairs
+  if (out.length === 0 && ccys.size === 1) {
+    const only = [...ccys][0]
+    for (const p of PAIRS) {
+      if (p.commodity) continue
+      if (p.id.includes(only) && out.length < 4) out.push(p.id)
+    }
+  }
+  return out.slice(0, 6)
+}
+
+/** Keyword sentiment heuristic in [-1, 1] (same word lists as the python engine). */
+function keywordSentiment(text: string): number {
+  const words = text.toLowerCase().split(/[^a-z']+/)
+  let pos = 0
+  let neg = 0
+  for (const w of words) {
+    if (POSITIVE_WORDS.has(w)) pos++
+    else if (NEGATIVE_WORDS.has(w)) neg++
+  }
+  return Math.round(Math.max(-1, Math.min(1, (pos - neg) / 2)) * 100) / 100
+}
+
+function heuristicImpact(text: string, sentiment: number): NewsImpact {
+  const t = text.toLowerCase()
+  for (const w of HIGH_IMPACT_WORDS) {
+    if (t.includes(w)) return 'HIGH'
+  }
+  return Math.abs(sentiment) >= 0.35 ? 'HIGH' : Math.abs(sentiment) >= 0.1 ? 'MEDIUM' : 'LOW'
+}
+
+// ------------------------------------------------------------
 // POST — fetch-real | generate
 // ------------------------------------------------------------
 export async function POST(req: NextRequest) {
@@ -260,17 +350,22 @@ export async function POST(req: NextRequest) {
 
       if (toInsert.length > 0) {
         await db.newsItem.createMany({
-          data: toInsert.map((c) => ({
-            source: c.source,
-            headline: c.headline,
-            summary: c.summary,
-            url: c.url,
-            sentiment: 0,
-            impact: 'MEDIUM',
-            category: null,
-            pairs: null,
-            publishedAt: c.publishedAt,
-          })),
+          data: toInsert.map((c) => {
+            const text = `${c.headline} ${c.summary ?? ''}`
+            const sentiment = keywordSentiment(text)
+            const pairs = detectPairs(text)
+            return {
+              source: c.source,
+              headline: c.headline,
+              summary: c.summary,
+              url: c.url,
+              sentiment,
+              impact: heuristicImpact(text, sentiment),
+              category: null,
+              pairs: pairs.length > 0 ? pairs.join(',') : null,
+              publishedAt: c.publishedAt,
+            }
+          }),
         })
       }
       await pruneNews()

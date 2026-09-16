@@ -209,7 +209,9 @@ Banner startup akan muncul:
   Paket MT5   : tersedia
   Konfigurasi : C:\finex\python-engine\config.yaml (0 peringatan)
   Mode trading: manual   |  Provider AI: zai (terkonfigurasi: zai, local)
-  Pair aktif  : EURUSD, USDJPY, GBPUSD, XAUUSD
+  Pair aktif  : EURUSD, USDJPY, GBPUSD, USDCHF, USDCAD, AUDUSD, NZDUSD,
+                EURJPY, EURGBP, EURCHF, EURAUD, GBPJPY, GBPCHF, AUDJPY,
+                CADJPY, CHFJPY, XAUUSD, XAGUSD  (18 pair)
   API engine  : http://127.0.0.1:8000  (docs: /docs, poll: /api/v1/poll)
   File log    : C:\finex\python-engine\logs\engine.log
 ==================================================================
@@ -221,6 +223,8 @@ Opsi CLI tambahan:
 |---|---|
 | `python main.py` | Jalankan normal. |
 | `python main.py --dry-run` | **Mode simulasi** — semua keputusan AI & order manual dijalankan tetapi TIDAK dikirim ke broker (aman untuk belajar). |
+| `python main.py --backtest EURUSD H1` | **Backtest offline** — ambil candle dari MT5, jalankan walk-forward backtest, print ringkasan, lalu keluar (tanpa start server). |
+| `python main.py --backtest GBPJPY M15 --bars 2000` | Backtest dengan jumlah bar kustom (300–5000). |
 | `python main.py --config D:\config.yaml` | Pakai file konfigurasi kustom. |
 | `python main.py --version` | Tampilkan versi engine. |
 
@@ -268,7 +272,8 @@ Jika akun lain sedang aktif di terminal, engine otomatis **login ulang** ke
 
 - Pastikan tombol **"Algo Trading"** di terminal MT5 dalam keadaan **ON**
   (hijau) — tanpa itu order akan ditolak.
-- Pastikan pair EURUSD, USDJPY, GBPUSD, XAUUSD muncul di Market Watch
+- Pastikan pair yang Anda perdagangkan (mis. EURUSD, USDJPY, GBPUSD, XAUUSD)
+  muncul di Market Watch
   (engine memilih otomatis via `symbol_select`, tapi cek nama symbol di broker
   Anda — kadang berprefiks, mis. `EURUSD.r` — jika begitu hubungi developer
   untuk penyesuaian).

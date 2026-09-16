@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic'
 
 interface CalTemplate {
   title: string
-  currency: 'USD' | 'EUR' | 'GBP' | 'JPY'
+  currency: 'USD' | 'EUR' | 'GBP' | 'JPY' | 'AUD' | 'CAD' | 'CHF' | 'NZD'
   impact: NewsImpact // NFP / CPI / Central Bank → HIGH
   base: number // typical value
   unit: 'K' | '%' | ''
@@ -38,6 +38,12 @@ const CALENDAR_POOL: CalTemplate[] = [
   { title: 'ECB Rate Decision', currency: 'EUR', impact: 'HIGH', base: 4.0, unit: '%', dec: 2, spread: 0.25 },
   { title: 'BOE Bank Rate Decision', currency: 'GBP', impact: 'HIGH', base: 5.25, unit: '%', dec: 2, spread: 0.25 },
   { title: 'BOJ Policy Rate Decision', currency: 'JPY', impact: 'HIGH', base: 0.25, unit: '%', dec: 2, spread: 0.15 },
+  { title: 'RBA Cash Rate Decision', currency: 'AUD', impact: 'HIGH', base: 4.35, unit: '%', dec: 2, spread: 0.25 },
+  { title: 'BoC Overnight Rate Decision', currency: 'CAD', impact: 'HIGH', base: 5.0, unit: '%', dec: 2, spread: 0.25 },
+  { title: 'SNB Policy Rate Decision', currency: 'CHF', impact: 'HIGH', base: 1.5, unit: '%', dec: 2, spread: 0.25 },
+  { title: 'RBNZ Official Cash Rate', currency: 'NZD', impact: 'HIGH', base: 5.5, unit: '%', dec: 2, spread: 0.25 },
+  { title: 'CPI y/y', currency: 'CAD', impact: 'HIGH', base: 2.9, unit: '%', dec: 1, spread: 0.3 },
+  { title: 'CPI y/y', currency: 'AUD', impact: 'HIGH', base: 3.5, unit: '%', dec: 1, spread: 0.3 },
   // Growth / prices / activity — MEDIUM impact
   { title: 'PPI m/m', currency: 'USD', impact: 'MEDIUM', base: 0.2, unit: '%', dec: 1, spread: 0.25 },
   { title: 'PPI m/m', currency: 'EUR', impact: 'MEDIUM', base: -0.1, unit: '%', dec: 1, spread: 0.25 },
@@ -56,6 +62,15 @@ const CALENDAR_POOL: CalTemplate[] = [
   { title: 'Services PMI', currency: 'USD', impact: 'MEDIUM', base: 52.5, unit: '', dec: 1, spread: 1.2 },
   { title: 'Services PMI', currency: 'EUR', impact: 'MEDIUM', base: 48.9, unit: '', dec: 1, spread: 1.0 },
   { title: 'Services PMI', currency: 'GBP', impact: 'MEDIUM', base: 50.8, unit: '', dec: 1, spread: 1.0 },
+  // AUD / CAD / CHF / NZD activity data — covers the remaining quote currencies
+  { title: 'Employment Change', currency: 'AUD', impact: 'MEDIUM', base: 15, unit: 'K', dec: 0, spread: 20 },
+  { title: 'Employment Change', currency: 'CAD', impact: 'MEDIUM', base: 25, unit: 'K', dec: 0, spread: 30 },
+  { title: 'Retail Sales m/m', currency: 'AUD', impact: 'MEDIUM', base: 0.3, unit: '%', dec: 1, spread: 0.4 },
+  { title: 'Retail Sales m/m', currency: 'CAD', impact: 'MEDIUM', base: 0.2, unit: '%', dec: 1, spread: 0.4 },
+  { title: 'GDP q/q', currency: 'CHF', impact: 'MEDIUM', base: 0.2, unit: '%', dec: 1, spread: 0.2 },
+  { title: 'Trade Balance', currency: 'NZD', impact: 'MEDIUM', base: 120, unit: 'K', dec: 0, spread: 250 },
+  { title: 'Unemployment Rate', currency: 'AUD', impact: 'MEDIUM', base: 4.1, unit: '%', dec: 1, spread: 0.15 },
+  { title: 'Manufacturing PMI', currency: 'CHF', impact: 'MEDIUM', base: 47.5, unit: '', dec: 1, spread: 1.0 },
 ]
 
 function fmtValue(v: number, t: CalTemplate): string {

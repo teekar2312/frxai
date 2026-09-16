@@ -115,7 +115,7 @@ interface RtPosition {
   trailing: boolean
   trailingPips: number
   commission: number
-  source: 'MANUAL' | 'AI'
+  source: 'MANUAL' | 'AI' | 'ANALYSIS'
   signalIndicators: string[]
   signalTf: string | null
   openedAt: Date
@@ -237,17 +237,25 @@ export class Simulator {
     this.account = {
       balance: arow.balance,
       dailyStartBalance: arow.dailyStartBalance,
-      day: utcDayKey(arow.dailyStart) === utcDayKey(Date.now()) ? utcDayKey(Date.now()) : utcDayKey(Date.now()),
+      day: utcDayKey(Date.now()),
     }
-    // Roll daily start if the stored anchor is from a previous day
+    // Roll daily start if the stored anchor is from a previous day (+ daily report email)
     if (utcDayKey(arow.dailyStart) !== utcDayKey(Date.now())) {
+      const startBal = arow.dailyStartBalance
+      const dayPnl = arow.balance - startBal
+      const dayPct = startBal > 0 ? (dayPnl / startBal) * 100 : 0
       this.account.dailyStartBalance = arow.balance
       await db.account.update({ where: { id: 'main' }, data: { dailyStartBalance: arow.balance } })
+      await simulateEmailSend(
+        'daily_report',
+        `Laporan harian: ${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(2)} (${dayPct >= 0 ? '+' : ''}${dayPct.toFixed(2)}%)`,
+        `Ringkasan akun FINEX (demo) untuk hari sebelumnya:\nBalance awal: $${startBal.toFixed(2)}\nBalance akhir: $${arow.balance.toFixed(2)}\nPnL harian: ${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(2)} (${dayPct >= 0 ? '+' : ''}${dayPct.toFixed(2)}%)`,
+      )
     }
 
-    // Status counters
+    // Status counters (ANALYSIS-signal trades count as user-initiated)
     this.status.autoTradeCount = await db.position.count({ where: { source: 'AI' } })
-    this.status.manualTradeCount = await db.position.count({ where: { source: 'MANUAL' } })
+    this.status.manualTradeCount = await db.position.count({ where: { source: { in: ['MANUAL', 'ANALYSIS'] } } })
 
     // Self-learning weight cache
     const stats = await db.modelStat.findMany()
@@ -417,14 +425,23 @@ export class Simulator {
     for (const c of this.pendingCloses) await this.settleClose(c.p, c.reason, c.price, c.at)
     this.pendingCloses.length = 0
 
-    // Account daily roll
+    // Account daily roll — reset day counters and send the daily report email
     const todayKey = utcDayKey(now)
     if (todayKey !== this.account.day) {
+      const startBal = this.account.dailyStartBalance
+      const dayPnl = this.account.balance - startBal
+      const dayPct = startBal > 0 ? (dayPnl / startBal) * 100 : 0
+      const closedToday = await db.position.count({ where: { status: 'CLOSED', closedAt: { gte: new Date(now - 86400_000) } } }).catch(() => 0)
       this.account.day = todayKey
       this.account.dailyStartBalance = this.account.balance
       await this.persistAccount()
       await this.log('INFO', 'SYSTEM', 'Daily roll — dailyStartBalance direset')
       this.status.dailyBlocked = 'NONE'
+      await simulateEmailSend(
+        'daily_report',
+        `Laporan harian: ${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(2)} (${dayPct >= 0 ? '+' : ''}${dayPct.toFixed(2)}%)`,
+        `Ringkasan akun FINEX (demo) untuk hari sebelumnya:\nBalance awal: $${startBal.toFixed(2)}\nBalance akhir: $${this.account.balance.toFixed(2)}\nPnL harian: ${dayPnl >= 0 ? '+' : ''}$${dayPnl.toFixed(2)} (${dayPct >= 0 ? '+' : ''}${dayPct.toFixed(2)}%)\nPosisi ditutup (24 jam): ${closedToday}`,
+      )
     }
 
     // Breaking news generated from volatility spikes
@@ -553,8 +570,8 @@ export class Simulator {
       `Posisi ditutup: ${p.pair} ${p.side} (${reason})`,
       `Ticket ${p.ticket}\nClose ${closePrice.toFixed(cfg.digits)}\nPips ${pips.toFixed(1)}\nProfit $${profit.toFixed(2)}\nKomisi $${totalCommission.toFixed(2)}`,
     )
-    // Self-learning (only AI positions that recorded agreeing indicators)
-    if (p.source === 'AI' && p.signalIndicators.length > 0) {
+    // Self-learning (AI auto-trades AND analysis-signal trades that recorded agreeing indicators)
+    if ((p.source === 'AI' || p.source === 'ANALYSIS') && p.signalIndicators.length > 0) {
       await this.learn(p.signalIndicators, profit > 0, pips)
     }
   }
@@ -893,7 +910,8 @@ export class Simulator {
     riskBased?: boolean
     stopLossPips?: number
     takeProfitPips?: number
-    source?: 'MANUAL' | 'AI'
+    source?: 'MANUAL' | 'AI' | 'ANALYSIS'
+    signalIndicators?: string[]
     comment?: string
   }): Promise<PositionRow> {
     await this.ready
@@ -950,6 +968,10 @@ export class Simulator {
         source,
         mode: 'DEMO',
         comment: input.comment ?? null,
+        signalIndicators:
+          (source === 'AI' || source === 'ANALYSIS') && input.signalIndicators && input.signalIndicators.length > 0
+            ? input.signalIndicators.slice(0, 12).join(',')
+            : null,
       },
     })
 
@@ -1147,7 +1169,7 @@ export class Simulator {
         profit: round2(pips * cfg.pipValuePerLot * row.volume - row.commission),
         pips: round2(pips),
         commission: row.commission,
-        source: row.source === 'AI' ? 'AI' : 'MANUAL',
+        source: row.source === 'AI' ? 'AI' : row.source === 'ANALYSIS' ? 'ANALYSIS' : 'MANUAL',
         openedAt: row.openedAt.toISOString(),
         comment: row.comment,
       })
@@ -1391,7 +1413,7 @@ function toRtPosition(row: PositionRow): RtPosition {
     trailing: row.trailing,
     trailingPips: row.trailingPips,
     commission: row.commission,
-    source: row.source === 'AI' ? 'AI' : 'MANUAL',
+    source: row.source === 'AI' ? 'AI' : row.source === 'ANALYSIS' ? 'ANALYSIS' : 'MANUAL',
     signalIndicators: parseCsv(row.signalIndicators),
     signalTf: row.signalTf,
     openedAt: row.openedAt,

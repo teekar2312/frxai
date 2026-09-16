@@ -35,6 +35,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
@@ -44,6 +45,18 @@ try:
     from .ai_providers import ai_chat
 except ImportError:  # pragma: no cover
     from app.ai_providers import ai_chat  # type: ignore
+
+try:
+    from .config import KNOWN_PAIRS
+except ImportError:  # pragma: no cover
+    try:
+        from app.config import KNOWN_PAIRS  # type: ignore
+    except Exception:  # noqa: BLE001 — fallback statis
+        KNOWN_PAIRS = (
+            "EURUSD", "USDJPY", "GBPUSD", "USDCHF", "USDCAD", "AUDUSD", "NZDUSD",
+            "EURJPY", "EURGBP", "EURCHF", "EURAUD", "GBPJPY", "GBPCHF",
+            "AUDJPY", "CADJPY", "CHFJPY", "XAUUSD", "XAGUSD",
+        )
 
 
 def _get_logger() -> logging.Logger:
@@ -76,10 +89,14 @@ _HTTP_TIMEOUT = 15.0
 MAX_NEWS = 60
 
 FINNHUB_URL = "https://finnhub.io/api/v1/news"
-MARKETAUX_URL = "https://api.marketaux.com/api/news/all"
+MARKETAUX_URL = "https://api.marketaux.com/v1/news/all"
 
-#: Simbol default untuk varian query MarketAux.
-_DEFAULT_SYMBOLS = "EURUSD,GBPUSD,USDJPY,XAUUSD"
+#: Simbol default untuk varian query MarketAux — seluruh 18 pair yang diperdagangkan.
+_DEFAULT_SYMBOLS = (
+    "EURUSD,USDJPY,GBPUSD,USDCHF,USDCAD,AUDUSD,NZDUSD,"
+    "EURJPY,EURGBP,EURCHF,EURAUD,GBPJPY,GBPCHF,AUDJPY,CADJPY,CHFJPY,"
+    "XAUUSD,XAGUSD"
+)
 
 # Kata kunci heuristik sentimen (fallback tanpa AI).
 _POSITIVE_WORDS = {
@@ -100,6 +117,65 @@ _NEGATIVE_WORDS = {
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
+
+#: Kata → kode mata uang untuk deteksi pair dari teks berita.
+_CURRENCY_WORDS: dict[str, str] = {
+    "dollar": "USD", "greenback": "USD", "fed": "USD", "fomc": "USD",
+    "u.s": "USD", "us": "USD",
+    "euro": "EUR", "ecb": "EUR", "eurozone": "EUR", "euro zone": "EUR",
+    "yen": "JPY", "boj": "JPY", "bank of japan": "JPY",
+    "pound": "GBP", "sterling": "GBP", "boe": "GBP", "bank of england": "GBP",
+    "britain": "GBP", "uk": "GBP",
+    "franc": "CHF", "snb": "CHF", "swiss": "CHF",
+    "loonie": "CAD", "boc": "CAD", "canada": "CAD", "canadian": "CAD",
+    "aussie": "AUD", "rba": "AUD", "australia": "AUD", "australian": "AUD",
+    "kiwi": "NZD", "rbnz": "NZD", "new zealand": "NZD",
+    "gold": "XAU", "bullion": "XAU",
+    "silver": "XAG",
+}
+
+
+def _detect_pairs(text: str, known: tuple[str, ...] | list[str]) -> list[str]:
+    """Deteksi pair yang relevan dari headline/summary (kata kunci mata uang)."""
+    t = f" {str(text).lower()} "
+    ccys: set[str] = set()
+    for word, ccy in _CURRENCY_WORDS.items():
+        # Word-boundary regex — hindari false positive substring ("focus" ≠ "us").
+        if re.search(rf"\b{re.escape(word)}\b", t):
+            ccys.add(ccy)
+    out: list[str] = []
+    for sym in known:
+        s = str(sym).upper()
+        if s.endswith("USD") and s[:3] in ("XAU", "XAG"):
+            base = s[:3]
+            if base in ccys:
+                out.append(s)
+            continue
+        base, quote = s[:3], s[3:]
+        if base in ccys and quote in ccys:
+            out.append(s)
+    if not out and len(ccys) == 1:
+        only = next(iter(ccys))
+        out = [s for s in known if only in str(s).upper()][:4]
+    return out[:6]
+
+
+def _impact_from(text: str, sentiment: float) -> str:
+    """Heuristik dampak dari kata kunci + kekuatan sentimen."""
+    t = str(text).lower()
+    high_words = (
+        "breaks", "breaking", "crash", "crashes", "intervention",
+        "rate decision", "nonfarm", "non-farm", "nfp", "cpi",
+        "emergency", "escalation", "record",
+    )
+    if any(w in t for w in high_words):
+        return "HIGH"
+    if abs(sentiment) >= 0.35:
+        return "HIGH"
+    if abs(sentiment) >= 0.1:
+        return "MEDIUM"
+    return "LOW"
 
 
 def _news_key(config: Any, env_name: str, attr: str) -> str:
@@ -188,10 +264,18 @@ async def fetch_finnhub(config: Any = None) -> list[dict]:
                     "url": item.get("url") or None,
                     "source": "FINNHUB",
                     "publishedAt": published,
-                    "sentiment": 0.0,
-                    "impact": "MEDIUM",
+                    "sentiment": _keyword_sentiment(
+                        f"{item['headline']} {item.get('summary') or ''}"
+                    ),
+                    "impact": _impact_from(
+                        f"{item['headline']} {item.get('summary') or ''}",
+                        _keyword_sentiment(f"{item['headline']} {item.get('summary') or ''}"),
+                    ),
                     "category": "MARKET",
-                    "pairs": [],
+                    "pairs": _detect_pairs(
+                        f"{item['headline']} {item.get('summary') or ''}",
+                        list(KNOWN_PAIRS),
+                    ),
                 }
             )
         log.info(f"Finnhub: {len(out)} berita forex")

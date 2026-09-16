@@ -7,7 +7,9 @@ const ENGINE_ROOT = path.join(process.cwd(), 'python-engine')
 async function addDir(zip: JSZip, dir: string, rel = '') {
   const entries = await readdir(dir, { withFileTypes: true })
   for (const e of entries) {
-    if (e.name.startsWith('.') || e.name === '__pycache__' || e.name === 'node_modules') continue
+    // Skip dotfiles, caches, and the runtime `data/` state folder (alerts.json etc.
+    // are machine-local artifacts, not part of the distributable engine).
+    if (e.name.startsWith('.') || e.name === '__pycache__' || e.name === 'node_modules' || e.name === 'data') continue
     const relPath = rel ? `${rel}/${e.name}` : e.name
     if (e.isDirectory()) {
       await addDir(zip, path.join(dir, e.name), relPath)

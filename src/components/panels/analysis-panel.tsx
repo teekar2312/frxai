@@ -304,6 +304,11 @@ export default function AnalysisPanel() {
     if (!active || tradingBusy) return
     if (active.signal !== 'BUY' && active.signal !== 'SELL' && active.signal !== 'STRONG_BUY' && active.signal !== 'STRONG_SELL') return
     const side: Side = active.signal.includes('BUY') ? 'BUY' : 'SELL'
+    // Indicators that agree with the traded direction — feeds the self-learning loop on close
+    const agreeing = active.indicators
+      .filter((r) => r.signal === side)
+      .map((r) => r.id)
+      .slice(0, 12)
     setTradingBusy(true)
     try {
       await apiPost('/api/orders', {
@@ -313,11 +318,12 @@ export default function AnalysisPanel() {
         riskBased: true,
         stopLossPips: active.stopLossPips || 10,
         takeProfitPips: active.takeProfitPips || 15,
-        source: 'MANUAL',
+        source: 'ANALYSIS',
+        signalIndicators: agreeing,
         comment: `Analysis ${active.signal}`,
       })
       toast.success(`${side} ${active.pair} dibuka dari sinyal analisa`, {
-        description: `Lot dihitung dari risk · SL ${active.stopLossPips || 10}p · TP ${active.takeProfitPips || 15}p`,
+        description: `Lot dihitung dari risk · SL ${active.stopLossPips || 10}p · TP ${active.takeProfitPips || 15}p${agreeing.length > 0 ? ` · ${agreeing.length} indikator ikut belajar` : ''}`,
       })
       bumpRefresh()
     } catch (e) {

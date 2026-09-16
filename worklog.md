@@ -416,3 +416,36 @@ Stage Summary:
 - File berubah: src/lib/engine/simulator.ts (helper quoteToUsd + 4 situs formula margin), worklog.md.
 - Semua verifikasi ulang pasca-fix: tsc 0, eslint 0, 0 5xx, E2E bersih.
 - Pelajaran: operasi git checkout pada repo dengan DB live dapat merusak koneksi SQLite yang terbuka (restart server diperlukan); formula margin multi-currency wajib mengkonversi notional quote → USD.
+
+---
+Task ID: 15
+Agent: main (Z.ai Code)
+Task: Audit mendalam lanjutan (supplementary) — verifikasi integrasi penuh pasca Task 14, perbaiki semua gap yang ditemukan
+
+Work Log:
+- Verifikasi status Task 14: commit e022b28 (fix margin quoteToUsd) sudah tersinkron dengan origin/main; dev server sehat; smoke awal: /api/analysis & /api/orders 405 pada GET = POST-only (by design), /api/notifications→/api/notify = nama route benar, 0 5xx.
+- Audit statis menyeluruh via subagent Explore (10 area): pair list lintas stack, Prisma schema vs API, alerts engine, backtest, self-learning, news pipeline, notifications, engine ZIP, settings round-trip, store vs API contract.
+- TEMUAN & FIX (semua diimplementasikan):
+  1. (medium) Marketaux URL python salah `/api/news/all` → `/v1/news/all` (python selama ini silent 404) — news.py.
+  2. (medium) News real (fetch-real TS + finnhub python) tidak punya pair-tag/sentiment/impact → tambah heuristic lengkap dua sisi: CURRENCY_WORDS (word-boundary regex, anti false-positive "focus"≠"us") + detectPairs + keywordSentiment + heuristicImpact; python finnhub mapper kini memakai _keyword_sentiment/_detect_pairs/_impact_from.
+  3. (medium) newsSentiment analysis pair-agnostic → pair-aware: prioritas berita ber-tag pair (Prisma contains), fallback blend general bila <3 item (analysis/route.ts + strategy.py _news_sentiment(state, sym)).
+  4. (medium) daily_report tidak pernah dibangkitkan di demo → simulator daily roll (runtime + boot-time roll) kini mengirim simulateEmailSend('daily_report') berisi ringkasan PnL harian; EVENTS_NOTIF 6/6 lengkap.
+  5. (medium) Learning loop buta terhadap trade dari analisa → source baru 'ANALYSIS': OrderRequest.signalIndicators + placeOrder persist CSV + learn() menerima AI|ANALYSIS + analysis-panel "Trade dari sinyal" mengirim indikator yang setuju (maks 12) + SourceBadge ANALYSIS (emerald) + status counter boot manual=MANUAL|ANALYSIS.
+  6. (medium) /api/engine/file traversal guard lemah (startsWith) → path.relative + separator check; `?path=../db/custom.db` kini 400.
+  7. (low) ZIP engine menyertakan data/ runtime → dikecualikan; ZIP terverifikasi 0 file data/, config.py+main.py+news.py fix ada.
+  8. (low) Kalender ekonomi hanya USD/EUR/GBP/JPY → +AUD/CAD/CHF/NZD (RBA/BoC/SNB/RBNZ rate decision HIGH + CPI/Employment/Retail/GDP/Trade Balance/PMI) — 33 template, terverifikasi tampil di UI.
+  9. (low) NewsConfig.symbols hook mati → field symbols ditambahkan ke config.py (_apply_sections otomatis) + contoh di config.example.yaml; _DEFAULT_SYMBOLS python = 18 pair.
+  10. (low) fundamental.py _pair_context 11/18 → 18/18 (7 crosses baru: EURGBP/EURCHF/EURAUD/GBPCHF/AUDJPY/CADJPY/CHFJPY).
+  11. (low) README stale "4 pair" → 18 pair + tabel CLI --backtest; main.py --backtest PAIR TF [--bars N] baru (mengekspos run_backtest yang tadinya dead code, camelCase keys diverifikasi).
+  12. (medium) setup-panel overclaim "semua fitur lain di-proxy" → wording akurat (/api/v1/poll untuk harga/akun/status; analisa/backtest/berita dihitung dashboard).
+- Verifikasi: py_compile 6 file python OK + YAML OK; tsc 0 error src/ (4 pre-existing examples/skills saja); eslint 11 file berubah exit 0; dev server restart ×3 (simulator singleton).
+  - API: calendar 8 currency muncul; news generate OK; traversal 400/200 benar; analysis CADJPY & CHFJPY live LLM 200; order ANALYSIS CADJPY 1.53 lot → DB source=ANALYSIS signalIndicators='ema,rsi,macd' → close → ModelStat update (ema/macd samples+1, rsi baru, weight 0.97) = learning loop E2E bekerja.
+  - daily_report: settings email on + dailyStart stale → restart → LogEntry [EMAIL-SIM] daily_report "Laporan harian: $-14.86 (-0.15%)" muncul; settings email dikembalikan off.
+  - E2E browser 1440×900: Overview 18 watchlist + trade ANALYSIS CADJPY tampil di history; AI Analysis → analisis EURUSD M15 SELL LLM Live → klik "Trade dari sinyal" → DB EURUSD SELL ANALYSIS + 8 indikator setuju; Trading panel badge ANALYSIS di posisi open + history; News tab kalender AUD/CAD/CHF/NZD + feed; mobile 390px scrollWidth=390 (no overflow); 0 page error, 0 console error.
+  - VLM visual: News tab & AI Analysis tab "clean, no layout glitches, professional dark theme emerald accents"; kartu HASIL ANALISA (SELL, confidence, Entry/SL/TP) + self-learning section terverifikasi visual.
+
+Stage Summary:
+- Audit lanjutan menemukan 12 gap integrasi (5 medium + 7 low) — SEMUA diperbaiki dalam satu pass lintas TS + Python, tanpa regression (0 5xx, tsc/eslint/py_compile bersih, E2E + VLM lolos).
+- Peningkatan fungsional nyata: news real kini pair-tagged + ber-sentimen (demo & live konsisten), sentimen analisa per-pair, trade-dari-sinyal kini ikut melatih self-learning model (source ANALYSIS), notifikasi daily_report hidup di demo, kalender 8 mata uang, CLI --backtest python, hardening traversal + ZIP.
+- File berubah: src/lib/types.ts, src/lib/engine/simulator.ts, src/app/api/{news,analysis,orders,calendar}/route.ts, src/app/api/engine/{file,download}/route.ts, src/components/panels/{analysis,setup}-panel.tsx, src/components/shared/primitives.tsx, python-engine/app/{news,config,strategy,fundamental}.py, python-engine/{main.py,README.md,config.example.yaml}.
+- State demo: 1 posisi open EURUSD SELL (ANALYSIS, dari uji E2E), emailEnabled=false (direstore), 9 pair aktif.

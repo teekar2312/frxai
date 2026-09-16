@@ -152,6 +152,8 @@ class NewsConfig:
     avoid_minutes: int = 15
     finnhub_api_key: str = ""      # diisi otomatis dari env FINNHUB_API_KEY
     marketaux_api_key: str = ""    # diisi otomatis dari env MARKETAUX_API_KEY
+    #: Simbol pair untuk query MarketAux (kosong → semua KNOWN_PAIRS).
+    symbols: list[str] = field(default_factory=list)
 
 
 @dataclass

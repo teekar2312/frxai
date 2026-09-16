@@ -12,6 +12,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   Check,
   ChevronDown,
+  CloudUpload,
   Eye,
   EyeOff,
   KeyRound,
@@ -30,6 +31,38 @@ import { apiPost, apiPut } from '@/hooks/use-polling'
 import { cn } from '@/lib/utils'
 import type { AiProviderId } from '@/lib/types'
 import type { ProviderStatusClient } from '@/lib/ai-keys'
+
+/** Hasil sinkronisasi kunci ke engine (dari route /api/ai-providers). */
+interface EngineSyncInfo {
+  ok: boolean
+  reason?: 'demo-mode' | 'no-keys' | 'bad-url' | 'unreachable' | 'http-error'
+  detail?: string
+  engineUrl?: string
+  count?: number
+  applied?: string[]
+}
+
+/** Ringkasan ramah untuk hasil sync (dipakai inline & toast). */
+function syncMessage(s: EngineSyncInfo): string {
+  if (s.ok) {
+    if ((s.count ?? 0) === 0) return s.detail ?? 'Override engine dikosongkan.'
+    return `Tersinkron ke engine — ${(s.applied ?? []).length} provider: ${(s.applied ?? []).join(', ')}`
+  }
+  switch (s.reason) {
+    case 'demo-mode':
+      return 'Mode engine DEMO — kunci hanya dipakai dashboard. Aktifkan LIVE di tab Engine untuk meneruskan.'
+    case 'no-keys':
+      return 'Tidak ada kunci/override untuk diteruskan — isi API key terlebih dahulu.'
+    case 'bad-url':
+      return 'Engine URL tidak valid — periksa pengaturan tab Engine.'
+    case 'unreachable':
+      return 'Engine tidak terjangkau — periksa engineUrl dan pastikan engine berjalan.'
+    case 'http-error':
+      return s.detail ?? 'Engine menolak sinkronisasi.'
+    default:
+      return s.detail ?? 'Sinkronisasi gagal.'
+  }
+}
 
 // ------------------------------------------------------------
 // Status badge per provider
@@ -107,6 +140,8 @@ export default function AiProviderKeysCard() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncInfo, setSyncInfo] = useState<{ at: number; s: EngineSyncInfo } | null>(null)
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
@@ -149,11 +184,14 @@ export default function AiProviderKeysCard() {
       if (apiKey.trim() !== '') body.apiKey = apiKey.trim()
       if (baseUrl !== '' || p.baseUrlSource === 'db') body.baseUrl = baseUrl.trim()
       if (model !== '' || p.modelSource === 'db') body.model = model.trim()
-      const res = await apiPut<{ providers: ProviderStatusClient[] }>('/api/ai-providers', body)
+      const res = await apiPut<{ providers: ProviderStatusClient[]; engineSync?: EngineSyncInfo }>('/api/ai-providers', body)
       setProviders(res.providers)
       setApiKey('')
+      if (res.engineSync) setSyncInfo({ at: Date.now(), s: res.engineSync })
       toast.success(`Kredensial ${p.name} disimpan`, {
-        description: 'Terenkripsi AES-256-GCM di database · analisa berikutnya memakai kunci ini',
+        description: res.engineSync?.ok
+          ? 'Terenkripsi AES-256-GCM · diteruskan ke engine (mode LIVE)'
+          : 'Terenkripsi AES-256-GCM di database · analisa berikutnya memakai kunci ini',
       })
     } catch (e) {
       toast.error(`Gagal menyimpan ${p.name}`, { description: e instanceof Error ? e.message : 'unknown' })
@@ -167,15 +205,38 @@ export default function AiProviderKeysCard() {
     setDeleting(true)
     try {
       const res = await fetch(`/api/ai-providers?provider=${p.provider}`, { method: 'DELETE' })
-      const json = (await res.json()) as { providers?: ProviderStatusClient[]; error?: string }
+      const json = (await res.json()) as { providers?: ProviderStatusClient[]; engineSync?: EngineSyncInfo; error?: string }
       if (!res.ok || !json.providers) throw new Error(json.error || `HTTP ${res.status}`)
       setProviders(json.providers)
       setApiKey('')
+      if (json.engineSync) setSyncInfo({ at: Date.now(), s: json.engineSync })
       toast.success(`Kredensial ${p.name} dihapus`, { description: 'Kembali ke fallback environment variable.' })
     } catch (e) {
       toast.error(`Gagal menghapus ${p.name}`, { description: e instanceof Error ? e.message : 'unknown' })
     } finally {
       setDeleting(false)
+    }
+  }
+
+  const syncEngine = async () => {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      const res = await apiPost<{ engineSync: EngineSyncInfo; providers: ProviderStatusClient[] }>(
+        '/api/ai-providers',
+        { action: 'sync-engine' },
+      )
+      setProviders(res.providers)
+      setSyncInfo({ at: Date.now(), s: res.engineSync })
+      if (res.engineSync.ok) {
+        toast.success('Kunci AI tersinkron ke engine', { description: syncMessage(res.engineSync) })
+      } else {
+        toast.warning('Sinkronisasi ke engine tidak berjalan', { description: syncMessage(res.engineSync) })
+      }
+    } catch (e) {
+      toast.error('Gagal sinkron ke engine', { description: e instanceof Error ? e.message : 'unknown' })
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -214,17 +275,49 @@ export default function AiProviderKeysCard() {
             </p>
           </div>
         </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 gap-1.5 px-2 text-[10px]"
-          onClick={() => void load()}
-          disabled={loading}
-        >
-          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-1.5">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[10px]"
+            onClick={() => void syncEngine()}
+            disabled={syncing}
+            title="Teruskan semua kunci/override tersimpan ke Python engine (mode LIVE)"
+          >
+            {syncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CloudUpload className="h-3 w-3" />}
+            Sync ke Engine
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1.5 px-2 text-[10px]"
+            onClick={() => void load()}
+            disabled={loading}
+          >
+            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
       </div>
+
+      {syncInfo ? (
+        <div
+          className={cn(
+            'mb-2.5 flex items-start gap-1.5 rounded-lg border p-2 text-[10px] leading-relaxed',
+            syncInfo.s.ok
+              ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400'
+              : 'border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-400',
+          )}
+          role="status"
+        >
+          {syncInfo.s.ok ? <Check className="mt-0.5 h-3 w-3 shrink-0" /> : <X className="mt-0.5 h-3 w-3 shrink-0" />}
+          <span>
+            <span className="font-semibold">Engine sync:</span> {syncMessage(syncInfo.s)}
+            {syncInfo.s.engineUrl ? <span className="font-mono"> ({syncInfo.s.engineUrl})</span> : null}
+            <span className="text-muted-foreground/70"> · {new Date(syncInfo.at).toLocaleTimeString()}</span>
+          </span>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-2.5 text-[11px] text-red-600 dark:text-red-400">
@@ -396,9 +489,10 @@ export default function AiProviderKeysCard() {
           })}
 
           <p className="pt-1 text-[9px] leading-relaxed text-muted-foreground/70">
-            Kunci yang disimpan di sini dipakai dashboard (analisa on-demand, mode DEMO &amp; LIVE). Python engine (mode LIVE,
-            thread analisa mandiri) membaca kunci dari <code className="rounded bg-muted px-1">python-engine/.env</code> dengan nama
-            variabel yang sama — salin kunci yang identik bila engine turut berjalan.
+            Saat mode engine <span className="font-semibold">LIVE</span>, kunci &amp; override di sini otomatis diteruskan ke Python engine
+            (runtime override di memori — prioritas di atas <code className="rounded bg-muted px-1">python-engine/.env</code>, dilindungi
+            X-Engine-Key). Engine restart? Tekan <span className="font-semibold">Sync ke Engine</span> (auto-resync juga berjalan tiap 5
+            menit saat engine terjangkau). Saat mode DEMO, kunci hanya dipakai analisa dashboard.
           </p>
         </div>
       )}

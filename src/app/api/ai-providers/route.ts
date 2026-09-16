@@ -4,6 +4,7 @@ import { getSimulator } from '@/lib/engine/simulator'
 import { encryptSecret } from '@/lib/crypto'
 import { AI_PROVIDER_REGISTRY, listProviderStatus } from '@/lib/ai-keys'
 import { testProviderLlm } from '@/lib/ai-llm'
+import { syncAiKeysToEngine, type EngineSyncResult } from '@/lib/engine-sync'
 import { AI_PROVIDERS } from '@/lib/constants'
 import type { AiProviderId } from '@/lib/types'
 
@@ -14,8 +15,11 @@ export const dynamic = 'force-dynamic'
  * PUT /api/ai-providers — simpan: { provider, apiKey?, baseUrl?, model? }
  *   - apiKey: string non-kosong → simpan (enkripsi); "" → hapus key; undefined → biarkan
  *   - baseUrl / model: string → simpan; "" → kosongkan (pakai default/env); undefined → biarkan
+ *   - Setelah simpan: kunci otomatis diteruskan ke engine (mode LIVE) → field `engineSync`.
  * POST /api/ai-providers — test koneksi: { provider }
+ *                    atau sync manual ke engine: { action: 'sync-engine' }
  * DELETE /api/ai-providers?provider=x — hapus seluruh kredensial provider
+ *   (lalu re-sync engine — override provider tsb. dikembalikan ke .env engine)
  *
  * Semua method di balik session gate (src/proxy.ts) — data sensitif.
  */
@@ -127,8 +131,12 @@ export async function PUT(req: NextRequest) {
       [...(updates.apiKeyEnc !== undefined ? ['key ' + (updates.apiKeyEnc ? 'disimpan (terenkripsi)' : 'dihapus')] : []), ...(updates.baseUrl !== undefined ? [`baseUrl=${updates.baseUrl ?? 'default'}`] : []), ...(updates.model !== undefined ? [`model=${updates.model ?? 'default'}`] : [])].join(' · ') || '-',
     )
 
+    // Teruskan kredensial terbaru ke engine (mode LIVE; timeout pendek agar
+    // simpan tetap responsif walau engine sedang tidak terjangkau).
+    const engineSync = await syncAiKeysToEngine({ timeoutMs: 3500 })
+
     const providers = await listProviderStatus(DESCRIPTIONS)
-    return NextResponse.json({ providers })
+    return NextResponse.json({ providers, engineSync })
   } catch (e) {
     return NextResponse.json(
       { error: `Gagal menyimpan: ${e instanceof Error ? e.message : 'unknown'}` },
@@ -140,7 +148,23 @@ export async function PUT(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const sim = getSimulator()
   try {
-    const body = (await req.json()) as { provider?: unknown }
+    const body = (await req.json()) as { provider?: unknown; action?: unknown }
+
+    // --- Aksi khusus: sinkronisasi manual kunci AI ke engine ---
+    if (body.action === 'sync-engine') {
+      const engineSync: EngineSyncResult = await syncAiKeysToEngine({ timeoutMs: 8000 })
+      await sim.log(
+        engineSync.ok ? 'INFO' : 'WARN',
+        'SYSTEM',
+        `Sinkronisasi kunci AI ke engine: ${engineSync.ok ? 'OK' : 'GAGAL'}`,
+        engineSync.ok
+          ? `${engineSync.count} provider (${(engineSync.applied ?? []).join(', ') || '-'}) → ${engineSync.engineUrl}`
+          : (engineSync.detail ?? 'unknown'),
+      )
+      const providers = await listProviderStatus(DESCRIPTIONS)
+      return NextResponse.json({ engineSync, providers })
+    }
+
     const provider = parseProvider(body.provider)
     if (!provider) {
       return NextResponse.json({ error: 'Provider tidak valid' }, { status: 400 })
@@ -172,8 +196,11 @@ export async function DELETE(req: NextRequest) {
     await db.aiProviderCredential.deleteMany({ where: { provider } })
     const entry = AI_PROVIDER_REGISTRY[provider]
     await sim.log('INFO', 'SYSTEM', `Kredensial ${entry.name} dihapus (kembali ke fallback env)`)
+    // Re-sync engine: provider yang dihapus tidak disertakan dalam payload →
+    // override runtime-nya di engine dikembalikan ke resolusi .env engine.
+    const engineSync = await syncAiKeysToEngine({ timeoutMs: 3500 })
     const providers = await listProviderStatus(DESCRIPTIONS)
-    return NextResponse.json({ providers })
+    return NextResponse.json({ providers, engineSync })
   } catch (e) {
     return NextResponse.json(
       { error: `Gagal menghapus: ${e instanceof Error ? e.message : 'unknown'}` },

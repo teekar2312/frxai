@@ -4,6 +4,19 @@ Semua perubahan signifikan didokumentasikan di sini. Format mengikuti [Keep a Ch
 
 ---
 
+## [0.4.1] — 2026-09-16
+
+### Added
+- **Kunci AI kini diteruskan dashboard → Python engine** (menutup celah v0.4.0: input manual dashboard sebelumnya tidak pernah sampai ke engine). Saat mode engine LIVE, seluruh kredensial (DB terenkripsi → env dashboard) dikirim ke endpoint baru `PUT /api/v1/ai-keys` engine sebagai **runtime override di memori** (prioritas di atas `python-engine/.env`, tidak pernah ditulis ke disk/log, dilindungi guard `X-Engine-Key`).
+- **Endpoint engine baru**: `GET /api/v1/ai-keys` (status sync tanpa secret — deteksi drift/restart), `PUT /api/v1/ai-keys` (terima payload kredensial, validasi ketat), `DELETE /api/v1/ai-keys` (kosongkan override).
+- **Tombol *Sync ke Engine*** di kartu API Key Provider AI + status inline hasil sinkronisasi (berhasil/gagal + alasan ramah: mode demo, engine tidak terjangkau, dsb.).
+- **Auto-sync**: setiap simpan/hapus kunci otomatis meneruskan ke engine; poll route melakukan resync berkala (maks 1×/5 menit, fire-and-forget) sehingga override pulih sendiri setelah engine restart.
+- Resolusi engine menyatu: runtime (dashboard) → env engine → default; `get_provider_status()` engine kini melaporkan `source: runtime|env|none`.
+
+### Changed
+- Pesan error 401/403 & hint kunci engine kini menyebut kedua sumber (dashboard Settings / `.env` engine).
+- Respons `PUT`/`DELETE /api/ai-providers` kini menyertakan field `engineSync` (hasil penerusan ke engine).
+
 ## [0.4.0] — 2026-09-16
 
 ### Added

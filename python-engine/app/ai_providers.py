@@ -17,10 +17,18 @@ Semua kunci API diambil dari environment (file ``.env``):
     TOKENPLUS_API_KEY, TOKENPLUS_BASE_URL, OLLAMA_BASE_URL.
     Override model per provider: ``{PROVIDER}_MODEL`` (mis. TINYFISH_MODEL).
 
+Selain env, kredensial bisa diteruskan dari dashboard (Settings → API Key
+Provider AI) lewat ``PUT /api/v1/ai-keys`` — disimpan sebagai *runtime
+override* HANYA DI MEMORI (tidak pernah ditulis ke disk / log). Prioritas
+resolusi: runtime (dashboard) → environment (``.env`` engine).
+
 API publik:
     * :data:`PROVIDERS`         — registry id → info.
     * :func:`ai_chat`           — panggil LLM, kembalikan teks jawaban.
     * :func:`get_provider_status` — status kunci API untuk dashboard.
+    * :func:`set_runtime_keys`  — terima override kredensial dari dashboard.
+    * :func:`clear_runtime_keys` — kosongkan override (kembali ke env).
+    * :func:`runtime_key_status` — tampilan aman (tanpa secret) status sync.
     * :class:`AIProviderError`  — exception dengan pesan Indonesia yang actionable.
 """
 
@@ -29,6 +37,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -172,9 +183,129 @@ _MODEL_ENV: dict[str, str] = {
     "local": "OLLAMA_MODEL",
 }
 
+#: Nama variabel env override base URL per provider.
+_BASE_URL_ENV: dict[str, str] = {
+    "tinyfish": "TINYFISH_BASE_URL",
+    "tokenplus": "TOKENPLUS_BASE_URL",
+    "local": "OLLAMA_BASE_URL",
+}
+
+# ---------------------------------------------------------------------------
+# Runtime key override (diteruskan dari dashboard via PUT /api/v1/ai-keys)
+# ---------------------------------------------------------------------------
+
+#: Override kredensial per provider — HANYA DI MEMORI, tidak pernah
+#: ditulis ke disk/log. Struktur: ``{pid: {"api_key"?, "base_url"?, "model"?}}``.
+_RUNTIME_KEYS: dict[str, dict[str, str]] = {}
+_RUNTIME_LOCK = threading.Lock()
+_RUNTIME_SYNCED_AT: float = 0.0
+
+
+def _runtime(pid: str) -> dict[str, str]:
+    """Salinan snapshot override runtime untuk satu provider."""
+    with _RUNTIME_LOCK:
+        return dict(_RUNTIME_KEYS.get(pid, {}))
+
+
+def set_runtime_keys(payload: dict[str, Any]) -> dict[str, Any]:
+    """Terima override kredensial dari dashboard (mengganti seluruh set).
+
+    Args:
+        payload: ``{"providers": {id: {"apiKey"?, "baseUrl"?, "model"?}},
+        "syncedAt"?: iso}`` — provider tak dikenal diabaikan diam-diam
+        (kompatibilitas maju dashboard/engine versi beda).
+
+    Returns:
+        ``{"applied": [id…], "syncedAt": epoch}`` — daftar provider yang
+        kini memiliki override aktif.
+
+    Raises:
+        ValueError: nilai tidak valid (panjang key, URL bukan http/https,
+                    model mengandung spasi). Tidak mengubah state lama.
+    """
+    global _RUNTIME_SYNCED_AT
+    providers_in = payload.get("providers") if isinstance(payload, dict) else None
+    if not isinstance(providers_in, dict):
+        raise ValueError("Body harus berupa objek dengan field 'providers'.")
+
+    clean: dict[str, dict[str, str]] = {}
+    for raw_pid, ov in providers_in.items():
+        pid = str(raw_pid).strip().lower()
+        if pid not in PROVIDERS or not isinstance(ov, dict):
+            continue
+        info = PROVIDERS[pid]
+        entry: dict[str, str] = {}
+
+        api_key = str(ov.get("apiKey") or "").strip()
+        if api_key:
+            if len(api_key) < 8 or len(api_key) > 512:
+                raise ValueError(f"Panjang API key '{pid}' tidak wajar (8-512 karakter).")
+            if info["style"] != "ollama":
+                entry["api_key"] = api_key
+
+        base_url = str(ov.get("baseUrl") or "").strip()
+        if base_url:
+            if not (base_url.startswith("http://") or base_url.startswith("https://")):
+                raise ValueError(f"Base URL '{pid}' tidak valid (harus http/https).")
+            entry["base_url"] = base_url.rstrip("/")
+
+        model = str(ov.get("model") or "").strip()
+        if model:
+            if len(model) > 120 or any(c.isspace() for c in model):
+                raise ValueError(f"Nama model '{pid}' tidak valid (tanpa whitespace, maks 120 karakter).")
+            entry["model"] = model
+
+        if entry:
+            clean[pid] = entry
+
+    with _RUNTIME_LOCK:
+        _RUNTIME_KEYS.clear()
+        _RUNTIME_KEYS.update(clean)
+        _RUNTIME_SYNCED_AT = time.time()
+
+    # Log TANPA nilai kunci — hanya id provider.
+    log.info(
+        "Runtime key override diperbarui dari dashboard: %d provider (%s)",
+        len(clean),
+        ", ".join(sorted(clean)) or "-",
+    )
+    return {"applied": sorted(clean), "syncedAt": _RUNTIME_SYNCED_AT}
+
+
+def clear_runtime_keys() -> None:
+    """Kosongkan seluruh override runtime (kembali ke ``.env`` engine)."""
+    global _RUNTIME_SYNCED_AT
+    with _RUNTIME_LOCK:
+        _RUNTIME_KEYS.clear()
+        _RUNTIME_SYNCED_AT = 0.0
+    log.info("Runtime key override dikosongkan — kembali ke .env engine")
+
+
+def runtime_key_status() -> dict[str, Any]:
+    """Status override runtime (aman untuk dashboard — tanpa secret)."""
+    with _RUNTIME_LOCK:
+        providers = {
+            pid: {
+                "hasKey": bool(ov.get("api_key")),
+                "baseUrl": ov.get("base_url", ""),
+                "model": ov.get("model", ""),
+            }
+            for pid, ov in sorted(_RUNTIME_KEYS.items())
+        }
+        synced_at = _RUNTIME_SYNCED_AT
+    return {
+        "syncedAt": (
+            datetime.fromtimestamp(synced_at, tz=timezone.utc).isoformat() if synced_at else None
+        ),
+        "providers": providers,
+    }
+
 
 def _resolve_model(provider_id: str, info: dict[str, Any], config: Any = None) -> str:
-    """Prioritas model: config.ai.model → env {PROVIDER}_MODEL → default."""
+    """Prioritas model: runtime (dashboard) → config.ai.model → env → default."""
+    rt = _runtime(provider_id)
+    if rt.get("model"):
+        return rt["model"]
     model = ""
     if config is not None:
         ai = getattr(config, "ai", None)
@@ -189,10 +320,26 @@ def _resolve_model(provider_id: str, info: dict[str, Any], config: Any = None) -
     return model or str(info["default_model"])
 
 
+def _base_url(provider_id: str, info: dict[str, Any]) -> str:
+    """Prioritas base URL: runtime (dashboard) → env → default registry."""
+    rt = _runtime(provider_id)
+    if rt.get("base_url"):
+        return rt["base_url"]
+    env_name = _BASE_URL_ENV.get(provider_id)
+    if env_name:
+        env_val = (os.getenv(env_name, "") or "").strip()
+        if env_val:
+            return env_val.rstrip("/")
+    return str(info["base_url"]).rstrip("/")
+
+
 def _api_key(provider_id: str, info: dict[str, Any]) -> str:
-    """Ambil kunci API dari env (kosong untuk provider lokal)."""
+    """Ambil kunci API: runtime (dashboard) → env (kosong untuk provider lokal)."""
     if info["style"] == "ollama":
         return ""
+    rt = _runtime(provider_id)
+    if rt.get("api_key"):
+        return rt["api_key"]
     return (os.getenv(str(info["env_key"]), "") or "").strip()
 
 
@@ -302,8 +449,9 @@ def _raise_for_status(resp: httpx.Response, provider_id: str) -> None:
     body = resp.text[:200].replace("\n", " ")
     if resp.status_code in (401, 403):
         raise AIProviderError(
-            f"Autentikasi gagal ke {name} (HTTP {resp.status_code}). "
-            f"Periksa {info.get('env_key')} di file .env. Body: {body}",
+            f"Autentikasi gagal ke {name} (HTTP {resp.status_code}). Periksa API key "
+            f"di dashboard (Settings → API Key Provider AI) atau {info.get('env_key')} "
+            f"di file .env engine. Body: {body}",
             provider_id,
         )
     raise _TransientError(f"HTTP {resp.status_code} dari {name}: {body}")
@@ -345,16 +493,24 @@ async def ai_chat(
             f"{', '.join(sorted(PROVIDERS))}.",
             pid,
         )
+    # Salinan info dengan base URL efektif (runtime → env → default) agar
+    # gaya pemanggil di bawah memakai resolusi yang sama tanpa perubahan.
+    info_eff = dict(info)
+    info_eff["base_url"] = _base_url(pid, info)
     model = _resolve_model(pid, info, config)
     api_key = _api_key(pid, info)
     if info["style"] != "ollama" and not api_key:
-        raise AIProviderError(f"{info['hint']} (provider: {pid})", pid)
+        raise AIProviderError(
+            f"{info['hint']} Alternatif: isi API key di dashboard (Settings → API Key "
+            f"Provider AI) — diteruskan otomatis ke engine saat mode LIVE. (provider: {pid})",
+            pid,
+        )
 
     caller = _CALLERS[str(info["style"])]
     last_exc: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            text = await caller(pid, info, model, system, user, api_key, timeout)
+            text = await caller(pid, info_eff, model, system, user, api_key, timeout)
             log.info(f"AI '{pid}' ({model}) merespons ({len(text)} karakter, percobaan {attempt})")
             return text
         except AIProviderError:
@@ -376,26 +532,40 @@ def get_provider_status() -> list[dict]:
     """Status konfigurasi kunci API per provider (untuk dashboard).
 
     Returns:
-        List of ``{id, name, model, configured, envKey, style, baseUrl}``.
+        List of ``{id, name, model, configured, source, envKey, style, baseUrl}``.
+        ``source``: ``"runtime"`` (diteruskan dashboard), ``"env"``, atau
+        ``"none"`` (belum ada kunci).
     """
     out: list[dict] = []
     for pid, info in PROVIDERS.items():
+        rt = _runtime(pid)
         if info["style"] == "ollama":
             configured = True  # tidak butuh API key
+            source = "runtime" if rt else "none"
         else:
-            configured = bool(_api_key(pid, info))
+            configured = bool(rt.get("api_key")) or bool(_api_key(pid, info))
+            source = "runtime" if rt.get("api_key") else ("env" if _api_key(pid, info) else "none")
         out.append(
             {
                 "id": pid,
                 "name": info["name"],
                 "model": _resolve_model(pid, info, None),
                 "configured": configured,
+                "source": source,
                 "envKey": info["env_key"],
                 "style": info["style"],
-                "baseUrl": info["base_url"],
+                "baseUrl": _base_url(pid, info),
             }
         )
     return out
 
 
-__all__ = ["PROVIDERS", "ai_chat", "get_provider_status", "AIProviderError"]
+__all__ = [
+    "PROVIDERS",
+    "ai_chat",
+    "get_provider_status",
+    "set_runtime_keys",
+    "clear_runtime_keys",
+    "runtime_key_status",
+    "AIProviderError",
+]

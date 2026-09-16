@@ -51,6 +51,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.alerts import AlertManager
+from app.ai_providers import (
+    clear_runtime_keys,
+    runtime_key_status,
+    set_runtime_keys,
+)
 from app.config import (
     KNOWN_INDICATORS,
     KNOWN_MODES,
@@ -1920,6 +1925,46 @@ async def patch_settings(request: Request) -> JSONResponse:
         return JSONResponse(status_code=200, content=result)
     except ValueError as exc:
         return _error(str(exc))
+
+
+@api.get("/api/v1/ai-keys")
+def get_ai_keys() -> dict[str, Any]:
+    """Status runtime key override dari dashboard (TANPA secret).
+
+    Dipakai dashboard untuk deteksi drift / verifikasi pasca-restart engine.
+    Response: ``{syncedAt: iso | null, providers: {id: {hasKey, baseUrl, model}}}``.
+    """
+    return runtime_key_status()
+
+
+@api.put("/api/v1/ai-keys")
+async def put_ai_keys(request: Request) -> JSONResponse:
+    """Terima kredensial AI dari dashboard (runtime override, hanya memori).
+
+    Body: ``{providers: {id: {apiKey?, baseUrl?, model?}}, syncedAt?}`` —
+    mengganti seluruh set override (provider yang tidak disertakan dikembalikan
+    ke resolusi ``.env`` engine). Nilai kunci TIDAK PERNAH di-log atau
+    ditulis ke disk; endpoint ini dilindungi guard ``X-Engine-Key``
+    (middleware ``/api/*``) sama seperti endpoint engine lainnya.
+    """
+    try:
+        body = await request.json()
+    except Exception as exc:  # noqa: BLE001
+        return _error(f"Body bukan JSON valid: {exc}")
+    if not isinstance(body, dict):
+        return _error("Body harus berupa objek JSON.")
+    try:
+        result = await run_in_threadpool(set_runtime_keys, body)
+    except ValueError as exc:
+        return _error(str(exc))
+    return JSONResponse(status_code=200, content={"ok": True, **result})
+
+
+@api.delete("/api/v1/ai-keys")
+def delete_ai_keys() -> dict[str, Any]:
+    """Kosongkan seluruh runtime key override (kembali ke ``.env`` engine)."""
+    clear_runtime_keys()
+    return {"ok": True}
 
 
 @api.get("/api/v1/alerts")

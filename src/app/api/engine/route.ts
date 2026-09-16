@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getSimulator } from '@/lib/engine/simulator'
+import { maybeAutoSyncAiKeys } from '@/lib/engine-sync'
 import type { EnginePollResponse } from '@/lib/types'
 
 export const dynamic = 'force-dynamic'
@@ -32,6 +33,9 @@ export async function GET() {
         clearTimeout(timer)
         if (res.ok) {
           const json = (await res.json()) as EnginePollResponse
+          // Engine LIVE terjangkau → jadwalkan resync kunci AI (rate-limited
+          // 1x/5 menit, fire-and-forget) agar override pulih setelah restart engine.
+          maybeAutoSyncAiKeys()
           return NextResponse.json(json)
         }
       } catch {

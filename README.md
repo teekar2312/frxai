@@ -11,7 +11,7 @@ Sistem trading forex **full-stack** dengan analisa AI multi-provider, manajemen 
 | Area | Detail |
 |---|---|
 | **Trading** | Market watch 18 pair (major + cross + logam XAUUSD/XAGUSD), order BUY/SELL market, SL/TP, trailing stop, close/close-all, mode lot manual atau **risk-based** (0,5–1% risiko per trade otomatis) |
-| **Analisa AI** | 8 provider LLM (ZAI default; Groq, TinyFish, OpenAI, Google, OpenRouter, TokenPlus, local), batch analysis semua pair aktif sekali klik, sinyal STRONG_BUY…STRONG_SELL dengan entry/SL/TP/RR + penalaran lengkap |
+| **Analisa AI** | 8 provider LLM (ZAI default; Groq, TinyFish, OpenAI, Google, OpenRouter, TokenPlus, local), batch analysis semua pair aktif sekali klik, sinyal STRONG_BUY…STRONG_SELL dengan entry/SL/TP/RR + penalaran lengkap. API key diinput manual di Settings (terenkripsi AES-256-GCM) → dipakai dashboard **dan diteruskan otomatis ke engine LIVE** (runtime override di memori) |
 | **Indikator teknikal** | 30 indikator (EMA, RSI, MACD, ATR, Bollinger, SuperTrend, Stochastic, VWAP, OBV, CCI, Williams %R, Momentum, PSAR, SMA, Donchian, MFI, ROC, StdDev, AD, TickVol, dst.) |
 | **Fundamental** | 13 kategori konteks (suku bunga, inflasi, pertumbuhan, geopolitik, komoditas, dst.) dipilih adaptif per pair oleh AI |
 | **Berita & kalender** | Finnhub + Marketaux (opsional API key), auto pair-tagging + sentimen + dampak, kalender ekonomi 8 mata uang |

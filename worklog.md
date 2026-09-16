@@ -659,3 +659,32 @@ Stage Summary:
 - Repository GitHub teekar2312/frxai kini berisi seluruh pekerjaan hingga v0.4.0 (fitur input manual API key per provider AI: UI Settings, AES-256-GCM, 8 provider live) + v0.3.3 (.gitattributes lintas platform).
 - Rantai history di remote: 11 commit, fast-forward bersih.
 - PAT terekspos di chat — user WAJIB revoke segera di github.com/settings/tokens setelah konfirmasi push ini.
+
+---
+Task ID: 24
+Agent: main (Z.ai Code)
+Task: Konfigurasi basis kode agar dapat menggunakan provider AI yang sudah ada — tutup celah terakhir: teruskan kredensial dari dashboard ke Python engine (runtime override), lalu push ke GitHub dengan PAT user
+
+Work Log:
+- Audit: fitur manual API key (Task 22, v0.4.0) sudah membuat 8 provider live di DASHBOARD, tapi engine Python (strategy.py:568, news.py:449 → ai_chat) membaca kunci HANYA dari .env-nya sendiri — input manual dashboard tidak pernah sampai ke engine (tercatat eksplisit di Stage Summary Task 22).
+- Engine python-engine/app/ai_providers.py: runtime key override store (_RUNTIME_KEYS + threading.Lock, HANYA di memori) — set_runtime_keys (validasi ketat: key 8-512, URL http/https, model tanpa whitespace maks 120; provider tak dikenal diabaikan; replace wholesale; ValueError tanpa mengubah state lama), clear_runtime_keys, runtime_key_status (tampilan aman tanpa secret: hasKey boolean + baseUrl/model); resolusi baru: API key & baseUrl & model = runtime (dashboard) → env → default; get_provider_status + field source: runtime|env|none; pesan error 401/403 & hint kunci kini menyebut kedua sumber (dashboard Settings / .env engine); log hanya id provider (tidak pernah nilai kunci).
+- Engine main.py: 3 endpoint baru (otomatis di balik guard X-Engine-Key middleware /api/*): GET /api/v1/ai-keys (status sync), PUT /api/v1/ai-keys (terima payload {providers:{id:{apiKey,baseUrl,model}}}), DELETE /api/v1/ai-keys (kosongkan).
+- Dashboard src/lib/engine-sync.ts (baru): buildEngineKeyPayload (resolusi penuh DB→env per provider; kirim apiKey bila ada, baseUrl/model hanya bila beda dari default registry) + syncAiKeysToEngine (mode LIVE saja; X-Engine-Key dari ENGINE_API_KEY; abort-timeout; allowEmpty untuk clear-engine saat semua key dihapus; alasan gagal ramah: demo-mode/no-keys/bad-url/unreachable/http-error) + maybeAutoSyncAiKeys (rate-limit 1×/5 menit di globalThis, fire-and-forget — healing engine restart).
+- Route /api/ai-providers: PUT & DELETE kini mengembalikan field engineSync (auto-sync pasca simpan/hapus, timeout 3.5s); POST support {action:'sync-engine'} (timeout 8s) + test provider seperti sebelumnya.
+- Poll route /api/engine: maybeAutoSyncAiKeys() dipanggil setelah poll engine LIVE sukses.
+- UI ai-provider-keys.tsx: tombol "Sync ke Engine" (CloudUpload) di header kartu + status inline hasil sync (hijau/amber, engineUrl + waktu) yang juga terisi otomatis dari hasil save/delete; footer note diperbarui (perilaku LIVE vs DEMO, auto-resync 5 menit, prioritas runtime > .env engine).
+- Docs: CHANGELOG [0.4.1]; API.md (engineSync di PUT/DELETE, action sync-engine, 3 endpoint engine baru di tabel §8); SECURITY.md 2.6 + butir penerusan kunci (X-Engine-Key wajib sama kedua sisi, memori-only, HTTPS/tunnel wajib lintas jaringan, GET tanpa secret); README baris fitur Analisa AI; package.json 0.4.0 → 0.4.1 (health ikut).
+- Verifikasi PYTHON: py_compile OK; uji fungsional 9 skenario lulus (set/clear/replace-wholesale/env-fallback/source/status-tanpa-secret/validasi-error-tidak-ubah-state/payload-None).
+- Verifikasi ENGINE E2E (engine live di port 8010, ENGINE_API_KEY=test-engine-key-123): health 200 tanpa auth; PUT tanpa key → 401; PUT dengan key → ok applied [groq,local], provider bogus diabaikan; GET status aman; grep log = 0 kebocoran kunci; validasi buruk → 400 pesan Indonesia; DELETE → cleared.
+- Verifikasi DASHBOARD E2E (curl + engine live): simpan key mode DEMO → engineSync reason demo-mode; switch LIVE (engineUrl localhost:8010) → simpan → engineSync ok applied [groq] + engine menerima (hasKey true, model ter-overrid); POST action sync-engine OK; poll route memicu auto-resync (terbukti di LogEntry DB: "Kunci AI tersinkron ke engine (1 provider: groq)"); DELETE key → engine ter-clear otomatis (payload kosong = kembalikan ke .env engine). Catatan: poll "connected:false" = status MT5 engine (sandbox Linux tanpa MetaTrader5) — BUKAN kegagalan poll; dashboard tetap mem-proxy respons engine.
+- Verifikasi BROWSER E2E (agent-browser): login → Settings → kartu ditemukan → tombol "Sync ke Engine" → status inline benar ("Tidak ada kunci…" saat DB kosong); isi key Groq + model via UI → Simpan → badge "Key tersimpan · gsk…8777" + status "Tersinkron ke engine — 1 provider: groq (http://localhost:8010)"; engine terverifikasi menerima; Hapus via UI → status "override runtime di engine dikosongkan" + engine providers {}; 0 page error, 0 console error; mobile 390px tanpa overflow; screenshot desktop+mobile.
+- Cleanup: engine uji dimatikan, config.yaml uji dihapus, ENGINE_API_KEY test dihapus dari .env, settings dikembalikan ke mode demo, cookie/tmp dibersihkan.
+- Final: eslint 0, tsc 0, py_compile 0, dev.log tanpa error runtime.
+
+Stage Summary:
+- Celah terakhir tertutup: satu set API key (input manual dashboard / env dashboard) kini benar-benar dipakai OLEH KEDUA sistem — analisa dashboard (on-demand) DAN Python engine mode LIVE (strategy + news) — tanpa perlu duplikasi .env manual di PC Windows.
+- Mekanisme: simpan/hapus kunci → auto-sync; tombol Sync ke Engine untuk manual; auto-resync 1×/5 menit dari poll route (healing engine restart); prioritas engine: runtime dashboard → .env engine → default.
+- Keamanan: X-Engine-Key guard (konstan-waktu), memori-only di engine (restart = hilang, by design), log tanpa nilai kunci (hanya id provider), GET status tanpa secret, HTTPS/tunnel didokumentasikan wajib untuk lintas jaringan.
+- File baru: src/lib/engine-sync.ts; diubah: python-engine/app/ai_providers.py, python-engine/main.py, src/app/api/ai-providers/route.ts, src/app/api/engine/route.ts, src/components/panels/ai-provider-keys.tsx, API.md, SECURITY.md, CHANGELOG.md, README.md, package.json, worklog.md.
+- Version 0.4.1 konsisten: package.json + /api/health.
+- Push ke GitHub dengan PAT user (inline satu kali, tidak disimpan).

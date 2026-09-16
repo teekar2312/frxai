@@ -141,24 +141,29 @@ Status kredensial semua provider (tanpa plaintext key — hanya masked `sk-…ab
 ```
 
 ### PUT /api/ai-providers
-Simpan kredensial (input manual dari Settings → *API Key Provider AI*). Tersimpan **terenkripsi AES-256-GCM** di tabel `AiProviderCredential`; menimpa fallback env.
+Simpan kredensial (input manual dari Settings → *API Key Provider AI*). Tersimpan **terenkripsi AES-256-GCM** di tabel `AiProviderCredential`; menimpa fallback env. Setelah simpan, kunci otomatis diteruskan ke engine (mode LIVE) — hasilnya di field `engineSync`.
 ```json
 { "provider": "groq",
   "apiKey": "gsk_…",        // "" = hapus key; omit = biarkan
   "baseUrl": "",             // opsional — "" = pakai default; omit = biarkan
   "model": "llama-3.3-70b-versatile" }  // opsional — "" = default; omit = biarkan
+→ { "providers": […],
+    "engineSync": { "ok": true, "engineUrl": "http://…:8010", "count": 1, "applied": ["groq"] } }
 ```
 
 ### POST /api/ai-providers
-Test koneksi provider (ping 1-pesan ringan):
+Test koneksi provider (ping 1-pesan ringan), **atau** sync manual kunci ke engine:
 ```json
 { "provider": "zai" }
 → { "result": { "ok": true, "latencyMs": 292, "model": "glm-4.6",
     "message": "Z.AI merespons dalam 292ms (model glm-4.6, via SDK)." } }
+
+{ "action": "sync-engine" }   // kirim seluruh kredensial ke engine sekarang
+→ { "engineSync": { "ok": true, "count": 2, "applied": ["groq", "zai"] }, "providers": […] }
 ```
 
 ### DELETE /api/ai-providers?provider=groq
-Hapus kredensial tersimpan (kembali ke fallback env var).
+Hapus kredensial tersimpan (kembali ke fallback env var) + re-sync engine — override provider tsb. di engine dikembalikan ke `.env` engine.
 
 ### GET /api/analysis/history?pair=&limit=
 Riwayat analisa tersimpan.
@@ -236,6 +241,9 @@ Filter level/kategori/teks, limit 1–500. `DELETE` → bersihkan log.
 | `/api/v1/calendar` | GET | Kalender ekonomi engine |
 | `/api/v1/settings` | GET | Baca konfigurasi (api_key tidak pernah dikembalikan) |
 | `/api/v1/settings` | POST | Write-back settings dari dashboard |
+| `/api/v1/ai-keys` | GET | Status runtime key override dari dashboard (tanpa secret) |
+| `/api/v1/ai-keys` | PUT | Terima kredensial AI dari dashboard (runtime override, hanya memori) |
+| `/api/v1/ai-keys` | DELETE | Kosongkan override — kembali ke `.env` engine |
 | `/api/v1/orders` | POST | Eksekusi order (open/close/modify) |
 | `/api/v1/alerts` | POST | Sinkron alert ke engine |
 

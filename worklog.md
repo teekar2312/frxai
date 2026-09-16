@@ -513,3 +513,18 @@ Stage Summary:
 - Dashboard FINEX AI kini production-ready: autentikasi wajib (JWT 7 hari, brute-force lockout, audit trail AUTH di panel Logs), seluruh API terlindungi proxy gate + rate limit, engine LIVE terlindungi X-Engine-Key + CORS ketat (16-b), artefak deploy lengkap (16-c), DB ber-index + WAL, error/404/robots/security headers, health endpoint monitoring.
 - Kredensial produksi via ADMIN_PASSWORD_HASH (bun run hash-password) — default hanya fallback first-run dengan hint amber di layar login; lihat PRODUCTION.md untuk checklist keamanan lengkap (termasuk revoke PAT GitHub yang terekspos).
 - File inti baru: src/lib/auth-{core,node}.ts, src/proxy.ts, src/app/api/auth/{login,logout,session}, src/app/api/health, src/app/{error,not-found,robots}.tsx, src/components/{auth/login-screen,finex-app}.tsx, src/instrumentation.ts; diubah: page.tsx, header.tsx, logs-panel.tsx, db.ts, next.config.ts, tsconfig.json, prisma/schema.prisma, .gitignore, package.json (+jose), .env (sandbox only).
+
+---
+Task ID: 17
+Agent: main (Z.ai Code)
+Task: Push production-ready commit 9bb2dee ke GitHub (teekar2312/frxai) dengan PAT baru dari user
+
+Work Log:
+- Pra-push: working tree menunjukkan 19 file "modified" → terbukti murni perubahan mode file 100644→100755 (0 insertions/deletions) akibat snapshot daemon; TIDAK di-commit, melainkan `git config core.fileMode false` agar noise mode hilang permanen dari status.
+- Push ref-level: git push https://<PAT>@github.com/teekar2312/frxai.git main:main → sukses, fast-forward 42a008d..9bb2dee (remote utuh: e18292e → ad302b4 → e022b28 → 42a008d → 9bb2dee).
+- Verifikasi: git ls-remote refs/heads/main = 9bb2dee = git rev-parse main (identik); fetch origin → origin/main sinkron; working tree clean, branch up to date.
+- PAT TIDAK disimpan di file konfigurasi mana pun (hanya dipakai inline satu kali pada URL push); remote origin tetap URL bersih tanpa kredensial.
+
+Stage Summary:
+- Repository GitHub teekar2312/frxai kini berisi seluruh pekerjaan production-ready Task 16 (auth, hardening, engine API-key, indexes+WAL, health, error pages, Docker/PRODUCTION.md/scripts) pada commit 9bb2dee.
+- Reminder keamanan tetap berlaku: PAT ini telah terekspos di chat — segera revoke & generate ulang setelah selesai dipakai (github.com/settings/tokens), lalu update remote credential di mesin lokal user.

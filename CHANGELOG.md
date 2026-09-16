@@ -4,6 +4,12 @@ Semua perubahan signifikan didokumentasikan di sini. Format mengikuti [Keep a Ch
 
 ---
 
+## [0.3.1] — 2026-09-16
+
+### Fixed
+- **`.env.example` tidak pernah masuk repo** — pola `.env*` pada `.gitignore` menelannya, padahal 9+ referensi di README/DEPLOYMENT/PRODUCTION/CONTRIBUTING/SECURITY memintanya (quick-start `cp .env.example .env` gagal bagi yang clone). Pola diganti `.env` + `.env.*` dengan pengecualian `!.env.example`; template lengkap kini ter-commit (semua key: DATABASE_URL, ADMIN_USERNAME/PASSWORD/PASSWORD_HASH, SESSION_SECRET, ENGINE_MODE/API_KEY, FINNHUB/MARKETAUX).
+- `/api/health` membaca versi langsung dari `package.json` (sebelumnya fallback hardcoded yang mudah basi).
+
 ## [0.3.0] — 2026-09-16
 
 ### Added

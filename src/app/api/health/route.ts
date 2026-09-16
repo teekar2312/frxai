@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import pkg from '../../../../package.json'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +27,7 @@ export async function GET() {
     db: dbOk ? 'ok' : 'fail',
     mode,
     uptime: Math.round(process.uptime()),
-    version: process.env.npm_package_version ?? '0.3.0',
+    version: pkg.version,
     timestamp: new Date().toISOString(),
     latencyMs: Date.now() - startedAt,
   }

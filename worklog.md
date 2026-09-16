@@ -552,3 +552,25 @@ Stage Summary:
 - Version 0.3.0 konsisten di package.json + /api/health + CHANGELOG.
 - File baru: README.md, ARCHITECTURE.md, API.md, DEPLOYMENT.md, SECURITY.md, CONTRIBUTING.md, CHANGELOG.md; diubah: package.json, src/app/api/health/route.ts (fallback versi), worklog.md.
 - Pelajaran: daemon snapshot dapat menimpa .env yang gitignored — setelah restart server mendadak, selalu sanity-check hint kredensial default di login screen / verifikasi env terbaca.
+
+---
+Task ID: 19
+Agent: main (Z.ai Code)
+Task: Audit kesiapan produksi final ("konfigurasikan basis kode agar siap produksi") — verifikasi menyeluruh semua layer + perbaikan celah yang ditemukan
+
+Work Log:
+- Audit statis: eslint 0 error; tsc --noEmit 0 error; verifikasi remote sync (main = origin/main = 5dacc3e Task 18).
+- INSIDEN BERULANG terdeteksi: .env sandbox terpotong lagi oleh daemon snapshot (06:21, hanya tersisa DATABASE_URL) → ADMIN_PASSWORD & SESSION_SECRET hilang. Dipulihkan lengkap (5 key: DATABASE_URL, ADMIN_USERNAME, ADMIN_PASSWORD sandbox, SESSION_SECRET fresh openssl rand -base64 48, ENGINE_MODE=demo) tanpa menampilkan secret di chat; .env tetap gitignored.
+- CELAH REPO NYATA ditemukan & diperbaiki: pola `.env*` di .gitignore menelan `.env.example` — template buatan Task 16-c TIDAK PERNAH masuk repo GitHub (dan hilang dari disk), padahal direferensikan 9+ kali di README/DEPLOYMENT/PRODUCTION/CONTRIBUTING/SECURITY (quick-start `cp .env.example .env` gagal bagi siapa pun yang clone). Fix: pola diganti `.env` + `.env.*` + pengecualian `!.env.example`; .env.example dibuat ulang lengkap (semua 9 key yang direferensikan kode: DATABASE_URL, ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_PASSWORD_HASH, SESSION_SECRET, ENGINE_MODE, ENGINE_API_KEY, FINNHUB_API_KEY, MARKETAUX_API_KEY + instruksi generate).
+- Audit runtime pasca-restart server: security headers lengkap terkirim (X-Frame-Options DENY, CSP, nosniff, Referrer-Policy, Permissions-Policy, tanpa X-Powered-By); password default finex-admin-2025 DITOLAK 401 (env aktif); login benar → 200 + cookie; gate API 401 tanpa cookie / 200 dengan cookie; logout → session invalid → 401.
+- Audit artefak deploy: Dockerfile multi-stage koheren (standalone ✓ line 41 next.config.ts, binaryTargets musl, python-engine untuk ZIP download), docker-compose (env_file .env, volume db/backups, healthcheck /api/health), scripts hash-password.mjs + backup-db.sh tracked, python-engine/config.example.yaml tracked dengan api_key.
+- Hardening minor: /api/health kini import versi langsung dari package.json (sebelumnya fallback hardcoded '0.3.0' mudah basi); bump version 0.3.0 → 0.3.1 + entry CHANGELOG [0.3.1] Fixed.
+- Verifikasi browser E2E penuh (agent-browser): login screen render bersih TANPA hint amber kredensial default (postur produksi benar); login → dashboard penuh (equity $10,000, market watch 18 pair live, posisi, sesi pasar); data mengalim end-to-end; navigasi tab Berita (kalender ekonomi) berfungsi; 0 page error, 0 console error; mobile 390×844 scrollWidth=390 (no overflow), footer status bar tertutup natural di konten panjang; logout → kembali ke login screen.
+- Verifikasi akhir: eslint 0, tsc 0, /api/health 200 {"version":"0.3.1"} (hot-reload route), dev.log 0 error.
+
+Stage Summary:
+- Sistem dinyatakan PRODUCTION-READY terverifikasi penuh: auth (JWT+scrypt+lockout+audit), API gate+rate limit, security headers, engine key auth, DB indexed+WAL, health monitoring, error pages, robots, artefak deploy lengkap, dokumentasi 8 file, dan kini template .env.example benar-benar ada di repo.
+- Fix utama Task 19: .gitignore env-pattern bug (root-cause .env.example hilang dari GitHub) + .env sandbox restore + health version dari package.json.
+- Version 0.3.1 konsisten: package.json + /api/health + CHANGELOG.
+- File diubah: .gitignore, src/app/api/health/route.ts, package.json, CHANGELOG.md, worklog.md; file baru: .env.example (tracked pertama kali).
+- Catatan opsional: daemon snapshot sandbox berulang menimpa .env (2× insiden) — pada deploy produksi asli (VPS/Docker) risiko ini tidak ada karena env dikelola via env_file/secret manager.

@@ -122,7 +122,7 @@ Riwayat posisi CLOSED (sumber: MANUAL/AI/ANALYSIS).
 // body
 { "pair": "GBPJPY", "timeframe": "M15" }   // timeframe opsional (default H1)
 ```
-Menjalankan analisa hybrid: 30 indikator + 13 kategori fundamental + sentimen berita pair-tagged → provider LLM (ZAI default) → hasil terstruktur:
+Menjalankan analisa hybrid: 30 indikator + 13 kategori fundamental + sentimen berita pair-tagged → provider LLM (8 provider — kunci via input manual / env) → hasil terstruktur:
 ```jsonc
 { "signal": "SELL", "confidence": 0.72,
   "entry": 189.42, "stopLoss": 189.80, "takeProfit": 188.65,
@@ -130,6 +130,35 @@ Menjalankan analisa hybrid: 30 indikator + 13 kategori fundamental + sentimen be
   "newsSentiment": -0.15, "provider": "zai", "source": "LLM Live" }
 ```
 Cache 30 detik per pair+tf. Provider gagal → fallback heuristik voting indikator berbobot self-learning (`source: "Heuristic"`). Dipersist ke `AnalysisRecord`.
+
+### GET /api/ai-providers
+Status kredensial semua provider (tanpa plaintext key — hanya masked `sk-…abc4`):
+```jsonc
+{ "providers": [ { "provider": "groq", "name": "Groq AI",
+    "keySource": "db|env|none", "keyMasked": "gsk…abc4",
+    "baseUrl": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile",
+    "status": "ok|fail|untested", "lastError": null, "testedAt": "…" }, …8 provider ] }
+```
+
+### PUT /api/ai-providers
+Simpan kredensial (input manual dari Settings → *API Key Provider AI*). Tersimpan **terenkripsi AES-256-GCM** di tabel `AiProviderCredential`; menimpa fallback env.
+```json
+{ "provider": "groq",
+  "apiKey": "gsk_…",        // "" = hapus key; omit = biarkan
+  "baseUrl": "",             // opsional — "" = pakai default; omit = biarkan
+  "model": "llama-3.3-70b-versatile" }  // opsional — "" = default; omit = biarkan
+```
+
+### POST /api/ai-providers
+Test koneksi provider (ping 1-pesan ringan):
+```json
+{ "provider": "zai" }
+→ { "result": { "ok": true, "latencyMs": 292, "model": "glm-4.6",
+    "message": "Z.AI merespons dalam 292ms (model glm-4.6, via SDK)." } }
+```
+
+### DELETE /api/ai-providers?provider=groq
+Hapus kredensial tersimpan (kembali ke fallback env var).
 
 ### GET /api/analysis/history?pair=&limit=
 Riwayat analisa tersimpan.

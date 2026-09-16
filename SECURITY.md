@@ -68,6 +68,7 @@ Aktor: penyerang internet (dashboard publik), pihak di jaringan yang sama (engin
 
 - Historis: satu PAT sempat terekspos di kanal chat — **wajib revoke**; audit `rg ghp_` per dilakukan berkala.
 - Kredensial sandbox (`ADMIN_PASSWORD`, `SESSION_SECRET`, `ENGINE_API_KEY`) hanya di `.env` lokal, tidak pernah di-commit.
+- **API key provider AI** (input manual Settings): tersimpan **terenkripsi AES-256-GCM** di kolom `AiProviderCredential.apiKeyEnc` (kunci scrypt dari `SESSION_SECRET`); plaintext tidak pernah dikirim balik ke client (hanya masked `gsk…abc4`), tidak pernah di-log, dan endpoint manajemennya di balik session gate + rate limit. Rotasi `SESSION_SECRET` meng-invalidate kredensial tersimpan (input ulang setelah rotasi). Backup DB berisi ciphertext — simpan `SESSION_SECRET` terpisah dari file backup.
 
 ## 3. Batasan yang Diketahui (trade-off)
 

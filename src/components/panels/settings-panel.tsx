@@ -32,6 +32,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SectionTitle, LiveDot } from '@/components/shared/primitives'
+import AiProviderKeysCard from '@/components/panels/ai-provider-keys'
 import { usePolling, apiPut, apiPost, fmtMoney } from '@/hooks/use-polling'
 import { useAppStore } from '@/lib/store'
 import {
@@ -734,6 +735,9 @@ export default function SettingsPanel() {
           )}
         </ModeCard>
       </div>
+
+      {/* ===== API key provider AI (input manual, terenkripsi) ===== */}
+      <AiProviderKeysCard />
 
       <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
         {/* ===== h) Trailing stop ===== */}

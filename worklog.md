@@ -614,3 +614,29 @@ Stage Summary:
 - Pencegahan permanen phantom-changes lintas platform; tidak ada perubahan kode aplikasi.
 - Version 0.3.3 konsisten (package.json + CHANGELOG; /api/health ikut via import).
 - File baru: .gitattributes; diubah: package.json, CHANGELOG.md, worklog.md.
+
+---
+Task ID: 22
+Agent: main (Z.ai Code)
+Task: Input manual API key per provider AI — UI Settings + penyimpanan terenkripsi + semua provider benar-benar live di dashboard
+
+Work Log:
+- Eksplorasi: constants AI_PROVIDERS (8 provider, hanya zai demoLive via SDK; 7 lain selalu "local fallback"), python ai_providers.py (registry lengkap 8 provider: endpoint, env key ZAI_API_KEY/GROQ_API_KEY/TINYFISH_API_KEY/OPENAI_API_KEY/GOOGLE_API_KEY/OPENROUTER_API_KEY/TOKENPLUS_API_KEY/OLLAMA_BASE_URL, 3 gaya API openai/gemini/ollama), settings-panel struktur ModeCard, simulator singleton globalThis.
+- Prisma: model baru AiProviderCredential (provider @unique, apiKeyEnc, baseUrl?, model?, status untested|ok|fail, lastError, testedAt, @@index) — db:push aditif.
+- src/lib/crypto.ts: AES-256-GCM (kunci scrypt dari SESSION_SECRET, salt stabil, format v1:iv:tag:ct base64url, authenticated — tamper terdeteksi; decryptSecret null-safe) + maskKey (sk-…abc4).
+- src/lib/ai-keys.ts: registry TS 8 provider mencerminkan python (endpoint, default model, env key/base/model, style, hint cara ambil key, keylessSdk untuk zai, noKeyNeeded untuk local) + resolveCredential (prioritas DB dekrip → env → none; baseUrl: DB → env → default; model: DB → env {PROVIDER}_MODEL → default) + listProviderStatus (bentuk aman client: masked, tanpa plaintext).
+- src/lib/ai-llm.ts: pemanggil lintas gaya — callOpenAiStyle (fetch Bearer, temperature 0.2, max_tokens 1400), callGeminiStyle (generateContent?key=, systemInstruction), callOllamaStyle (/api/chat native stream:false), callZaiSdk (z-ai-web-dev-sdk keyless), dispatch callProviderLlm (zai tanpa key → SDK; tanpa key → error ramah "isi di Settings → API Key Provider"); friendlyHttpError 401/403/404/429/5xx/timeout/koneksi dalam Bahasa Indonesia; testProviderLlm (ping "balas OK", update status DB).
+- Route /api/ai-providers: GET (status semua, masked) · PUT (validasi provider, panjang key 8-512, URL http/https, model tanpa whitespace; apiKey ""=hapus / omit=biarkan; upsert + reset status untested; audit LogEntry SYSTEM) · POST (test koneksi) · DELETE ?provider= — di balik session gate proxy.
+- Route analysis: hapus callZaiLlm + import ZAI SDK (pindah ke ai-llm); blok `if (provider === 'zai')` → dispatch callProviderLlm untuk SEMUA provider; providerLabel live = "Nama (model · SDK?)" ; source persist live ? provider.toUpperCase() : 'DEMO'; WARN log kini menyertakan pesan error ramah.
+- UI: src/components/panels/ai-provider-keys.tsx (kartu "API Key Provider AI" di settings-panel setelah grid provider+risk) — 8 baris expandable: badge status (Key tersimpan·masked / ENV·masked / SDK bawaan / Tanpa key Ollama / Belum diatur) + status test terakhir; editor: input key password+toggle mata, Base URL & model override (placeholder default), hint cara ambil key per provider + alternatif env, tombol Simpan (disabled tanpa perubahan)/Test koneksi/Hapus (hanya bila ada row DB), pesan kesalahan test terakhir; catatan paritas engine (.env engine terpisah).
+- .env.example: seksi baru "API key AI provider" — semua env fallback (identik engine) terdokumentasi.
+- INSIDEN .env terpotong ke-3 (daemon snapshot 09:12) → restore + restart; lalu E2E penuh.
+- Verifikasi API: gate 401 tanpa cookie; GET 8 provider (semua none/untested); PUT groq dummy key + model override → keySource=db masked=gsk…6789, AT-REST via python sqlite3 = v1:… ciphertext (plaintext TIDAK ada di file DB); POST test zai → OK 292ms via SDK; test groq dummy → gagal ramah "API key ditolak (HTTP 403)"; test local → gagal ramah "Ollama tidak dapat dihubungi…"; DELETE → kembali none; A/B analisa: aiProvider=groq tanpa key → "Groq AI (local fallback)" live=false + WARN log; zai → "Z.AI (glm-4.6 · SDK)" live=true; (catatan: hasil analisa di-cache 30s per pair+tf — by design, bukan staleness settings).
+- Verifikasi browser E2E: login → tab Settings → kartu ditemukan → baris Groq dibuka (input + Simpan disabled + Test koneksi) → isi key via UI → Simpan → badge "Key tersimpan · gsk…8765" → Test koneksi → "Test gagal" + lastError di API → Hapus → "Belum diatur"; baris Z.AI "SDK bawaan · Test OK"; 0 page error, 0 console error; mobile 390px overflow=false; screenshot desktop+mobile.
+- Docs: API.md 4 endpoint baru di seksi 5; SECURITY.md 2.6 (enkripsi at-rest, masked, rotasi SESSION_SECRET invalidasi, backup ciphertext); CHANGELOG [0.4.0]; bump package.json 0.3.3 → 0.4.0 (health ikut via import); lint 0, tsc 0.
+
+Stage Summary:
+- Fitur "input manual API key per provider" lengkap end-to-end: UI Settings (masked, test, hapus) → API ter-gate → penyimpanan AES-256-GCM → resolusi DB→env→SDK → pemanggil nyata 8 provider (7 provider yang sebelumnya selalu fallback kini benar-benar hidup di dashboard) → analisa hybrid memakai kredensial itu.
+- Paritas nama env & endpoint dengan python-engine → satu set kunci bisa dipakai dashboard VPS (.env) + engine PC Windows (salinan .env); input manual dashboard TIDAK diteruskan ke engine (dihubungkan lewat .env engine, terdokumentasi di UI).
+- File baru: src/lib/{crypto,ai-keys,ai-llm}.ts, src/app/api/ai-providers/route.ts, src/components/panels/ai-provider-keys.tsx; diubah: prisma/schema.prisma (+AiProviderCredential), src/app/api/analysis/route.ts, src/components/panels/settings-panel.tsx, .env.example, API.md, SECURITY.md, CHANGELOG.md, package.json, worklog.md.
+- Version 0.4.0 konsisten: package.json + /api/health.

@@ -4,6 +4,18 @@ Semua perubahan signifikan didokumentasikan di sini. Format mengikuti [Keep a Ch
 
 ---
 
+## [0.4.0] — 2026-09-16
+
+### Added
+- **Input manual API key per provider AI** (Settings → *API Key Provider AI*): kartu manajemen kredensial untuk seluruh 8 provider (Z.AI, Groq, Tinyfish, OpenAI, Google AI Studio, OpenRouter, Tokenplus, Local/Ollama) — input key masked dengan toggle lihat, override Base URL & model opsional, tombol **Simpan / Test koneksi / Hapus**, badge status (Key tersimpan · ENV · SDK bawaan · Belum diatur) + status test terakhir, pesan error ramah berbahasa Indonesia (401/403/404/429/5xx/timeout/koneksi).
+- **Semua provider kini benar-benar live di dashboard** — sebelumnya hanya Z.AI (SDK) yang benar-benar memanggil LLM; 7 provider lain selalu fallback lokal. Route analisa kini dispatch lintas gaya API: OpenAI-compatible (zai-key/groq/tinyfish/openai/openrouter/tokenplus), Gemini REST (google), Ollama native (local), Z.AI SDK keyless (default). Endpoint & nama env identik dengan python-engine → perilaku dashboard ≡ engine.
+- **Penyimpanan terenkripsi**: tabel `AiProviderCredential`, key di-encrypt **AES-256-GCM** (kunci scrypt dari `SESSION_SECRET`, format `v1:iv:tag:ct`, authenticated — tamper terdeteksi). Plaintext key tidak pernah dikirim balik ke client (hanya masked `gsk…abc4`), tidak pernah di-log.
+- **API `/api/ai-providers`**: GET status (masked) · PUT simpan (validasi panjang key/URL/model; audit LogEntry SYSTEM) · POST test koneksi · DELETE hapus — semua di balik session gate + rate limit proxy.
+- Prioritas resolusi kunci: **input manual DB → env var → SDK keyless (zai) → error ramah**; `.env.example` mendokumentasikan semua variabel fallback (nama identik engine).
+
+### Security
+- Kolom `AiProviderCredential.apiKeyEnc` terenkripsi at-rest; rotasi `SESSION_SECRET` meng-invalidate kredensial (by design).
+
 ## [0.3.3] — 2026-09-16
 
 ### Added

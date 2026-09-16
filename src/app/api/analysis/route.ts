@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import ZAI from 'z-ai-web-dev-sdk'
 import { db } from '@/lib/db'
 import { getSimulator } from '@/lib/engine/simulator'
+import { callProviderLlm } from '@/lib/ai-llm'
 import { INDICATOR_IDS, PAIR_IDS, TIMEFRAME_IDS, getPairConfig, getProviderConfig } from '@/lib/constants'
 import type {
   AiProviderId,
@@ -119,7 +119,7 @@ function buildLocalReasoning(
 }
 
 // ------------------------------------------------------------
-// LLM layer (Z.AI via z-ai-web-dev-sdk — server only)
+// LLM layer (semua provider — kunci via DB input manual / env; lihat lib/ai-llm)
 // ------------------------------------------------------------
 interface LlmAnalysis {
   signal: SignalDirection | null
@@ -127,22 +127,6 @@ interface LlmAnalysis {
   score: number | null
   reasoning: string | null
   fundamentals: FundamentalBlock[]
-}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('LLM timeout')), ms)
-    p.then(
-      (v) => {
-        clearTimeout(timer)
-        resolve(v)
-      },
-      (e) => {
-        clearTimeout(timer)
-        reject(e)
-      },
-    )
-  })
 }
 
 /** Parse the LLM reply robustly: strip markdown fences, extract the outermost JSON object. */
@@ -186,31 +170,6 @@ function parseLlmJson(text: string): LlmAnalysis | null {
     }
 
     return { signal, confidence, score, reasoning, fundamentals }
-  } catch {
-    return null
-  }
-}
-
-async function callZaiLlm(userPrompt: string): Promise<LlmAnalysis | null> {
-  try {
-    const zai = await ZAI.create()
-    const completion = (await withTimeout(
-      zai.chat.completions.create({
-        messages: [
-          {
-            role: 'assistant',
-            content:
-              'You are an expert forex analyst for FINEX Indonesia (leverage 1:500). Respond with STRICT JSON only, no markdown fences.',
-          },
-          { role: 'user', content: userPrompt },
-        ],
-        thinking: { type: 'disabled' },
-      }),
-      LLM_TIMEOUT_MS,
-    )) as { choices?: Array<{ message?: { content?: string } }> }
-    const text = completion?.choices?.[0]?.message?.content
-    if (!text) return null
-    return parseLlmJson(text)
   } catch {
     return null
   }
@@ -368,7 +327,7 @@ async function runAnalysis(pair: Pair, timeframe: Timeframe): Promise<AnalysisRe
   const localSignal = scoreToSignal(localScore)
   const localReasoning = buildLocalReasoning(pair, timeframe, readings, localScore, newsSentiment, localSignal)
 
-  // --- LLM layer (Z.AI only, live)
+  // --- LLM layer (semua provider — kunci manual DB / env; fallback lokal bila gagal)
   let live = false
   let signal = localSignal
   let score = localScore
@@ -376,8 +335,7 @@ async function runAnalysis(pair: Pair, timeframe: Timeframe): Promise<AnalysisRe
   let fundamentals = localFundamentals
   let providerLabel = `${getProviderConfig(provider).name} (local fallback)`
 
-  if (provider === 'zai') {
-    providerLabel = 'Z.AI (GLM-4.6)'
+  {
     const topHeadlines = [...news]
       .sort((a, b) => impactWeight(b.impact) - impactWeight(a.impact))
       .slice(0, 5)
@@ -393,9 +351,16 @@ async function runAnalysis(pair: Pair, timeframe: Timeframe): Promise<AnalysisRe
       headlines: topHeadlines,
       mlScore: localScore,
     })
-    const llm = await callZaiLlm(prompt)
+    const llmRes = await callProviderLlm(provider, {
+      system:
+        'You are an expert forex analyst for FINEX Indonesia (leverage 1:500). Respond with STRICT JSON only, no markdown fences.',
+      user: prompt,
+      timeoutMs: LLM_TIMEOUT_MS,
+    })
+    const llm = llmRes.text ? parseLlmJson(llmRes.text) : null
     if (llm) {
       live = true
+      providerLabel = `${getProviderConfig(provider).name} (${llmRes.cred.model}${llmRes.viaSdk ? ' · SDK' : ''})`
       // Blend the LLM score with the local indicator score (50/50)
       const llmScore = llm.score ?? localScore
       score = clamp(Math.round(0.5 * llmScore + 0.5 * localScore), -100, 100)
@@ -404,7 +369,11 @@ async function runAnalysis(pair: Pair, timeframe: Timeframe): Promise<AnalysisRe
       if (llm.fundamentals.length > 0) fundamentals = llm.fundamentals
     } else {
       // graceful fallback: local result, live=false
-      await sim.log('WARN', 'AI', `Analysis ${pair} ${timeframe}: LLM Z.AI gagal/tidak valid — fallback ke model lokal`)
+      await sim.log(
+        'WARN',
+        'AI',
+        `Analysis ${pair} ${timeframe}: LLM ${getProviderConfig(provider).name} gagal/tidak valid${llmRes.error ? ` — ${llmRes.error}` : ''} — fallback ke model lokal`,
+      )
     }
   }
 
@@ -467,7 +436,7 @@ async function runAnalysis(pair: Pair, timeframe: Timeframe): Promise<AnalysisRe
       fundamentalsJson: JSON.stringify(fundamentals),
       indicatorsJson: JSON.stringify(readings),
       newsSentiment,
-      source: live ? 'ZAI' : 'DEMO',
+      source: live ? provider.toUpperCase() : 'DEMO',
     },
   })
   await sim.log(

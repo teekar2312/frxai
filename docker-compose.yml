@@ -1,0 +1,24 @@
+# ============================================================
+# FINEX AI TRADING SYSTEM — Docker Compose
+# Pemakaian: cp .env.example .env → isi minimal SESSION_SECRET
+# dan ADMIN_PASSWORD_HASH → docker compose up -d --build
+#
+# Catatan DATABASE_URL untuk Docker: gunakan path di dalam
+# container → DATABASE_URL=file:/app/db/custom.db (volume di bawah).
+# ============================================================
+services:
+  finexai:
+    build: .
+    container_name: finexai
+    ports: ["3000:3000"]
+    env_file: .env
+    volumes:
+      - ./db:/app/db        # persistensi SQLite
+      - ./backups:/app/backups
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -19,9 +19,16 @@ export async function GET() {
     if (settings.engineMode === 'live') {
       try {
         const base = settings.engineUrl.trim().replace(/\/+$/, '')
+        // Engine key for the Python engine's X-Engine-Key auth guard
+        // (must match ENGINE_API_KEY in the engine's .env / api.api_key in config.yaml).
+        const engineKey = process.env.ENGINE_API_KEY?.trim() ?? ''
         const ctrl = new AbortController()
         const timer = setTimeout(() => ctrl.abort(), 2500)
-        const res = await fetch(`${base}/api/v1/poll`, { signal: ctrl.signal, cache: 'no-store' })
+        const res = await fetch(`${base}/api/v1/poll`, {
+          signal: ctrl.signal,
+          cache: 'no-store',
+          headers: engineKey ? { 'X-Engine-Key': engineKey } : {},
+        })
         clearTimeout(timer)
         if (res.ok) {
           const json = (await res.json()) as EnginePollResponse

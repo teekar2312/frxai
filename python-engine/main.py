@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import hmac
 import re
 import sys
 import threading
@@ -1638,20 +1639,61 @@ api = FastAPI(
     version=ENGINE_VERSION,
 )
 
+_ENGINE: Engine | None = None
+
+#: Origin CORS yang diizinkan — list bersama yang diisi ulang dari config
+#: (``api.allowed_origins``) oleh :func:`set_engine` sebelum uvicorn menerima
+#: request pertama (CORSMiddleware memegang referensi list yang sama).
+_CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+
+#: Waktu modul API dimuat — untuk ``uptime_s`` endpoint publik ``/health``.
+_API_STARTED: float = time.time()
+
+
+@api.middleware("http")
+async def _engine_key_auth(request: Request, call_next: Callable) -> Any:
+    """Guard autentikasi header ``X-Engine-Key`` untuk SEMUA path ``/api/*``.
+
+    Aktif hanya bila ``api.api_key`` diisi (config.yaml atau env
+    ``ENGINE_API_KEY``); perbandingan memakai ``hmac.compare_digest``
+    (konstan-waktu, anti timing attack). Path di luar ``/api/`` — termasuk
+    ``/health`` untuk uptime monitoring — tidak diminta kunci. Preflight
+    CORS (OPTIONS) dijawab middleware CORS yang lebih luar sehingga tidak
+    pernah sampai ke guard ini.
+    """
+    expected = _ENGINE.config.api.api_key if _ENGINE is not None else ""
+    if expected and request.url.path.startswith("/api/"):
+        provided = request.headers.get("x-engine-key", "")
+        if not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "invalid or missing engine key"},
+            )
+    return await call_next(request)
+
+
+# Ditambahkan SETELAH guard di atas agar CORSMiddleware menjadi lapisan
+# TERLUAR: preflight OPTIONS dijawab CORS (tanpa kunci), request sebenarnya
+# tetap dicek X-Engine-Key oleh guard.
 api.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-_ENGINE: Engine | None = None
 
 
 def set_engine(engine: Engine) -> None:
     """Pasang instance engine global (dipanggil ``main()`` sebelum uvicorn)."""
     global _ENGINE
     _ENGINE = engine
+    # Terapkan origin CORS dari config (mutasi in-place — CORSMiddleware
+    # memegang referensi list ``_CORS_ORIGINS`` yang sama).
+    _CORS_ORIGINS[:] = [str(o) for o in engine.config.api.allowed_origins]
+    if not engine.config.api.api_key:
+        get_logger("main").warning(
+            "ENGINE API key TIDAK diatur — endpoint /api/* terbuka tanpa autentikasi."
+        )
 
 
 def get_engine() -> Engine:
@@ -1680,6 +1722,21 @@ def root() -> dict[str, Any]:
         "uptimeSec": round(uptime, 1),
         "docs": "/docs",
         "poll": "/api/v1/poll",
+    }
+
+
+@api.get("/health")
+def health_public() -> dict[str, Any]:
+    """Health publik untuk uptime monitoring — TANPA autentikasi.
+
+    Sengaja berada di luar prefix ``/api/`` sehingga lolos guard
+    ``X-Engine-Key``. Tidak menyentuh state engine sama sekali sehingga
+    selalu cepat dan tidak bisa gagal karena MT5/engine belum siap.
+    """
+    return {
+        "status": "ok",
+        "version": ENGINE_VERSION,
+        "uptime_s": round(time.time() - _API_STARTED, 1),
     }
 
 
@@ -1938,6 +1995,7 @@ def _print_banner(config: Config) -> None:
     print(f"  Pair aktif  : {', '.join(config.trading.pairs)}")
     print(f"  API engine  : http://{config.api.host}:{config.api.port}"
           f"  (docs: /docs, poll: /api/v1/poll)")
+    print(f"  Auth API    : {'X-Engine-Key AKTIF' if config.api.api_key else 'TIDAK diatur — /api/* terbuka!'}")
     print(f"  File log    : {LOG_FILE}")
     if config.dry_run:
         print("  *** DRY-RUN AKTIF — order TIDAK dikirim ke broker ***")

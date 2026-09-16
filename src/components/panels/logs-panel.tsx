@@ -30,7 +30,7 @@ import { cn } from '@/lib/utils'
 // ============================================================
 
 const LEVELS = ['ALL', 'INFO', 'WARN', 'ERROR', 'DEBUG'] as const
-const CATEGORIES = ['ALL', 'TRADING', 'ENGINE', 'AI', 'RISK', 'NEWS', 'ALERT', 'SYSTEM', 'EMAIL'] as const
+const CATEGORIES = ['ALL', 'TRADING', 'ENGINE', 'AI', 'RISK', 'NEWS', 'ALERT', 'SYSTEM', 'EMAIL', 'AUTH'] as const
 const LIMITS = ['50', '100', '200', '500'] as const
 
 const CATEGORY_CHIP: Record<string, string> = {
@@ -42,6 +42,7 @@ const CATEGORY_CHIP: Record<string, string> = {
   ALERT: 'text-teal-600 dark:text-teal-400 border-teal-500/30',
   SYSTEM: 'text-zinc-400 border-zinc-400/30',
   EMAIL: 'text-rose-500 border-rose-500/30',
+  AUTH: 'text-sky-600 dark:text-sky-400 border-sky-500/30',
 }
 
 export default function LogsPanel() {

@@ -61,6 +61,14 @@ email:
 api:
   host: 127.0.0.1
   port: 8000
+  # Kunci API dashboard→engine (WAJIB untuk produksi). Generate: openssl rand -hex 32
+  # Harus sama dengan ENGINE_API_KEY di .env dashboard.
+  # Disarankan diisi via .env engine (ENGINE_API_KEY) — tidak pernah ditulis
+  # ulang ke config.yaml saat dashboard menyimpan settings.
+  api_key: ""
+  # Origin dashboard yang diizinkan (CORS). Kosongkan array [] untuk memblokir semua.
+  allowed_origins:
+    - http://localhost:3000
 
 backtest:
   initial_balance: 10000

@@ -36,10 +36,11 @@ lalu menyajikan semuanya ke dashboard Next.js lewat API FastAPI di
 7. [Konfigurasi Berita (News)](#7-konfigurasi-berita-news)
 8. [Notifikasi Email (SMTP)](#8-notifikasi-email-smtp)
 9. [Menghubungkan ke Dashboard](#9-menghubungkan-ke-dashboard)
-10. [API Engine](#10-api-engine)
-11. [Arsitektur Engine](#11-arsitektur-engine)
-12. [Troubleshooting](#12-troubleshooting)
-13. [Catatan Keamanan & Risiko](#13-catatan-keamanan--risiko)
+10. [Keamanan Produksi (API Key & Eksposur Jaringan)](#10-keamanan-produksi-api-key--eksposur-jaringan)
+11. [API Engine](#11-api-engine)
+12. [Arsitektur Engine](#12-arsitektur-engine)
+13. [Troubleshooting](#13-troubleshooting)
+14. [Catatan Keamanan & Risiko](#14-catatan-keamanan--risiko)
 
 ---
 
@@ -180,6 +181,12 @@ SMTP_USER=namaanda@gmail.com
 SMTP_PASSWORD=app-password-16-karakter
 EMAIL_TO=namaanda@gmail.com
 
+# === Keamanan API engine (WAJIB bila dashboard di device lain, lihat bagian 10) ===
+# Generate: openssl rand -hex 32 — harus SAMA dengan ENGINE_API_KEY di .env dashboard
+# ENGINE_API_KEY=64-karakter-hex-acak
+# Origin CORS yang diizinkan (dipisah koma, opsional):
+# ENGINE_ALLOWED_ORIGINS=https://dashboard.anda.com
+
 # === Lain-lain (opsional) ===
 # FINEX_LOG_LEVEL=INFO       # DEBUG|INFO|WARNING|ERROR
 ```
@@ -213,6 +220,7 @@ Banner startup akan muncul:
                 EURJPY, EURGBP, EURCHF, EURAUD, GBPJPY, GBPCHF, AUDJPY,
                 CADJPY, CHFJPY, XAUUSD, XAGUSD  (18 pair)
   API engine  : http://127.0.0.1:8000  (docs: /docs, poll: /api/v1/poll)
+  Auth API    : X-Engine-Key AKTIF
   File log    : C:\finex\python-engine\logs\engine.log
 ==================================================================
 ```
@@ -404,19 +412,109 @@ otomatis fallback ke data DEMO dan menampilkan `connected=false`.
 4. Di dashboard (PC lain / laptop / tablet di jaringan sama), set
    **Engine URL** = `http://192.168.1.20:8000`.
 
-> ⚠️ Jangan ekspos port 8000 ke internet publik tanpa proteksi tambahan —
-> endpoint order engine tidak memakai autentikasi. Untuk pemakaian rumah,
-> batasi pada jaringan lokal (Private) saja.
+> ⚠️ Sebelum membuka port 8000 (apalagi ke internet), aktifkan dulu **kunci
+> API** (`ENGINE_API_KEY` di `.env` engine + dashboard — header
+> `X-Engine-Key`) dan batasi `api.allowed_origins`; lihat **bagian 10
+> (Keamanan Produksi)**. Untuk akses lintas-jaringan yang aman, Cloudflare
+> Tunnel / Tailscale jauh lebih disarankan daripada port-forward mentah.
 
 ---
 
-## 10. API Engine
+## 10. Keamanan Produksi (API Key & Eksposur Jaringan)
+
+Engine ini mengendalikan **akun trading real**. Bagian ini WAJIB dibaca bila
+API engine diakses dari device lain (LAN/internet), bukan hanya dari PC yang
+sama.
+
+### 10.1 Kunci API — `X-Engine-Key`
+
+Default `api.host: 127.0.0.1` berarti hanya PC sendiri yang bisa memanggil
+API. Begitu port di-expos ke jaringan lain, **siapa pun yang bisa mencapai
+port tersebut dapat membaca state akun DAN mengirim order**. Karena itu
+aktifkan kunci API:
+
+1. Generate kunci acak 64 karakter hex (32 byte):
+
+   ```bat
+   :: Git Bash / WSL
+   openssl rand -hex 32
+
+   :: PowerShell
+   -join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) })
+   ```
+
+2. Isi kunci yang **sama** di dua sisi:
+   - **Engine** — `.env` engine: `ENGINE_API_KEY=<kunci>` (atau
+     `api.api_key` di `config.yaml`; `.env` lebih aman — nilainya tidak
+     pernah ikut tertulis ulang saat dashboard menyimpan settings).
+   - **Dashboard** — `.env` dashboard yang menjalankan Next.js:
+     `ENGINE_API_KEY=<kunci yang sama>`.
+3. Restart engine (dan dashboard bila `.env` dashboard berubah).
+
+Perilaku setelah kunci aktif:
+
+- Setiap request ke path `/api/*` **wajib** membawa header
+  `X-Engine-Key: <kunci>` — termasuk polling `GET /api/v1/poll` yang
+  dikirim proxy `/api/engine` dashboard (header ditambahkan otomatis oleh
+  proxy selama `ENGINE_API_KEY` terisi di `.env` dashboard).
+- Kunci salah/hilang → `401 {"detail": "invalid or missing engine key"}`.
+- Perbandingan kunci memakai `hmac.compare_digest` (konstan-waktu, anti
+  timing attack).
+- `GET /health` tetap **publik tanpa kunci** — hanya mengembalikan
+  `{status, version, uptime_s}`, untuk uptime monitoring; tidak membocorkan
+  data akun maupun trading.
+- Bila kunci kosong, engine tetap jalan tetapi mencatat peringatan saat
+  startup: `ENGINE API key TIDAK diatur — endpoint /api/* terbuka tanpa
+  autentikasi` (mode ini hanya layak bila engine & dashboard di PC yang
+  sama dan port tidak di-expos).
+
+### 10.2 CORS — `allowed_origins`
+
+`config.yaml` → `api.allowed_origins` membatasi origin browser yang boleh
+memanggil API (default: `http://localhost:3000`). Kosongkan (`[]`) untuk
+memblokir semua origin; wildcard `*` sengaja **tidak didukung** demi
+keamanan. Override env: `ENGINE_ALLOWED_ORIGINS="https://a.com,https://b.com"`.
+
+> Catatan: dashboard FINEX mem-poll engine lewat proxy server-side
+> (`/api/engine`), sehingga CORS hanya relevan bila Anda memanggil API
+> engine langsung dari browser.
+
+### 10.3 Eksposur jaringan — urutan dari paling aman
+
+| Cara akses | Keamanan | Catatan |
+|---|---|---|
+| `api.host: 127.0.0.1` (default), dashboard di PC sama | ✅ Terbaik | Tidak ada port terbuka sama sekali. |
+| **Cloudflare Tunnel** (`cloudflared` → `http://localhost:8000`) | ✅ Sangat baik | Tanpa buka port/firewall; HTTPS + akses terkontrol. Set `api.host` tetap `127.0.0.1`, lalu arahkan engineUrl dashboard ke URL tunnel dan masukkan URL itu ke `allowed_origins`. |
+| **Tailscale** (VPN mesh) | ✅ Sangat baik | Engine hanya terjangkau dari device Anda sendiri; set `api.host` ke IP Tailscale PC, atau `0.0.0.0` + firewall hanya mengizinkan interface Tailscale. |
+| LAN rumah (`api.host: 0.0.0.0` + firewall profil *Private*) | ⚠️ Cukup | **Wajib** dengan `ENGINE_API_KEY` aktif; jangan pernah untuk profil *Public*. |
+| Port-forward router / tunnel acak ke internet publik | ❌ Jangan | Meski dengan api_key, tidak ada alasan memperbesar permukaan serangan — pakai Cloudflare Tunnel/Tailscale. |
+
+### 10.4 Kebersihan file rahasia
+
+- **Jangan pernah commit `config.yaml` asli atau `.env` ke Git** — berisi
+  kredensial MT5, API key provider, dan SMTP. Repo hanya boleh berisi
+  `config.example.yaml`; pastikan `config.yaml` dan `.env` ada di
+  `.gitignore`.
+- `GET /api/v1/settings` dan penulisan ulang `config.yaml` oleh engine
+  **tidak pernah menyertakan kredensial** (login/password MT5, API key
+  berita, SMTP, dan `api.api_key` dibuang otomatis) — satu lagi alasan
+  mengisi `ENGINE_API_KEY` lewat `.env`, bukan `config.yaml`.
+- Ganti `api_key` segera bila ada kemungkinan bocor (mis. pernah
+  ter-commit atau pernah dibagikan).
+
+---
+
+## 11. API Engine
 
 Base URL: `http://localhost:8000`. Dokumentasi interaktif (Swagger):
 <http://localhost:8000/docs>.
 
+> Bila `api_key` diaktifkan (bagian 10), **semua path `/api/*`** wajib
+> membawa header `X-Engine-Key: <kunci>`. `GET /health` publik (tanpa kunci).
+
 | Method & Path | Fungsi | Bentuk respons |
 |---|---|---|
+| `GET /health` | Health publik untuk uptime monitoring — **tanpa autentikasi**, di luar `/api/*` | `{status, version, uptime_s}` |
 | `GET /api/v1/poll` | **Polling utama dashboard** (dipanggil `/api/engine`, timeout 2.5s; murni baca cache — dijamin cepat) | `EnginePollResponse` |
 | `GET /api/v1/health` | Health check ringan | `{ok, mt5, version, uptime}` |
 | `GET /api/v1/positions` | Posisi terbuka milik engine (magic number) | `PositionView[]` |
@@ -429,15 +527,19 @@ Base URL: `http://localhost:8000`. Dokumentasi interaktif (Swagger):
 | `GET \| POST /api/v1/alerts` | Lihat / tambah alert harga `{pair, condition: ABOVE\|BELOW, price, note}` | `AlertView[]` |
 | `GET /api/v1/logs?level&category&q&limit` | Log engine (terbaru dulu) | `LogEntryView[]` |
 
-Contoh:
+Contoh (header `X-Engine-Key` hanya perlu bila `api_key` diaktifkan):
 
 ```bat
-curl http://localhost:8000/api/v1/health
+curl http://localhost:8000/health
+
+curl http://localhost:8000/api/v1/poll -H "X-Engine-Key: kunci-anda"
 
 curl -X POST http://localhost:8000/api/v1/orders -H "Content-Type: application/json" ^
+  -H "X-Engine-Key: kunci-anda" ^
   -d "{\"action\":\"open\",\"pair\":\"EURUSD\",\"side\":\"BUY\",\"riskBased\":true,\"stopLossPips\":10}"
 
 curl -X POST http://localhost:8000/api/v1/alerts -H "Content-Type: application/json" ^
+  -H "X-Engine-Key: kunci-anda" ^
   -d "{\"pair\":\"XAUUSD\",\"condition\":\"ABOVE\",\"price\":2650.5,\"note\":\"breakout emas\"}"
 ```
 
@@ -447,7 +549,7 @@ sesuai `risk.max_positions` (1–3), **lot di-clamp 0.01–50** + step broker,
 
 ---
 
-## 11. Arsitektur Engine
+## 12. Arsitektur Engine
 
 ```
                          ┌──────────────────────────────────────────────┐
@@ -511,13 +613,14 @@ Alur keputusan AI (mode `ai`, tiap ± 15 detik):
 
 ---
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 | Gejala | Penyebab umum | Solusi |
 |---|---|---|
 | `terminal64.exe tidak ditemukan` | Terminal terinstall di lokasi tidak standar | Isi `MT5_PATH` di `.env` dengan path lengkap `terminal64.exe`. |
 | `Terminal tidak merespons dalam 60 detik` | Login salah / tombol Algo Trading mati / terminal menunggu dialog | Cek `MT5_LOGIN`/`MT5_PASSWORD`/`MT5_SERVER`; nyalakan **Algo Trading** di terminal; tutap dialog pop-up terminal; naikkan `mt5.timeout_seconds`. |
 | `mt5.initialize gagal: (-6, Authorization failed)` | Kredensial/server salah | Pastikan server persis (mis. `FINEX-Live`), password akun trading (bukan password investor). |
+| `401 invalid or missing engine key` | `api_key` engine tidak sama dengan `ENGINE_API_KEY` dashboard (atau header tidak terkirim) | Samakan kunci di `.env` engine dan `.env` dashboard, lalu restart keduanya; cek header `X-Engine-Key` bila memanggil API langsung. |
 | Dashboard tetap `connected=false` padahal engine jalan | engineUrl salah / engine di PC lain / firewall | Set Engine URL `http://localhost:8000`; bila beda PC: `api.host: 0.0.0.0` + inbound rule TCP 8000 + pakai IP LAN. |
 | `IPC initialize failed` / `Failed to initialize IPC` | Terminal 32-bit, atau MetaTrader5 pip tidak cocok versi Python | Install **Python 64-bit** + terminal 64-bit; `pip install --upgrade MetaTrader5`. |
 | Order ditolak `retcode=10027` (AutoTrading disabled) | Tombol Algo Trading OFF di terminal | Nyalakan tombol **Algo Trading** (toolbar terminal) hingga hijau. |
@@ -534,7 +637,7 @@ Alur keputusan AI (mode `ai`, tiap ± 15 detik):
 
 ---
 
-## 13. Catatan Keamanan & Risiko
+## 14. Catatan Keamanan & Risiko
 
 - **Hanya jalankan satu instance engine** untuk satu akun. Magic number
   (`trading.magic: 880042`) menandai posisi milik engine — posisi yang Anda

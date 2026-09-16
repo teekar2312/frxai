@@ -54,6 +54,9 @@ server.log
 # runtime / artifacts
 /db/*.db
 db/*.db
+db/*.db-wal
+db/*.db-shm
+db/*.db-journal
 __pycache__/
 *.pyc
 .zscripts/dev.pid

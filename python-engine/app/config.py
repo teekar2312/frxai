@@ -8,7 +8,7 @@ Sumber konfigurasi berlapis (prioritas tertinggi terakhir):
        ``MT5_LOGIN``, ``MT5_PASSWORD``, ``MT5_SERVER``, ``MT5_PATH``,
        ``MT5_PORTABLE``, ``FINNHUB_API_KEY``, ``MARKETAUX_API_KEY``,
        ``SMTP_HOST``, ``SMTP_PORT``, ``SMTP_USER``, ``SMTP_PASSWORD``,
-       ``EMAIL_TO``.
+       ``EMAIL_TO``, ``ENGINE_API_KEY``, ``ENGINE_ALLOWED_ORIGINS``.
 
 Nilai di luar rentang aman otomatis di-clamp + dicatat ke
 ``Config.warnings``. Pelanggaran struktural (mis. tidak ada pair terpilih)
@@ -171,10 +171,24 @@ class EmailConfig:
 
 @dataclass
 class ApiConfig:
-    """Server FastAPI engine."""
+    """Server FastAPI engine.
+
+    ``api_key`` kosong = autentikasi NONAKTIF (engine mencatat peringatan
+    saat startup). Bila diisi, setiap request ``/api/*`` wajib membawa
+    header ``X-Engine-Key`` yang cocok (dibandingkan konstan-waktu).
+    """
 
     host: str = "127.0.0.1"
     port: int = 8000
+    #: Kunci API dashboard→engine (WAJIB untuk produksi).
+    #: Generate: ``openssl rand -hex 32``. Override env: ``ENGINE_API_KEY``.
+    api_key: str = ""
+    #: Origin yang diizinkan CORS (tanpa trailing slash), mis. dashboard
+    #: Next.js. List kosong = blokir semua origin. Override env:
+    #: ``ENGINE_ALLOWED_ORIGINS`` (dipisah koma).
+    allowed_origins: list[str] = field(
+        default_factory=lambda: ["http://localhost:3000"]
+    )
 
 
 @dataclass
@@ -303,6 +317,10 @@ class Config:
         self.news.avoid_minutes = int(self._clamp(
             self.news.avoid_minutes, 0, 120, "news.avoid_minutes", "menit", 0))
         self.api.port = int(self._clamp(self.api.port, 1024, 65535, "api.port", "", 0))
+        # --- server API: kunci X-Engine-Key + origin CORS ---
+        # api_key boleh kosong (auth OFF — main.py memperingatkan saat startup).
+        self.api.api_key = str(self.api.api_key or "").strip()
+        self.api.allowed_origins = self._clean_origins(self.api.allowed_origins)
         try:
             self.backtest.initial_balance = max(100.0, float(self.backtest.initial_balance or 10000.0))
         except (TypeError, ValueError):
@@ -377,6 +395,39 @@ class Config:
             return round(hi, digits)
         return round(val, digits)
 
+    def _clean_origins(self, raw: Any) -> list[str]:
+        """Normalisasi daftar origin CORS: string non-kosong, unik, tanpa '*'.
+
+        List kosong VALID (memblokir semua origin). Tipe salah / None →
+        kembali ke default + peringatan. Entri kosong dibuang dengan
+        peringatan; trailing slash dibuang agar cocok dengan header Origin
+        browser (yang tidak pernah ber-``/`` akhir).
+        """
+        default = ["http://localhost:3000"]
+        if not isinstance(raw, (list, tuple)):
+            self._warn(
+                "api.allowed_origins harus berupa list origin "
+                f"(mis. [http://localhost:3000]) — dapat {type(raw).__name__}, "
+                "dipakai default."
+            )
+            return default
+        cleaned: list[str] = []
+        empty_count = 0
+        for item in raw:
+            value = str(item or "").strip().rstrip("/")
+            if not value:
+                empty_count += 1
+            elif value == "*":
+                self._warn(
+                    "api.allowed_origins '*' tidak didukung demi keamanan — "
+                    "sebutkan origin lengkap (mis. https://dashboard.anda.com)."
+                )
+            elif value not in cleaned:
+                cleaned.append(value)
+        if empty_count:
+            self._warn(f"api.allowed_origins: {empty_count} entri kosong dibuang.")
+        return cleaned
+
     # ------------------------------------------------------------------
     # Helper domain (dipakai engine/risk/api)
     # ------------------------------------------------------------------
@@ -427,6 +478,10 @@ class Config:
         email = data.setdefault("email", {})
         email.pop("user", None)
         email.pop("password", None)
+        # Kunci API engine juga rahasia — tidak boleh ikut tertulis ke YAML
+        # maupun dibocorkan lewat endpoint settings.
+        api = data.setdefault("api", {})
+        api.pop("api_key", None)
         return data
 
     def save(self, path: str | None = None) -> None:
@@ -501,6 +556,14 @@ def _apply_env(cfg: Config) -> None:
         value = _env_str(env_name)
         if value is not None:
             setattr(cfg.email, attr, value)
+
+    # --- server API (keamanan dashboard→engine) ---
+    engine_key = _env_str("ENGINE_API_KEY")
+    if engine_key is not None:
+        cfg.api.api_key = engine_key
+    engine_origins = _env_str("ENGINE_ALLOWED_ORIGINS")
+    if engine_origins is not None:
+        cfg.api.allowed_origins = [part.strip() for part in engine_origins.split(",")]
 
 
 __all__ = [

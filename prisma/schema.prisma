@@ -106,12 +106,15 @@ model Position {
   signalTf    String?   // timeframe used at open
   openedAt    DateTime  @default(now())
   closedAt    DateTime?
+
+  @@index([status, openedAt])
+  @@index([pair, status])
 }
 
 model LogEntry {
   id         String   @id @default(cuid())
   level      String // INFO | WARN | ERROR | DEBUG
-  category   String // TRADING | ENGINE | AI | RISK | NEWS | ALERT | SYSTEM | EMAIL
+  category   String // TRADING | ENGINE | AI | RISK | NEWS | ALERT | SYSTEM | EMAIL | AUTH
   message    String
   details    String?
   createdAt  DateTime @default(now())
@@ -130,6 +133,8 @@ model PriceAlert {
   mode        String    @default("DEMO")
   createdAt   DateTime  @default(now())
   triggeredAt DateTime?
+
+  @@index([status])
 }
 
 model Backtest {
@@ -160,6 +165,8 @@ model Backtest {
   equityCurveJson String
   tradesJson      String
   createdAt       DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 model NewsItem {
@@ -196,6 +203,7 @@ model AnalysisRecord {
   createdAt      DateTime @default(now())
 
   @@index([createdAt])
+  @@index([pair, createdAt])
 }
 
 model ModelStat {

@@ -1,0 +1,29 @@
+# ============================================================
+# FINEX AI TRADING SYSTEM — .dockerignore
+# Menjaga context build Docker kecil & bebas file sensitif/runtime.
+# ============================================================
+
+# Dependency & hasil build (di-build ulang di dalam image)
+node_modules
+.next
+
+# Git & metadata
+.git
+
+# Data runtime (di-mount sebagai volume, bukan dibakar ke image)
+db
+backups
+
+# Artefak sandbox / tooling (tidak relevan di image produksi)
+tool-results
+mini-services
+examples
+skills
+agent-ctx
+
+# Rahasia — JANGAN pernah masuk image
+.env
+
+# Log runtime
+dev.log
+server.log

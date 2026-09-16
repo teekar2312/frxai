@@ -1,7 +1,7 @@
 'use client'
 
 import { useTheme } from 'next-themes'
-import { Moon, Sun, Activity, Landmark, TrendingUp, TrendingDown, Bot, RefreshCw, Rows3, AlignJustify, Expand, Check } from 'lucide-react'
+import { Moon, Sun, Activity, Landmark, TrendingUp, TrendingDown, Bot, RefreshCw, Rows3, AlignJustify, Expand, Check, LogOut, UserRound } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
@@ -25,7 +25,7 @@ const DENSITY_OPTIONS: { value: UiDensity; label: string; hint: string; icon: ty
   { value: 'minimal', label: 'Minimal', hint: 'Lega & mudah dibaca', icon: Expand },
 ]
 
-export function Header() {
+export function Header({ username }: { username?: string }) {
   const { theme, setTheme } = useTheme()
   const { data, refresh } = usePolling<EnginePollResponse>('/api/engine', 2000)
   const bumpRefresh = useAppStore((s) => s.bumpRefresh)
@@ -50,6 +50,15 @@ export function Header() {
     } catch {
       /* handled by toast in panels */
     }
+  }
+
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+    } catch {
+      /* cookie akan tetap di-clear saat reload bila gagal */
+    }
+    window.location.replace('/')
   }
 
   return (
@@ -197,6 +206,26 @@ export function Header() {
             <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
             <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
           </Button>
+
+          {/* User + logout */}
+          {username ? (
+            <>
+              <div className="hidden items-center gap-1.5 rounded-md border px-2 py-1 sm:flex" title={`Login sebagai ${username}`}>
+                <UserRound className="h-3.5 w-3.5 text-emerald-500" />
+                <span className="max-w-[10ch] truncate text-[11px] font-medium">{username}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-muted-foreground hover:text-red-500"
+                onClick={logout}
+                aria-label="Keluar (logout)"
+                title="Keluar"
+              >
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </>
+          ) : null}
         </div>
       </div>
     </header>

@@ -395,3 +395,24 @@ Stage Summary:
 - File sensitif/runtime TIDAK terdorong: .env (DATABASE_URL), db/custom.db, __pycache__, tool-results, agent-ctx, dev.pid — dan kini permanen di-ignore
 - PAT tidak disimpan di .git/config (hanya dipakai inline pada URL push); remote origin = https://github.com/teekar2312/frxai.git
 - main lokal tersinkron + tracking origin/main terpasang; commit snapshot sandbox berikutnya akan menghormati .gitignore baru
+
+---
+Task ID: 14
+Agent: main (Z.ai Code)
+Task: Audit mendalam menyeluruh untuk memverifikasi integrasi seluruh sistem pasca Task 12-13 (18 pair + batch analysis + push GitHub)
+
+Work Log:
+- Audit statis: tsc --noEmit 0 error di src/ (4 error pre-existing hanya examples/+skills/ environment); eslint . exit 0.
+- Audit konsistensi 18 pair lintas stack (script verifikasi otomatis): constants.ts PAIRS = types.ts Pair union = config.py KNOWN_PAIRS = mt5_client PIP_VALUE = strategy PIP_SIZES+DIGITS = config.example.yaml trading.pairs → SEMUA 18/18 match (2 "anomali" awal terbukti false positive regex: MEDIUM/TARGET dari union lain; yaml flow-style list).
+- Audit konsumen PAIRS: 7 panel + 6 route API + simulator — semua konsisten via PAIRS/PAIR_IDS/getPairConfig; simulator seed 18 pair; AI cycle mendukung mode manual (settings.pairs) & ai (skor semua PAIRS top-2); settings route validasi ≥1 pair.
+- TEMUAN #1 (KRITIS, fixed): POST /api/analysis gagal "attempt to write a readonly database" (SQLite 1032) — akibat Task 13: daemon checkout git mengganti inode db/custom.db saat koneksi Prisma lama terbuka → koneksi pooled terjebak read-only (baca OK, tulis gagal). Data DB utuh (19 analisa, 8 posisi, 80 berita). Fix: restart dev server → koneksi Prisma baru; tulis DB pulih.
+- TEMUAN #2 (BUG NYATA, fixed): formula margin salah arah konversi quote-currency — (volume × contractSize × openPrice)/leverage menganggap notional quote sebagai USD. Dampak: margin JPY-cross (USDJPY/EURJPY/GBPJPY/AUDJPY/CADJPY/CHFJPY) ter-oversize ~154× → order risk-based CADJPY ditolak "butuh ~$34,473, tersedia $9,957"; margin level stop-out & account summary tidak akurat. Fix: helper quoteToUsd(pairId) (live price + config fallback; direct USD{q}→1/rate, inverse {q}USD→rate) + koreksi 4 situs: enforceStopOut, AI maxAffordable, placeOrder requiredMargin, getAccount margin. Catatan: edit pertama salah arah (membagi, harusnya mengalikan) — terdeteksi via re-test ($5.3M), dikoreksi. Verifikasi: order risk-based CADJPY 1.53 lot SUKSES; margin akun $223.63 vs hitungan tangan $223.24 ✓; regresi pair USD-quoted aman (q2u=1).
+- Smoke test API: 15 route GET semua 200; validasi input (pair XXXYYY → 400 daftar 18 pair; tf X99 → 400 daftar 9 tf); batch 8 pair live LLM ~4s/pair sukses; order open/close CADJPY (close pakai positionId); alert create CHFJPY ABOVE 175 ACTIVE; settings PUT +NZDUSD (9 pair); backtest GBPCHF H1 52 trade; notify menolak benar saat email disabled; 0 error 5xx di dev.log.
+- E2E browser (1440×900): Overview 18 watchlist; AI Analysis → radio "Semua pair aktif (9)" + 18 radio pair → klik → tombol "Analisis Semua Pair (9)" → progress "Menganalisa USDJPY (2/9)…" → grid 9 kartu (3 BUY/4 SELL/2 NEUTRAL) → klik kartu NZDUSD → detail BUY LLM Live entry 0.59672/SL/TP/RR 1:1.5; VLM visual: 9 kartu + detail + "No layout glitches or overlap". Trading 18 tombol + chart; Settings badge "Pairs 9/18" + chip + Simpan; Alerts & Backtest Select 18 opsi (EUR/USD→XAG/USD); News/Logs/Engine Setup render; mobile 390px overflowX=false; tema light/dark toggle; density Dense 14px→Compact 16px + localStorage persist + reload tanpa flash; 0 page error seluruh sesi.
+
+Stage Summary:
+- Integrasi seluruh sistem TERVERIFIKASI: 18 pair konsisten di 7 sumber lintas TS+Python; batch "Analisis Semua Pair" bekerja end-to-end dengan LLM live; seluruh jalur tulis DB (analisa/order/alert/settings/backtest) pulih dan teruji.
+- 2 temuan diperbaiki: (1) koneksi DB read-only pasca-git-checkout → restart server; (2) bug margin quote-currency 4 situs → helper quoteToUsd + formula dikalikan rate USD-per-quote (dampak: order risk-based JPY cross kini bisa dieksekusi, margin level akurat).
+- File berubah: src/lib/engine/simulator.ts (helper quoteToUsd + 4 situs formula margin), worklog.md.
+- Semua verifikasi ulang pasca-fix: tsc 0, eslint 0, 0 5xx, E2E bersih.
+- Pelajaran: operasi git checkout pada repo dengan DB live dapat merusak koneksi SQLite yang terbuka (restart server diperlukan); formula margin multi-currency wajib mengkonversi notional quote → USD.

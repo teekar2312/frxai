@@ -579,6 +579,28 @@ export class Simulator {
     }
   }
 
+  /**
+   * Quote-currency → USD conversion rate for margin math.
+   * E.g. EURJPY notional is in JPY → divide by USDJPY to get USD.
+   * Uses live engine prices with config basePrice fallbacks.
+   */
+  private quoteToUsd(pairId: string): number {
+    const quote = pairId.slice(3).toUpperCase()
+    if (quote === 'USD') return 1
+    // Direct rate USD{quote} (USDJPY, USDCHF, USDCAD): 1 quote-ccy = 1 / rate USD
+    const direct = this.pairs.get(`USD${quote}` as Pair)
+    if (direct && direct.bid > 0) return 1 / direct.bid
+    // Inverse rate {quote}USD (GBPUSD, AUDUSD, NZDUSD): 1 quote-ccy = rate USD
+    const inverse = this.pairs.get(`${quote}USD` as Pair)
+    if (inverse && inverse.bid > 0) return inverse.bid
+    // Config fallbacks (engine not seeded yet)
+    const dCfg = PAIRS.find((p) => p.id === `USD${quote}`)
+    if (dCfg && dCfg.basePrice > 0) return 1 / dCfg.basePrice
+    const iCfg = PAIRS.find((p) => p.id === `${quote}USD`)
+    if (iCfg && iCfg.basePrice > 0) return iCfg.basePrice
+    return 1
+  }
+
   /** Close the worst position while margin level stays below the 20% stop-out. */
   private async enforceStopOut(open: RtPosition[], now: number): Promise<void> {
     let guard = 0
@@ -595,7 +617,7 @@ export class Simulator {
         const pips = p.side === 'BUY' ? (cur - p.openPrice) / cfg.pipSize : (p.openPrice - cur) / cfg.pipSize
         const fl = pips * cfg.pipValuePerLot * p.volume - p.commission
         floating += fl
-        margin += (p.volume * cfg.contractSize * p.openPrice) / this.leverage
+        margin += (p.volume * cfg.contractSize * p.openPrice * this.quoteToUsd(p.pair)) / this.leverage
         if (fl < worstFloat) {
           worstFloat = fl
           worst = p
@@ -753,7 +775,8 @@ export class Simulator {
     const rt = this.pairs.get(best.pair)!
     const refPrice = side === 'BUY' ? rt.ask : rt.bid
     if (refPrice > 0) {
-      const maxAffordable = (acct.freeMargin * 0.8 * this.leverage) / (cfg.contractSize * refPrice)
+      const maxAffordable =
+        (acct.freeMargin * 0.8 * this.leverage) / (cfg.contractSize * refPrice * this.quoteToUsd(best.pair))
       if (lots > maxAffordable) lots = round2(clamp(maxAffordable, 0, RISK_LIMITS.volume.max))
     }
     if (lots < RISK_LIMITS.volume.min) {
@@ -900,7 +923,7 @@ export class Simulator {
     volume = round2(clamp(volume, RISK_LIMITS.volume.min, RISK_LIMITS.volume.max))
 
     const openPrice = side === 'BUY' ? rt.ask : rt.bid
-    const requiredMargin = (volume * cfg.contractSize * openPrice) / this.leverage
+    const requiredMargin = (volume * cfg.contractSize * openPrice * this.quoteToUsd(pair)) / this.leverage
     if (requiredMargin > acct.freeMargin * 0.9) {
       throw new Error(`Margin tidak cukup: butuh ~$${requiredMargin.toFixed(0)}, tersedia $${acct.freeMargin.toFixed(0)}`)
     }
@@ -1021,7 +1044,7 @@ export class Simulator {
       const cur = row.side === 'BUY' ? rt.bid : rt.ask
       const pips = row.side === 'BUY' ? (cur - row.openPrice) / cfg.pipSize : (row.openPrice - cur) / cfg.pipSize
       floating += pips * cfg.pipValuePerLot * row.volume - row.commission
-      margin += (row.volume * cfg.contractSize * row.openPrice) / this.leverage
+      margin += (row.volume * cfg.contractSize * row.openPrice * this.quoteToUsd(row.pair)) / this.leverage
     }
     floating = round2(floating)
     const equity = round2(this.account.balance + floating)

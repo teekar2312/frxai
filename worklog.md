@@ -574,3 +574,26 @@ Stage Summary:
 - Version 0.3.1 konsisten: package.json + /api/health + CHANGELOG.
 - File diubah: .gitignore, src/app/api/health/route.ts, package.json, CHANGELOG.md, worklog.md; file baru: .env.example (tracked pertama kali).
 - Catatan opsional: daemon snapshot sandbox berulang menimpa .env (2× insiden) — pada deploy produksi asli (VPS/Docker) risiko ini tidak ada karena env dikelola via env_file/secret manager.
+
+---
+Task ID: 20
+Agent: main (Z.ai Code)
+Task: Fix "npm run dev" gagal di Windows ('tee' is not recognized) — script package.json lintas platform + hardening first-run clone
+
+Work Log:
+- Diagnosis dari error user (PowerShell, clone C:\Users\gorillaz\Documents\frxai, npm): script "dev" = `next dev -p 3000 2>&1 | tee dev.log` memakai `tee` (Unix-only). Audit menyeluruh menemukan 2 script lain bermasalah di Windows: "start" (`NODE_ENV=...` prefix bash + tee) dan "build" (`cp -r` — npm di Windows mengeksekusi via cmd.exe, bukan PowerShell alias).
+- Solusi: 3 wrapper Node lintas platform — scripts/dev.mjs (spawn `next dev -p 3000` via shell:true → resolve .bin/next; tee manual stdout+stderr → dev.log flags:'w'; taskkill /pid /T /F di win32 untuk Ctrl+C bersih), scripts/build.mjs (spawnSync `next build` + copyInto() fs.cpSync deterministic — rmSync dest dulu untuk hindari nesting cpSync ke dir eksisting), scripts/start.mjs (NODE_ENV via env spawn, jalankan .next/standalone/server.js dengan process.execPath, guard "belum build" + tee server.log). package.json: dev/build/start → `node scripts/*.mjs`.
+- KRITIS tertangkap: Dockerfile build stage (oven/bun:1) TIDAK memuat node — `bun run build` → `node scripts/build.mjs` akan gagal di Docker build. Fix: tahap build Dockerfile di-inline `./node_modules/.bin/next build && cp -r …` (container selalu Linux).
+- First-run clone diperbaiki: .env.example DATABASE_URL dari path absolut sandbox (`file:/home/z/my-project/db/custom.db`) → relatif lintas platform `file:../db/custom.db` (resolve terhadap prisma/ → <root>/db/custom.db; berlaku identik Windows/Linux/Docker-build); + db/.gitkeep agar folder db eksisten pasca-clone (prisma db push tidak membuat parent dir).
+- Dokumen: DEPLOYMENT.md Opsi C — komentar DATABASE_URL disederhanakan + note baru "Tanpa bun? npm install → npm run db:push → npm run build → npm run start (wrapper Node lintas platform)"; PRODUCTION.md prasyarat — Node.js 18+ kini WAJIB (runtime wrapper), Bun jadi opsional.
+- INSIDEN MINOR (bukan bug file): output Bash tool menyimpan karakter `[h` pada baris DEPLOYMENT.md `allowed_origins: [http://localhost:3000]` sehingga terbaca sebagai typo `ttp://`; verifikasi codepoint Python membuktikan file ASLI sudah benar ([U+005B h t t p) — tidak ada perubahan yang diperlukan (assert replace count=0, file utuh).
+- Uji sandbox penuh: pkill server lama → rm dev.log → `bun run dev` → wrapper aktif (pohon proses: node dev.mjs → sh → node next → next-server, 1 instance); dev.log terisi kembali (WAL pragma + Ready 890ms); health 200 v0.3.1; page 200; gate 401 tanpa cookie; login 200; gate 200 dengan cookie; eslint 0 (termasuk 3 file .mjs baru); tsc --noEmit 0.
+- Bump v0.3.2 + CHANGELOG entry [0.3.2] Fixed (5 butir).
+
+Stage Summary:
+- `npm run dev|build|start` kini berjalan identik di Windows PowerShell/cmd, Linux, macOS, via npm maupun bun (asal Node ≥18 di PATH); dev.log/server.log tetap dihasilkan untuk monitoring.
+- Docker build path tidak berubah perilaku (inline Linux-native); VPS/pm2 (`bun run start`) tetap berfungsi karena node hadir via npm/pm2.
+- Clone-first-run kini mulus: db/ ada (.gitkeep), DATABASE_URL relatif, .env.example tersedia.
+- Version 0.3.2 konsisten: package.json + /api/health + CHANGELOG.
+- File baru: scripts/{dev,build,start}.mjs, db/.gitkeep; diubah: package.json, Dockerfile, .env.example, DEPLOYMENT.md, PRODUCTION.md, CHANGELOG.md, worklog.md.
+- Untuk user Windows: git pull → copy .env.example .env → isi SESSION_SECRET (PowerShell: -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 48 | % {[char]$_}) → npm run db:push → npm run dev.

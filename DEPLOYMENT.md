@@ -41,6 +41,7 @@ git clone https://github.com/teekar2312/frxai.git /opt/frxai && cd /opt/frxai
 # 3. Dependency + env
 bun install
 cp .env.example .env && nano .env      # isi SESSION_SECRET + ADMIN_PASSWORD_HASH
+# (DATABASE_URL default relatif file:../db/custom.db — tidak perlu diubah untuk VPS non-Docker)
 
 # 4. Database
 bunx prisma db push
@@ -95,10 +96,14 @@ docker compose logs -f          # tunggu "Ready"
 powershell -c "irm bun.sh/install.ps1 | iex"
 git clone https://github.com/teekar2312/frxai.git C:\frxai && cd C:\frxai
 bun install
-copy .env.example .env          # DATABASE_URL=file:C:/frxai/db/custom.db
+copy .env.example .env          # DATABASE_URL default sudah relatif (tanpa edit); isi SESSION_SECRET!
 bunx prisma db push
 bun run build && bun run start
 ```
+
+> Tanpa bun? Semua script juga berjalan dengan Node.js murni:
+> `npm install` → `npm run db:push` → `npm run build` → `npm run start`
+> (script `dev`/`build`/`start` adalah wrapper Node lintas platform — tidak butuh `tee`/`cp` Unix).
 Engine: ikuti [python-engine/README.md](./python-engine/README.md) — `config.yaml` dengan `api_key` = `ENGINE_API_KEY` dan `allowed_origins: [http://localhost:3000]`.
 
 ---

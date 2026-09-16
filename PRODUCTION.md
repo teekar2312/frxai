@@ -51,8 +51,8 @@ deploy dashboard Next.js ke VPS/Docker/PC lokal, konfigurasi autentikasi, koneks
 
 | Komponen | Versi | Keterangan |
 | --- | --- | --- |
-| **Node.js** | 22+ | Menjalankan server standalone (`server.js`) — dipakai di image Docker |
-| **Bun** | 1.x | Install dependency, build, dan menjalankan server di VPS/Windows (`bun run start`) |
+| **Node.js** | 18+ (22+ disarankan) | **Wajib** — script `dev`/`build`/`start` adalah wrapper Node lintas platform (`node scripts/*.mjs`); juga runtime server standalone di Docker |
+| **Bun** | 1.x | Opsional — install dependency cepat & menjalankan script (`bun run ...`; tetap butuh Node di PATH) |
 | **Docker + Compose** | opsional | Hanya untuk Opsi B (Docker) |
 | **Python** | 3.11+ (64-bit) | Hanya untuk Python engine LIVE, di PC Windows (dapat dijalankan hingga 3.14) |
 | **Git** | 2.x | Clone repository |

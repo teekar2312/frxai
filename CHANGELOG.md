@@ -4,6 +4,15 @@ Semua perubahan signifikan didokumentasikan di sini. Format mengikuti [Keep a Ch
 
 ---
 
+## [0.3.2] — 2026-09-16
+
+### Fixed
+- **`npm run dev` / `build` / `start` gagal di Windows** — script lama memakai perintah khusus Unix (`tee`, `cp -r`, prefix `NODE_ENV=`) yang tidak ada di PowerShell/cmd. Ketiganya kini wrapper Node lintas platform `scripts/{dev,build,start}.mjs`: output tetap disalin ke `dev.log`/`server.log` (perilaku tee dipertahankan untuk monitoring), `NODE_ENV` di-set via env spawn, penghentian proses andal di Windows (`taskkill /T /F`), dan salin assets build memakai `fs.cpSync`.
+- **Dockerfile**: tahap build di-inline langsung (`next build && cp -r …`) karena image `oven/bun` tidak memuat `node` — perilaku build Docker tidak berubah.
+- **`.env.example`**: `DATABASE_URL` default kini path relatif lintas platform `file:../db/custom.db` (sebelumnya path absolut Linux sandbox `/home/z/...` yang tidak berlaku di Windows).
+- **`db/.gitkeep`**: folder `db/` kini pasti ada pasca-clone (`prisma db push` tidak membuat folder induk).
+- DEPLOYMENT.md: alur murni `npm`/Node untuk Windows didokumentasikan; prasyarat Node.js 18+ di PRODUCTION.md.
+
 ## [0.3.1] — 2026-09-16
 
 ### Fixed

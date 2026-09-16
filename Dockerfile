@@ -42,8 +42,13 @@ RUN grep -q 'binaryTargets' prisma/schema.prisma \
 # Generate Prisma Client (engine native + musl)
 RUN bunx prisma generate
 
-# Build Next.js → .next/standalone/server.js + assets tersalin oleh script build
-RUN bun run build
+# Build Next.js → .next/standalone/server.js + salin static & public.
+# Di-inline (bukan `bun run build`) karena image bun tidak memuat node —
+# sedangkan package.json build kini wrapper Node lintas platform
+# (untuk dev di Windows/macOS/Linux). Container selalu Linux → cp aman.
+RUN ./node_modules/.bin/next build \
+      && cp -r .next/static .next/standalone/.next/ \
+      && cp -r public .next/standalone/
 
 # -------------------- Tahap 2: runner --------------------
 FROM node:22-alpine AS runner

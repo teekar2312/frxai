@@ -26,7 +26,7 @@ export async function GET() {
     db: dbOk ? 'ok' : 'fail',
     mode,
     uptime: Math.round(process.uptime()),
-    version: process.env.npm_package_version ?? '0.2.1',
+    version: process.env.npm_package_version ?? '0.3.0',
     timestamp: new Date().toISOString(),
     latencyMs: Date.now() - startedAt,
   }

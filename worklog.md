@@ -528,3 +528,27 @@ Work Log:
 Stage Summary:
 - Repository GitHub teekar2312/frxai kini berisi seluruh pekerjaan production-ready Task 16 (auth, hardening, engine API-key, indexes+WAL, health, error pages, Docker/PRODUCTION.md/scripts) pada commit 9bb2dee.
 - Reminder keamanan tetap berlaku: PAT ini telah terekspos di chat — segera revoke & generate ulang setelah selesai dipakai (github.com/settings/tokens), lalu update remote credential di mesin lokal user.
+
+---
+Task ID: 18
+Agent: main (Z.ai Code)
+Task: Dokumentasi lengkap repository — README, ARCHITECTURE, API, DEPLOYMENT, SECURITY, CONTRIBUTING, CHANGELOG + bump v0.3.0
+
+Work Log:
+- Riset data akurat dari kode sebelum menulis: 24 route handler (method export), konstanta (18 pair, 4 sesi, 9 TF, 30 indikator, 8 provider AI), kontrak body orders (open/close/closeAll/modify), alerts PATCH/DELETE, news action fetch-real|generate, logs param level/category/q/limit(1-500), market/history pair/tf/limit, settings partial-merge; engine python 13 endpoint (GET /,/health,/api/v1/{poll,health,positions,history,candles,news,calendar,settings} + POST /api/v1/{orders,settings,alerts}), ENGINE_VERSION 1.0.0.
+- README.md (root): tagline + disclaimer risiko, tabel fitur (10 area), tech stack, quick start dev, mode LIVE 4 langkah, struktur proyek, doc map 8 dokumen, ringkasan keamanan, lisensi proprietary.
+- ARCHITECTURE.md: diagram ASCII browser→dashboard→(DEMO sim | LIVE proxy→engine→MT5), 7 section: layer dashboard (route tunggal, proxy gate, 24 route, simulator), thread model engine (5 daemon), alur data (poll 2s, analisa, order, learning loop), skema DB 10 model + WAL, tabel 8 keputusan desain + alasan, kontrak tipe lintas stack.
+- API.md: auth & rate limit & format error; 9 grup endpoint dashboard (contoh request/response JSON); 13 endpoint engine + X-Engine-Key; konvensi umum.
+- DEPLOYMENT.md: prasyarat + tabel env; Opsi A VPS (pm2+nginx+certbot+ufw), B Docker Compose, C Windows lokal; engine LIVE + tabel eksposur jaringan (port-forward dilarang); checklist pasca-deploy; update & rollback; delegasi runbook ke PRODUCTION.md.
+- SECURITY.md: model ancaman 5 aset; 6 kelompok kontrol (auth, gate, engine, header, data, secret hygiene); tabel 7 batasan diketahui + mitigasi; checklist 11 item; prosedur insiden 6 skenario; perintah verifikasi berkala.
+- CONTRIBUTING.md: alur kerja + conventional commits; lingkungan & perintah; konvensi (TS/React, design system emerald + larangan indigo/blue, API route, DB aditif, python engine, paritas lintas stack); aturan keamanan; protokol worklog; DoD 7 item; disclosure kerentanan privat.
+- CHANGELOG.md (Keep a Changelog): 0.1.0 rilis awal → 0.2.0 (18 pair + multi-pair analysis + density) → 0.2.1 (fix margin quoteToUsd + 12 gap audit) → 0.3.0 (production-ready).
+- Bump version package.json 0.2.1→0.3.0 + fallback /api/health → terverifikasi setelah restart: {"version":"0.3.0"}.
+- INSIDEN: .env sandbox terpotong menjadi hanya DATABASE_URL (ditimpa daemon snapshot ~05:15, terdeteksi via hint "Mode kredensial default" di login screen saat sanity check) → secret di-regenerate, server restart, verifikasi: login 200, API 200, default password ditolak 401. .env tetap gitignored (tidak masuk commit).
+- Verifikasi akhir: eslint 0 error; tsc --noEmit 0 error; /api/health 200 (db ok, WAL pragmas di boot); page 200; api-gate 401 tanpa cookie; browser login screen render bersih tanpa page error.
+
+Stage Summary:
+- Repository kini punya set dokumentasi standar industri (7 dokumen baru, Bahasa Indonesia, saling ter-taut): README (entry), ARCHITECTURE (desain), API (referensi kontrak), DEPLOYMENT (3 opsi deploy), SECURITY (model ancaman + checklist + insiden), CONTRIBUTING (konvensi + worklog + DoD), CHANGELOG (riwayat 4 versi).
+- Version 0.3.0 konsisten di package.json + /api/health + CHANGELOG.
+- File baru: README.md, ARCHITECTURE.md, API.md, DEPLOYMENT.md, SECURITY.md, CONTRIBUTING.md, CHANGELOG.md; diubah: package.json, src/app/api/health/route.ts (fallback versi), worklog.md.
+- Pelajaran: daemon snapshot dapat menimpa .env yang gitignored — setelah restart server mendadak, selalu sanity-check hint kredensial default di login screen / verifikasi env terbaca.

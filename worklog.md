@@ -372,3 +372,26 @@ Stage Summary:
 - File berubah: src/lib/types.ts, src/lib/constants.ts, src/components/panels/analysis-panel.tsx, trading-panel.tsx, overview-panel.tsx, settings-panel.tsx, src/components/layout/header.tsx, python-engine/app/{config,mt5_client,strategy,fundamental}.py, python-engine/config.example.yaml.
 - Bug diperbaiki: badge "Pairs N/4" hardcoded → dinamis N/18; header mobile overflow 2px setelah penambahan tombol density → badge engine hidden <sm.
 - State demo: 8 pair aktif (EURUSD, USDJPY, GBPUSD, XAUUSD, AUDJPY, XAGUSD, GBPJPY, EURJPY), 1 open position demo dari pengujian order, tradingMode manual, engineMode demo. Grid multi-pair bersifat ephemeral (hilang saat pindah tab) — data analisa tetap di Riwayat Analisa (DB).
+
+---
+Task ID: 13
+Agent: main (Z.ai Code)
+Task: Push basis kode yang diperbaharui ke repository GitHub https://github.com/teekar2312/frxai menggunakan PAT yang diberikan user
+
+Work Log:
+- Cek status git lokal: branch main, 5 commit lama (pesan UUID, snapshot otomatis sandbox), belum ada remote
+- Untrack file runtime/sensitif dari index: .env, db/custom.db, tool-results/, agent-ctx/, .zscripts/dev.pid, seluruh __pycache__/*.pyc (git rm --cached)
+- Update .gitignore: tambah /db/*.db, __pycache__/, *.pyc, .zscripts/dev.pid, tool-results/, agent-ctx/
+- Scan seluruh file terlacak: tidak ada secret/token yang tertanam
+- Buat commit bersih via orphan branch (riwayat lama berisi .env/db tidak ikut terdorong): commit e18292e "FINEX AI Trading System — initial codebase" (146 file)
+- Catatan: daemon snapshot sandbox otomatis checkout kembali ke main lama saat proses (reflog: moving from clean-main to main) — diatasi dengan push clean-main:main langsung ke ref remote tanpa mengubah branch lokal, lalu update-ref main lokal ke e18292e + git reset
+- Push berhasil: git push <PAT>@github.com/teekar2312/frxai.git clean-main:main → remote main baru dibuat
+- Konfigurasi remote origin (URL bersih tanpa PAT), fetch, set upstream main → origin/main
+- Pulihkan .gitignore di disk yang sempat ditimpa daemon checkout (git restore)
+- Verifikasi final: remote = lokal = e18292e, working tree clean, 100 file TS/TSX di remote, tidak ada .env/db/cache di remote, dev server tetap sehat (API 200)
+
+Stage Summary:
+- Repository GitHub teekar2312/frxai kini berisi seluruh basis kode FINEX AI yang diperbaharui (1 commit bersih e18292e, 146 file)
+- File sensitif/runtime TIDAK terdorong: .env (DATABASE_URL), db/custom.db, __pycache__, tool-results, agent-ctx, dev.pid — dan kini permanen di-ignore
+- PAT tidak disimpan di .git/config (hanya dipakai inline pada URL push); remote origin = https://github.com/teekar2312/frxai.git
+- main lokal tersinkron + tracking origin/main terpasang; commit snapshot sandbox berikutnya akan menghormati .gitignore baru

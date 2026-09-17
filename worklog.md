@@ -688,3 +688,27 @@ Stage Summary:
 - File baru: src/lib/engine-sync.ts; diubah: python-engine/app/ai_providers.py, python-engine/main.py, src/app/api/ai-providers/route.ts, src/app/api/engine/route.ts, src/components/panels/ai-provider-keys.tsx, API.md, SECURITY.md, CHANGELOG.md, README.md, package.json, worklog.md.
 - Version 0.4.1 konsisten: package.json + /api/health.
 - Push ke GitHub dengan PAT user (inline satu kali, tidak disimpan).
+
+---
+Task ID: 25
+Agent: main (Z.ai Code)
+Task: Fix error user "API Key Provider AI — Gagal membaca status provider: Cannot read properties of undefined (reading 'findMany')"
+
+Work Log:
+- Reproduce: GET /api/ai-providers via curl → request HANG (timeout 120s). Ps: next-server PID berjalan sejak 01:53, CPU 106% kontinu (104 menit CPU time) = server STALE/HANG, bukan sekadar lambat. dev.log lama juga memuat EADDRINUSE (percobaan instance ganda sebelumnya).
+- Diagnosis akar masalah (2 masalah tumpuk, keduanya lingkungan — bukan bug kode):
+  1. Server hang memakai module graph lama: Prisma Client dalam memori proses belum memuat model AiProviderCredential → db.aiProviderCredential = undefined → TypeError "reading 'findMany'". Fix kode d07de04 (try/catch fallback di listProviderStatus, commit sesi lalu yang belum sempat diverifikasi/push) tidak pernah termuat karena proses hang tidak me-reload. Client di node_modules SUDAH benar (29 referensi model), tabel DB SUDAH ada (verifikasi python sqlite3) — murni stale process.
+  2. .env TERPOTONG insiden ke-4 (mtime 01:53, tersisa 1 baris DATABASE_URL): SESSION_SECRET hilang → POST /api/auth/login 500 ("SESSION_SECRET belum diatur") → seluruh sesi dashboard mati. Pola insiden berulang yang sama dengan 3 insiden sebelumnya (daemon snapshot sandbox).
+- Fix: pkill semua proses next (hang + duplikat) → port 3000 bebas; bunx prisma generate (idempotent, client tetap sinkron) + prisma db push ("already in sync"); restore .env (DATABASE_URL absolut tetap + SESSION_SECRET baru openssl rand -base64 48 + ENGINE_MODE=demo; rotasi secret = session lama ter-invalidasi wajib login ulang; username/password kembali default admin/finex-admin-2025 karena ADMIN_* memang tidak pernah di-set di .env); restart dev server bersih (Ready 743ms).
+- Verifikasi API E2E: login 200; GET /api/ai-providers → 200 dalam 0.33s, 8 provider lengkap, error user HILANG; PUT groq dummy key+model → keySource=db masked gsk…5678, AT-REST v1: ciphertext (plaintext tidak ada di file DB), engineSync reason demo-mode (benar untuk mode demo); POST test zai → OK 302ms via SDK; DELETE → kembali keySource=none.
+- Verifikasi BROWSER E2E (agent-browser): login → tab Settings → kartu "API Key Provider AI" render 8 provider tanpa error; baris Groq dibuka (input key+toggle mata, Base URL, Model, Simpan disabled tanpa perubahan); isi key via UI → Simpan → badge "Key tersimpan · gsk…7766"; Test koneksi → "Test gagal" ramah + hint ambil key; Hapus → badge hilang; 0 page error (satu hydration warning attribute Radix DropdownMenu pre-existing, benign, tidak terkait); mobile 390px overflow=false; pola sticky footer benar (root min-h-screen flex flex-col + flex-1; halaman panjang = footer terdorong konten secara natural).
+- Cleanup: artefak tes dibersihkan (AiProviderCredential 0 rows — termasuk row status test zai tanpa key), cookie/screenshot/tmp dihapus, browser ditutup.
+- Kualitas: eslint exit 0; dev.log 0 error runtime.
+- Commit d07de04 (fallback try/catch) di-reword dengan pesan deskriptif (belum pernah ada di remote, aman) + commit worklog ini; keduanya dipush dengan PAT user (inline satu kali, tidak disimpan).
+
+Stage Summary:
+- Error user terselesaikan: kartu API Key Provider AI kembali berfungsi penuh (status 8 provider, simpan/test/hapus kredensial, sync engine).
+- Akar masalah LINGKUNGAN bukan logika aplikasi: (a) dev server hang dengan module Prisma Client stale → findMany undefined; (b) insiden .env terpotong ke-4 menghapus SESSION_SECRET → login 500.
+- Perbaikan: restart bersih + prisma generate/db push (verifikasi sinkron) + restore .env dengan SESSION_SECRET baru. Fallback guard d07de04 kini aktif di runtime: kegagalan baca AiProviderCredential apa pun (client stale/migrasi belum di-push/file terkunci) hanya men-downgrade ke resolusi env — halaman Settings tidak lagi 500.
+- Catatan operasional: bila error serupa muncul lagi (login 500 "SESSION_SECRET"), indikasi .env terpotong oleh daemon snapshot — restore seperti Task ini; bila findMany undefined muncul lagi, restart dev server (module cache stale).
+- Tidak ada perubahan kode aplikasi baru di task ini (fix kode sudah ada di d07de04); hanya worklog + reword pesan commit.

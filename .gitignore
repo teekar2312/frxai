@@ -60,6 +60,8 @@ db/*.db
 db/*.db-wal
 db/*.db-shm
 db/*.db-journal
+# Backup secret session (dipakai ensure-env.mjs) — RAHASIA, jangan commit.
+db/.session-secret
 __pycache__/
 *.pyc
 .zscripts/dev.pid

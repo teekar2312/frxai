@@ -712,3 +712,31 @@ Stage Summary:
 - Perbaikan: restart bersih + prisma generate/db push (verifikasi sinkron) + restore .env dengan SESSION_SECRET baru. Fallback guard d07de04 kini aktif di runtime: kegagalan baca AiProviderCredential apa pun (client stale/migrasi belum di-push/file terkunci) hanya men-downgrade ke resolusi env — halaman Settings tidak lagi 500.
 - Catatan operasional: bila error serupa muncul lagi (login 500 "SESSION_SECRET"), indikasi .env terpotong oleh daemon snapshot — restore seperti Task ini; bila findMany undefined muncul lagi, restart dev server (module cache stale).
 - Tidak ada perubahan kode aplikasi baru di task ini (fix kode sudah ada di d07de04); hanya worklog + reword pesan commit.
+
+---
+Task ID: 26
+Agent: main (Z.ai Code)
+Task: Fix permanen error berulang "Gagal menyimpan: Cannot read properties of undefined (reading 'upsert')" pada kartu API Key Provider AI + ketahanan terhadap insiden sandbox berulang (client Prisma stale & .env terpotong)
+
+Work Log:
+- Diagnosis: server sandbox ter-restart 04:36; .env TERPOTONG LAGI (insiden #5, mtime = menit boot, tersisa 1 baris DATABASE_URL); DB juga ter-rollback (LogEntry kosong — tabel tetap ada); client Prisma di node_modules SEHAT (aksesor via node -e = object) — tapi proses sebelumnya sempat termuat client stale sehingga aksesor aiProviderCredential undefined → PUT gagal "reading 'upsert'" (jalur simpan TIDAK punya guard — hanya jalur baca listProviderStatus yang di-guard Task 25).
+- Format DateTime Prisma/SQLite diverifikasi empiris: INTEGER epoch-millis (insert via Prisma → baca raw via python) → dasar interoperabilitas fallback raw SQL dua arah.
+- IMPLEMENTASI 1 — Lapisan data tangguh src/lib/ai-provider-credential-db.ts (baru): listCredentialRows/getCredentialRow/upsertCredential/deleteCredential; jalur utama model Prisma, fallback raw SQL parameterized ($queryRawUnsafe/$executeRawUnsafe — API inti semua versi client) bila aksesor model undefined ATAU lempar error; upsert INSERT..ON CONFLICT("provider") DO UPDATE dibangun dinamis dari field yang disertakan (semantik Partial identik update Prisma); DateTime epoch-millis; id UUID; warnOnce per proses; escape hatch diagnostik FINEX_AI_CRED_FORCE_RAW=1.
+- Rewire seluruh 5 titik akses: route.ts PUT (upsert) & DELETE (deleteMany) — error user hilang; ai-keys.ts resolveCredential (findUnique) & listProviderStatus (findMany) — kini DB-stored key tetap terbaca saat client stale (sebelumnya tersembunyi fallback env); ai-llm.ts testProviderLlm (upsert status test). Import db langsung dihapus dari 3 file (tidak dipakai lagi).
+- IMPLEMENTASI 2 — Self-heal .env: scripts/lib/ensure-env.mjs (baru) + hook di scripts/dev.mjs SEBELUM spawn next: lengkapi DATABASE_URL/ENGINE_MODE bila kosong; SESSION_SECRET dipulihkan dari backup stabil db/.session-secret (folder db di-restore sandbox ATOMIK bersama SQLite ciphertext → pasangan secret/ciphertext selalu konsisten; write-through saat .env sehat; generate+backup bila pertama kali; mode 600); idempotent (tidak sentuh .env sehat); baris lain dipertahankan verbatim; secret tidak pernah di-log. .gitignore + db/.session-secret; .env.example didokumentasikan.
+- Insiden antara: cache Turbopack korup (semua route API 404 + render HTML login) setelah kill saat compile berjalan → rm -rf .next + restart bersih = pulih (bukan bug kode).
+- Verifikasi ensure-env terisolasi: RUN1 heal .env terpotong (generate secret + backup 600) → RUN2 idempotent → RUN3 simulasi truncation ulang → SESSION_SECRET TERPULIHKAN IDENTIK dari backup (stabilitas lintas insiden terbukti).
+- Verifikasi API E2E jalur PRISMA: login 200; PUT groq key+model → keySource=db masked gsk…1122; POST test zai OK 308ms.
+- Verifikasi API E2E jalur RAW (FORCE_RAW=1, warning [ai-cred-db] terkonfirmasi di dev.log): PUT openrouter key baru → keySource=db masked sk-…3344; PUT groq model-only pada baris buatan Prisma → key terpelihara + model terupdate (interop RAW→Prisma-row); AT-REST: ciphertext v1: + testedAt INTEGER epoch-millis konsisten format Prisma.
+- Verifikasi interop balik (flag dihapus, restart, jalur Prisma): GET membaca baris buatan RAW (openrouter keySource=db); POST test openrouter pada baris buatan RAW → status=fail + lastError + testedAt tersimpan via Prisma (Prisma→RAW-row); DELETE groq & openrouter sukses.
+- Verifikasi BROWSER E2E: login → Settings → kartu render tanpa error lama; Groq dibuka → isi key → Simpan → badge "Key tersimpan · gsk…7788"; Test koneksi → "Test gagal" ramah; Hapus → badge hilang; 0 page error, 0 console error; mobile 390px overflow=false.
+- Cleanup: 0 rows kredensial tersisa, flag diagnostik dihapus dari .env, tmp/cookie/screenshot dibersihkan.
+- Kualitas: eslint exit 0; tsc --noEmit exit 0; dev.log 0 error runtime; /api/health v0.4.2 ok.
+- Docs: CHANGELOG [0.4.2]; SECURITY.md 2.6 (+2 butir: backup secret & fallback raw SQL); .env.example (catatan self-healing); package.json 0.4.1 → 0.4.2 (health ikut).
+
+Stage Summary:
+- Kelas error "undefined (reading 'upsert'/'findMany')" pada AiProviderCredential DITUTUP PERMANEN: kegagalan akses model Prisma apa pun (client stale/aksesor hilang/throw) kini otomatis jatuh ke raw SQL parameterized yang berfungsi di semua versi client — simpan/hapus/test/resolusi kredensial tetap bekerja; data interoperabel dua arah (epoch-millis identik format Prisma).
+- Insiden .env terpotong (5×) kini self-healing: SESSION_SECRET stabil via backup db/.session-secret → login tidak mati & kredensial terenkripsi tidak yatim; restore terbukti identik pada simulasi truncation berulang.
+- File baru: src/lib/ai-provider-credential-db.ts, scripts/lib/ensure-env.mjs; diubah: scripts/dev.mjs, src/app/api/ai-providers/route.ts, src/lib/ai-keys.ts, src/lib/ai-llm.ts, .gitignore, .env.example, CHANGELOG.md, SECURITY.md, package.json, worklog.md.
+- Version 0.4.2 konsisten: package.json + /api/health.
+- Push ke GitHub dengan PAT user (inline satu kali, tidak disimpan).

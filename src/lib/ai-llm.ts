@@ -15,7 +15,7 @@
 
 import 'server-only'
 import ZAI from 'z-ai-web-dev-sdk'
-import { db } from '@/lib/db'
+import { upsertCredential } from '@/lib/ai-provider-credential-db'
 import { AI_PROVIDER_REGISTRY, resolveCredential, type ResolvedCredential } from '@/lib/ai-keys'
 import type { AiProviderId } from '@/lib/types'
 
@@ -260,21 +260,12 @@ export async function testProviderLlm(provider: AiProviderId): Promise<ProviderT
   const latencyMs = Date.now() - startedAt
   const ok = !!r.text
 
-  // persist status (best-effort)
+  // persist status (best-effort, jalur tangguh: model Prisma → raw SQL)
   try {
-    await db.aiProviderCredential.upsert({
-      where: { provider },
-      create: {
-        provider,
-        status: ok ? 'ok' : 'fail',
-        lastError: ok ? null : (r.error ?? 'unknown').slice(0, 500),
-        testedAt: new Date(),
-      },
-      update: {
-        status: ok ? 'ok' : 'fail',
-        lastError: ok ? null : (r.error ?? 'unknown').slice(0, 500),
-        testedAt: new Date(),
-      },
+    await upsertCredential(provider, {
+      status: ok ? 'ok' : 'fail',
+      lastError: ok ? null : (r.error ?? 'unknown').slice(0, 500),
+      testedAt: new Date(),
     })
   } catch {
     /* status test tidak kritis */

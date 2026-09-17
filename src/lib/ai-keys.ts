@@ -12,7 +12,7 @@
  */
 
 import 'server-only'
-import { db } from '@/lib/db'
+import { getCredentialRow, listCredentialRows } from '@/lib/ai-provider-credential-db'
 import { decryptSecret, maskKey } from '@/lib/crypto'
 import type { AiProviderId } from '@/lib/types'
 
@@ -163,7 +163,7 @@ export async function resolveCredential(
   const entry = AI_PROVIDER_REGISTRY[provider]
   let row: { apiKeyEnc: string | null; baseUrl: string | null; model: string | null } | null = null
   try {
-    row = await db.aiProviderCredential.findUnique({ where: { provider } })
+    row = await getCredentialRow(provider)
   } catch {
     row = null // DB bermasalah → fallback env sepenuhnya
   }
@@ -241,7 +241,7 @@ export async function listProviderStatus(
     testedAt: Date | null
   }[] = []
   try {
-    rows = await db.aiProviderCredential.findMany()
+    rows = await listCredentialRows()
   } catch (e) {
     console.warn(
       '[ai-keys] Gagal baca AiProviderCredential (fallback env):',

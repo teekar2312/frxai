@@ -4,6 +4,17 @@ Semua perubahan signifikan didokumentasikan di sini. Format mengikuti [Keep a Ch
 
 ---
 
+## [0.4.2] — 2026-09-17
+
+### Fixed
+- **"Gagal menyimpan / Gagal membaca status provider: Cannot read properties of undefined (reading 'upsert'/'findMany')"** — error berulang saat Prisma Client runtime stale (sandbox me-restore proses/node_modules dari snapshot lama sehingga aksesor model `AiProviderCredential` tidak termuat, meski tabel & client di disk benar). Seluruh akses kredensial kini lewat **lapisan data tangguh** `src/lib/ai-provider-credential-db.ts`: jalur utama model Prisma, **fallback raw SQL parameterized** (`$queryRawUnsafe`/`$executeRawUnsafe` — API inti semua versi client) bila aksesor hilang/gagal. DateTime epoch-millis format identik Prisma (terverifikasi dua arah) → baris buatan fallback terbaca sempurna oleh Prisma sehat dan sebaliknya. Mencakup: simpan (PUT), hapus (DELETE), status test, resolusi kredensial (analisa & engine-sync), dan daftar status provider.
+- Escape hatch diagnostik: `FINEX_AI_CRED_FORCE_RAW=1` di .env memaksa jalur raw SQL (menguji fallback tanpa menunggu insiden).
+
+### Changed
+- **Dev runner self-healing `.env`** (`scripts/dev.mjs` → `scripts/lib/ensure-env.mjs`): sebelum `next dev` boot, `DATABASE_URL`/`ENGINE_MODE` dilengkapi bila kosong dan `SESSION_SECRET` **dipulihkan dari backup stabil `db/.session-secret`** (auto-generate bila pertama kali; write-through saat .env sehat; mode 600; di-gitignore). Menjawab insiden berulang daemon sandbox memotong `.env` (5×) yang mematikan login (500) dan membuat kredensial terenkripsi tak terbaca. Folder `db/` dipilih karena di-restore atomik bersama SQLite ciphertext → pasangan (secret, ciphertext) selalu konsisten. Idempotent; baris .env lain dipertahankan verbatim; nilai secret tidak pernah di-log.
+
+---
+
 ## [0.4.1] — 2026-09-16
 
 ### Added

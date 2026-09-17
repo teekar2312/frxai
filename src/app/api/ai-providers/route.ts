@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
 import { getSimulator } from '@/lib/engine/simulator'
 import { encryptSecret } from '@/lib/crypto'
 import { AI_PROVIDER_REGISTRY, listProviderStatus } from '@/lib/ai-keys'
 import { testProviderLlm } from '@/lib/ai-llm'
+import { deleteCredential, upsertCredential } from '@/lib/ai-provider-credential-db'
 import { syncAiKeysToEngine, type EngineSyncResult } from '@/lib/engine-sync'
 import { AI_PROVIDERS } from '@/lib/constants'
 import type { AiProviderId } from '@/lib/types'
@@ -117,10 +117,13 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Tidak ada perubahan untuk disimpan' }, { status: 400 })
     }
 
-    await db.aiProviderCredential.upsert({
-      where: { provider },
-      create: { provider, ...updates, status: 'untested', lastError: null, testedAt: null },
-      update: { ...updates, status: 'untested', lastError: null, testedAt: null },
+    await upsertCredential(provider, {
+      ...(updates.apiKeyEnc !== undefined ? { apiKeyEnc: updates.apiKeyEnc } : {}),
+      ...(updates.baseUrl !== undefined ? { baseUrl: updates.baseUrl } : {}),
+      ...(updates.model !== undefined ? { model: updates.model } : {}),
+      status: 'untested',
+      lastError: null,
+      testedAt: null,
     })
 
     const entry = AI_PROVIDER_REGISTRY[provider]
@@ -193,7 +196,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'Parameter provider tidak valid' }, { status: 400 })
   }
   try {
-    await db.aiProviderCredential.deleteMany({ where: { provider } })
+    await deleteCredential(provider)
     const entry = AI_PROVIDER_REGISTRY[provider]
     await sim.log('INFO', 'SYSTEM', `Kredensial ${entry.name} dihapus (kembali ke fallback env)`)
     // Re-sync engine: provider yang dihapus tidak disertakan dalam payload →

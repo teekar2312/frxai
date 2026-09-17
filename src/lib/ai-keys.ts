@@ -228,7 +228,26 @@ export async function listProviderStatus(
   descriptions: Record<AiProviderId, string>,
 ): Promise<ProviderStatusClient[]> {
   const ids = Object.keys(AI_PROVIDER_REGISTRY) as AiProviderId[]
-  const rows = await db.aiProviderCredential.findMany()
+  // Tahan bermacam kegagalan DB (client stale, migrasi belum di-push,
+  // file terkunci): daftar provider tetap tampil dengan fallback env —
+  // daripada seluruh halaman Settings mati dengan error 500.
+  let rows: {
+    provider: string
+    apiKeyEnc: string | null
+    baseUrl: string | null
+    model: string | null
+    status: string
+    lastError: string | null
+    testedAt: Date | null
+  }[] = []
+  try {
+    rows = await db.aiProviderCredential.findMany()
+  } catch (e) {
+    console.warn(
+      '[ai-keys] Gagal baca AiProviderCredential (fallback env):',
+      e instanceof Error ? e.message : e,
+    )
+  }
   const byProvider = new Map(rows.map((r) => [r.provider, r]))
 
   return Promise.all(
